@@ -1,0 +1,49 @@
+{
+  "name": "GameTemplate",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Packages": {
+        "$path": "src/Packages"
+      },
+      "Common": {
+        "$path": "src/game/ReplicatedStorage/Common"
+      },
+      "Lists": {
+        "$path": "src/game/ReplicatedStorage/Lists"
+      },
+      "Loader": {
+        "$path": "src/game/ReplicatedStorage/Loader.lua"
+      },
+      "Shared": {
+        "$path": "src/game/ReplicatedStorage/Shared"
+      }
+    },
+    "ServerScriptService": {
+      "Packages": {
+        "$path": "src/ServerPackages"
+      },
+      "Start": {
+        "$path": "src/game/ServerScriptService/Start.server.lua"
+      },
+      "Services": {
+        "$path": "src/game/ServerScriptService/Services"
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "Start": {
+          "$path": "src/game/StarterPlayer/StarterPlayerScripts/Start.client.lua"
+        },
+        "Controllers": {
+          "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers"
+        }
+      }
+    },
+    "StarterGui": {
+      "HoverClient": {
+        "$path": "src/game/StarterGui/HoverClient"
+      }
+    }
+  }
+}
