@@ -41,8 +41,21 @@
       }
     },
     "StarterGui": {
+      "$className": "StarterGui",
+      "$ignoreUnknownInstances": true,
       "HoverClient": {
         "$path": "src/game/StarterGui/HoverClient"
+      },
+      "MainInterface": {
+        "$className": "ScreenGui",
+        "$ignoreUnknownInstances": true,
+        "GUIController": {
+          "$path": "src/game/StarterGui/MainInterface/GUIController.lua",
+          "$ignoreUnknownInstances": true,
+          "Init": {
+            "$path": "src/game/StarterGui/MainInterface/GUIControllerInit.client.lua"
+          }
+        }
       }
     }
   }

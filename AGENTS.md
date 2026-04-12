@@ -1,6 +1,12 @@
 # AGENTS.md
 
-This file defines the required workflow for agents working in `C:\dev\TreasureHunters\RealWorldPlace`.
+This file defines the required workflow for agents working in `C:\dev\BodyPartRNG`.
+
+## Required Reading
+
+- Read [PROJECT_BRIEF.md](C:\dev\BodyPartRNG\PROJECT_BRIEF.md) before designing or implementing any gameplay system.
+- Treat `PROJECT_BRIEF.md` as the primary source of product context.
+- If implementation details are unclear, align with the brief first instead of inventing direction from template leftovers.
 
 ## Core Rule
 
@@ -14,10 +20,10 @@ Use the local filesystem for all normal code work and all heavy code edits.
 
 The following are local-code-owned by default:
 
-- `src/client`
-- `src/server`
-- `src/shared`
-- script files under `src/StarterGui` when code changes are needed there
+- `src/game/ReplicatedStorage`
+- `src/game/ServerScriptService`
+- `src/game/StarterPlayer`
+- script files under `src/game/StarterGui` when code changes are needed there
 - `default.project.json`
 - project-level documentation and workflow files such as `AGENTS.md`
 
@@ -67,7 +73,7 @@ Some folders are mixed and require split handling.
 
 - If a task touches both code and assets, split the work: code locally, assets via Studio MCP.
 - If a folder contains both scripts and Studio-owned instances, edit only the script files locally.
-- For mixed UI areas such as `src/StarterGui`, use local edits for scripts and Studio MCP for the surrounding instance structure, layout, and visual assets.
+- For mixed UI areas such as `src/game/StarterGui`, use local edits for scripts and Studio MCP for the surrounding instance structure, layout, and visual assets.
 
 ## Intent For Future Agents
 

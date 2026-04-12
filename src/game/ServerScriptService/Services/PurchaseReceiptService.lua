@@ -22,6 +22,7 @@ PurchaseReceipt.OwnedPassesReady = Signal.new()
 local remotesFolder: Folder? = nil
 local playClientSoundRemote: RemoteEvent? = nil
 local ownedPassesCache = {}
+local invalidPassWarnings = {}
 
 local function ensureRemotesFolder(): Folder
 	if remotesFolder and remotesFolder.Parent == ReplicatedStorage then
@@ -73,6 +74,23 @@ local function sendClientSound(player: Player, soundName: string)
 	end
 
 	ensurePlayClientSoundRemote():FireClient(player, soundName)
+end
+
+local function syncPersistedVipOwned(player: Player, isOwned: boolean)
+	task.spawn(function()
+		for _ = 1, 50 do
+			if player.Parent ~= Players then
+				return
+			end
+
+			local ok = DataService:SetVipOwned(player, isOwned)
+			if ok then
+				return
+			end
+
+			task.wait(0.1)
+		end
+	end)
 end
 
 local function emptyLog()
@@ -301,6 +319,9 @@ local function onPromptGamePassFinished(a, b, c)
 	local isNew = logPurchase(player, key, nil, { via = "prompt" })
 	local context = { kind = "pass", key = key, id = gamePassId, source = "prompt", isNew = isNew == true }
 	PurchaseReceipt.PurchaseProcessed:Fire(player, key, context)
+	if key == "vip" then
+		syncPersistedVipOwned(player, true)
+	end
 	if isNew then
 		sendClientSound(player, "Kaching")
 		callConfigHook("pass", key, "onProcessed", player, context)
@@ -338,7 +359,44 @@ local function refreshPassOwnership(player)
 		end
 	end
 
+	if RobuxPurchases.Passes.vip ~= nil then
+		syncPersistedVipOwned(player, ownedKeys["vip"] == true)
+	end
+
 	PurchaseReceipt.OwnedPassesReady:Fire(player, table.freeze(ownedKeys))
+end
+
+local function resolvePassConfig(passIdOrKey)
+	if typeof(passIdOrKey) == "number" then
+		return RobuxPurchases.PassesById[math.floor(passIdOrKey)]
+	end
+	if typeof(passIdOrKey) == "string" then
+		return RobuxPurchases.Passes[passIdOrKey]
+	end
+	return nil
+end
+
+local function validatePassConfig(config)
+	if typeof(config) ~= "table" or typeof(config.id) ~= "number" then
+		return false
+	end
+
+	local ok, info = pcall(function()
+		return MarketplaceService:GetProductInfo(config.id, Enum.InfoType.GamePass)
+	end)
+	if not ok or typeof(info) ~= "table" then
+		local warningKey = string.format("%s:%s", tostring(config.key or "unknown"), tostring(config.id))
+		if invalidPassWarnings[warningKey] ~= true then
+			invalidPassWarnings[warningKey] = true
+			warn(string.format("[PurchaseReceipt] Invalid pass configuration for key '%s' with id '%s'.", tostring(config.key), tostring(config.id)))
+			if not ok then
+				warn(string.format("[PurchaseReceipt] Marketplace validation failed: %s", tostring(info)))
+			end
+		end
+		return false
+	end
+
+	return true
 end
 
 function PurchaseReceipt:OnStart()
@@ -374,6 +432,34 @@ end
 
 function PurchaseReceipt:GetOwnedPasses(player)
 	return ownedPassesCache[player] or {}
+end
+
+function PurchaseReceipt:PromptPassPurchase(player: Player, passIdOrKey: any): (boolean, string?)
+	if typeof(player) ~= "Instance" or not player:IsA("Player") then
+		return false, "A valid player is required."
+	end
+
+	local config = resolvePassConfig(passIdOrKey)
+	if not config or not config.id then
+		return false, "That pass does not exist."
+	end
+
+	if self:HasPass(player, config.key or config.id) then
+		return true, "Pass already owned."
+	end
+
+	if not validatePassConfig(config) then
+		return false, string.format("%s is not configured correctly right now.", tostring(config.displayName or "This pass"))
+	end
+
+	local ok, err = pcall(function()
+		MarketplaceService:PromptGamePassPurchase(player, config.id)
+	end)
+	if not ok then
+		return false, tostring(err)
+	end
+
+	return true, "Purchase prompt opened."
 end
 
 return PurchaseReceipt

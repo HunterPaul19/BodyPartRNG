@@ -7,8 +7,9 @@ local Purchases = {
 	},
 
 	Passes = {
-		Example = {
-			id = 0,
+		quick_roll = {
+			id = 1792614205,
+			displayName = "Quick Roll",
 		},
 	},
 

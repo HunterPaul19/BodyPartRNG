@@ -13,14 +13,14 @@ local LEADERBOARD_FOLDER_NAME = "Leaderboards"
 local ENTRY_NAME_PREFIX = "Entry_"
 local SCOPE = Globals.SCOPE
 
-local CASH_KEY = Schema.Cash and Schema.Cash.key or "cash"
+local MONEY_KEY = Schema.Money and Schema.Money.key or "money"
 local TIME_PLAYED_KEY = Schema.TimePlayed and Schema.TimePlayed.key or "timePlayed"
 
 local BOARD_CONFIGS = {
 	Leaderboard_money = {
-		key = CASH_KEY,
+		key = MONEY_KEY,
 		heading = "TOP MONEY",
-		format = "Cash",
+		format = "Money",
 		models = { "Leaderboard_money", "Leaderboard_money2" },
 	},
 	Leaderboard_timeplayed = {
@@ -35,7 +35,7 @@ local usernameCache = {}
 local orderedStores = {}
 local started = false
 
-local function formatCash(value)
+local function formatMoney(value)
 	return Globals.formatNumber(math.max(0, math.floor((tonumber(value) or 0) + 0.5)), false, true)
 end
 
@@ -53,7 +53,7 @@ local function formatTimePlayed(value)
 end
 
 local FORMATTERS = {
-	Cash = formatCash,
+	Money = formatMoney,
 	TimePlayed = formatTimePlayed,
 }
 
