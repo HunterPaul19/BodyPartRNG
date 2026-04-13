@@ -339,6 +339,15 @@ local function handleGetVisualSandboxOptions()
 	return response(true, "OK", "Visual sandbox options loaded.", getSandboxOptions())
 end
 
+local function handleTestDialogue()
+	return response(true, "OK", "Launching the sample merchant dialogue.", {
+		dialogueId = "merchant_default",
+		context = {
+			source = "admin_panel",
+		},
+	})
+end
+
 local function handleGetRuntimeState(player: Player)
 	return response(true, "OK", "Loaded body part runtime state.", BodyPartService:GetClientState(player))
 end
@@ -473,6 +482,10 @@ function AdminService:HandleAction(player: Player, request: any)
 
 	if payload ~= nil and typeof(payload) ~= "table" then
 		return response(false, "BAD_REQUEST", "Admin request payloads must be omitted or sent as a table.")
+	end
+
+	if tabId == "overview" and actionId == "test_dialogue" then
+		return handleTestDialogue()
 	end
 
 	if tabId == BODY_PARTS_TAB_ID then

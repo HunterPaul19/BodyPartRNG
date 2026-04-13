@@ -6,8 +6,8 @@ local SessionStore = {}
 
 local stateByPlayer: { [Player]: BodyPartLoadout.EquippedState } = {}
 
-function SessionStore.LoadPlayer(player: Player)
-	stateByPlayer[player] = BodyPartLoadout.CreateEmptyEquippedState()
+function SessionStore.LoadPlayer(player: Player, initialState: BodyPartLoadout.EquippedState?)
+	stateByPlayer[player] = BodyPartLoadout.CloneEquippedState(initialState)
 end
 
 function SessionStore.CleanupPlayer(player: Player)

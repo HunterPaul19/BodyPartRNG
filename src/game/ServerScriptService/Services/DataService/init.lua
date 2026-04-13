@@ -6,11 +6,14 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local Globals = require(ReplicatedStorage.Lists.Globals)
 local Schema = require(ReplicatedStorage.Lists.Schema)
 local Signal = require(ReplicatedStorage.Common.Signal)
+local BodyPartLoadout = require(ReplicatedStorage.Shared.Character.BodyPartLoadout)
 local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
 local OwnedRollTypes = require(ReplicatedStorage.Shared.Character.OwnedRollTypes)
 local RollTargetRegions = require(ReplicatedStorage.Shared.Character.RollTargetRegions)
+local AchievementState = require(ReplicatedStorage.Shared.Titles.AchievementState)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
+local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
 local RollTypes = require(ReplicatedStorage.Shared.Config.RollTypes)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local ProfileService = require(ServerScriptService.Packages.ProfileService)
@@ -29,11 +32,15 @@ local LEGACY_OWNED_ROLL_TYPES_KEY = "ownedRollTypes"
 local MONEY_KEY = Schema.Money and Schema.Money.key or nil
 local TIME_PLAYED_KEY = Schema.TimePlayed and Schema.TimePlayed.key or nil
 local BODY_PARTS_KEY = Schema.BodyParts and Schema.BodyParts.key or nil
+local EQUIPPED_LOADOUT_KEY = Schema.EquippedLoadout and Schema.EquippedLoadout.key or nil
 local SUCCESSFUL_ROLL_COUNT_KEY = Schema.SuccessfulRollCount and Schema.SuccessfulRollCount.key or nil
+local EQUIPPED_TITLE_ID_KEY = Schema.EquippedTitleId and Schema.EquippedTitleId.key or nil
+local ACHIEVEMENTS_KEY = Schema.Achievements and Schema.Achievements.key or nil
 local VIP_OWNED_KEY = Schema.VipOwned and Schema.VipOwned.key or nil
 local SELECTED_ROLL_TYPE_KEY = Schema.SelectedRollType and Schema.SelectedRollType.key or nil
 local SELECTED_ROLL_REGION_KEY = Schema.SelectedRollRegion and Schema.SelectedRollRegion.key or nil
 local QUICK_ROLL_ENABLED_KEY = Schema.QuickRollEnabled and Schema.QuickRollEnabled.key or nil
+local AUTO_SELL_RARITIES_KEY = Schema.AutoSellRarities and Schema.AutoSellRarities.key or nil
 
 local ATTR_BY_KEY: { [string]: string } = {}
 if MONEY_KEY then
@@ -41,6 +48,9 @@ if MONEY_KEY then
 end
 if TIME_PLAYED_KEY then
 	ATTR_BY_KEY[TIME_PLAYED_KEY] = "TimePlayed"
+end
+if EQUIPPED_TITLE_ID_KEY then
+	ATTR_BY_KEY[EQUIPPED_TITLE_ID_KEY] = "EquippedTitleId"
 end
 
 local PROFILES: { [Player]: any } = {}
@@ -50,6 +60,13 @@ local timePlayedLastFlushAt: { [Player]: number } = {}
 local timePlayedLoopStarted = false
 
 local GlobalUpdateProcessed = Signal.new()
+local PlayerDataLoaded = Signal.new()
+local DataChanged = Signal.new()
+local MoneyChanged = Signal.new()
+local SuccessfulRollIncremented = Signal.new()
+local TimePlayedFlushed = Signal.new()
+local OwnedBodyPartAdded = Signal.new()
+local EquippedTitleChanged = Signal.new()
 
 local function toNonNegativeWhole(value: any): number
 	return math.max(0, math.floor(tonumber(value) or 0))
@@ -111,6 +128,19 @@ local function buildStructureFromSchema(schema: any): any
 	end
 
 	return result
+end
+
+local function normalizeOptionalString(value: any): string
+	if typeof(value) ~= "string" then
+		return ""
+	end
+
+	local trimmed = string.match(value, "%S.*")
+	if not trimmed or trimmed == "" then
+		return ""
+	end
+
+	return trimmed
 end
 
 local function createLeaderstats(player: Player, profile: any)
@@ -216,10 +246,38 @@ local function getActiveReplica(player: Player)
 	return nil
 end
 
+local function waitForActiveReplica(player: Player, timeoutSeconds: number?): any
+	local replica = getActiveReplica(player)
+	if replica then
+		return replica
+	end
+
+	local timeoutAt = os.clock() + (timeoutSeconds or 15)
+	while os.clock() < timeoutAt do
+		if player.Parent ~= Players then
+			return nil
+		end
+
+		replica = getActiveReplica(player)
+		if replica then
+			return replica
+		end
+
+		task.wait()
+	end
+
+	return nil
+end
+
 local function syncPlayerStateForKey(player: Player, key: string, value: any)
 	local attributeName = ATTR_BY_KEY[key]
 	if attributeName then
-		player:SetAttribute(attributeName, value)
+		if key == EQUIPPED_TITLE_ID_KEY then
+			local normalizedEquippedTitleId = normalizeOptionalString(value)
+			player:SetAttribute(attributeName, if normalizedEquippedTitleId ~= "" then normalizedEquippedTitleId else nil)
+		else
+			player:SetAttribute(attributeName, value)
+		end
 	end
 
 	if MONEY_KEY and key == MONEY_KEY then
@@ -230,6 +288,14 @@ local function syncPlayerStateForKey(player: Player, key: string, value: any)
 end
 
 local DataService = {}
+DataService.GlobalUpdateProcessed = GlobalUpdateProcessed
+DataService.PlayerDataLoaded = PlayerDataLoaded
+DataService.DataChanged = DataChanged
+DataService.MoneyChanged = MoneyChanged
+DataService.SuccessfulRollIncremented = SuccessfulRollIncremented
+DataService.TimePlayedFlushed = TimePlayedFlushed
+DataService.OwnedBodyPartAdded = OwnedBodyPartAdded
+DataService.EquippedTitleChanged = EquippedTitleChanged
 
 local function isPositiveFiniteNumber(value: any): boolean
 	return typeof(value) == "number" and value > 0 and value == value and value < math.huge and value > -math.huge
@@ -319,6 +385,7 @@ local function normalizeOwnedBodyPartRecord(record: any, fallbackOwnedId: string
 		variantMultiplier = variantMultiplier,
 		finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
 		serialNumber = math.max(1, clampWholeNumber(record.serialNumber, 1)),
+		isFavorite = record.isFavorite == true,
 	}
 end
 
@@ -385,14 +452,26 @@ local function normalizeProfileData(profile: any)
 	if SUCCESSFUL_ROLL_COUNT_KEY then
 		data[SUCCESSFUL_ROLL_COUNT_KEY] = math.max(0, clampWholeNumber(data[SUCCESSFUL_ROLL_COUNT_KEY], 0))
 	end
+	if EQUIPPED_TITLE_ID_KEY then
+		data[EQUIPPED_TITLE_ID_KEY] = normalizeOptionalString(data[EQUIPPED_TITLE_ID_KEY])
+	end
+	if ACHIEVEMENTS_KEY then
+		data[ACHIEVEMENTS_KEY] = AchievementState.Normalize(data[ACHIEVEMENTS_KEY])
+	end
 	if VIP_OWNED_KEY then
 		data[VIP_OWNED_KEY] = data[VIP_OWNED_KEY] == true
 	end
 	if QUICK_ROLL_ENABLED_KEY then
 		data[QUICK_ROLL_ENABLED_KEY] = data[QUICK_ROLL_ENABLED_KEY] == true
 	end
+	if AUTO_SELL_RARITIES_KEY then
+		data[AUTO_SELL_RARITIES_KEY] = RollingConfig.NormalizeAutoSellState(data[AUTO_SELL_RARITIES_KEY])
+	end
 	if BODY_PARTS_KEY then
 		data[BODY_PARTS_KEY] = cloneOwnedBodyPartsState(data[BODY_PARTS_KEY])
+	end
+	if EQUIPPED_LOADOUT_KEY then
+		data[EQUIPPED_LOADOUT_KEY] = BodyPartLoadout.NormalizeEquippedState(data[EQUIPPED_LOADOUT_KEY])
 	end
 end
 
@@ -416,9 +495,23 @@ local function flushTimePlayedForPlayer(player: Player, force: boolean?)
 	end
 
 	timePlayedLastFlushAt[player] = lastFlushAt + wholeSeconds
+	local previousValue = math.max(0, tonumber(DataService:Get(player, TIME_PLAYED_KEY)) or 0)
+	local updatedValue = 0
 	DataService:Set(player, TIME_PLAYED_KEY, function(currentValue)
-		return math.max(0, tonumber(currentValue) or 0) + wholeSeconds
+		updatedValue = math.max(0, tonumber(currentValue) or 0) + wholeSeconds
+		return updatedValue
 	end)
+	TimePlayedFlushed:Fire(player, wholeSeconds, previousValue, updatedValue)
+end
+
+local function syncProfileAttributes(player: Player, profile: any)
+	if not profile or typeof(profile.Data) ~= "table" then
+		return
+	end
+
+	for key in pairs(ATTR_BY_KEY) do
+		syncPlayerStateForKey(player, key, profile.Data[key])
+	end
 end
 
 local function startTimePlayedLoop()
@@ -445,7 +538,6 @@ if RunService:IsStudio() and USE_MOCK_DATA_IN_STUDIO then
 end
 
 DataService.ProfileStore = profileStore
-DataService.GlobalUpdateProcessed = GlobalUpdateProcessed
 
 function DataService:OnStart()
 	Leaderboards.start(self)
@@ -493,13 +585,12 @@ function DataService:OnPlayerAdded(player: Player)
 	timePlayedSessionStartedAt[player] = os.clock()
 	timePlayedLastFlushAt[player] = os.clock()
 
-	for key, attrName in pairs(ATTR_BY_KEY) do
-		player:SetAttribute(attrName, profile.Data[key])
-	end
+	syncProfileAttributes(player, profile)
 
 	createReplica(player, profile)
 	createLeaderstats(player, profile)
 	processGlobalUpdates(player, profile)
+	PlayerDataLoaded:Fire(player)
 	task.defer(function()
 		Leaderboards.refresh(self)
 	end)
@@ -507,6 +598,7 @@ end
 
 function DataService:OnPlayerRemoving(player: Player)
 	flushTimePlayedForPlayer(player, true)
+	Leaderboards.flushPlayer(self, player)
 
 	local profile = PROFILES[player]
 	if profile then
@@ -527,11 +619,20 @@ function DataService:Set(player: Player, key: string, mutator: any)
 		return
 	end
 
-	local currentValue = replica.Data[key]
+	local currentValue = deepCopy(replica.Data[key])
 	local newValue = if typeof(mutator) == "function" then mutator(currentValue) else mutator
 	replica:SetValue({ key }, newValue)
 
 	syncPlayerStateForKey(player, key, newValue)
+	DataChanged:Fire(player, key, deepCopy(currentValue), deepCopy(newValue))
+	if EQUIPPED_TITLE_ID_KEY and key == EQUIPPED_TITLE_ID_KEY then
+		EquippedTitleChanged:Fire(
+			player,
+			if normalizeOptionalString(currentValue) ~= "" then normalizeOptionalString(currentValue) else nil,
+			if normalizeOptionalString(newValue) ~= "" then normalizeOptionalString(newValue) else nil
+		)
+	end
+	return deepCopy(newValue), deepCopy(currentValue)
 end
 
 function DataService:GetOwnedBodyParts(player: Player): { [string]: OwnedBodyParts.OwnedBodyPartRecord }
@@ -551,12 +652,43 @@ function DataService:GetBodyPartsState(player: Player): OwnedBodyParts.OwnedBody
 	return cloneOwnedBodyPartsState(self:Get(player, BODY_PARTS_KEY))
 end
 
+function DataService:GetEquippedLoadout(player: Player): BodyPartLoadout.EquippedState
+	if not EQUIPPED_LOADOUT_KEY then
+		return BodyPartLoadout.CreateEmptyEquippedState()
+	end
+
+	return BodyPartLoadout.NormalizeEquippedState(self:Get(player, EQUIPPED_LOADOUT_KEY))
+end
+
 function DataService:GetMoney(player: Player): number
 	if not MONEY_KEY then
 		return 0
 	end
 
 	return math.max(0, tonumber(self:Get(player, MONEY_KEY)) or 0)
+end
+
+function DataService:AdjustMoney(player: Player, delta: number): number
+	if not MONEY_KEY then
+		return 0
+	end
+	if not getActiveReplica(player) then
+		return 0
+	end
+
+	local previousValue = self:GetMoney(player)
+	local updatedValue = previousValue
+	self:Set(player, MONEY_KEY, function(currentValue)
+		updatedValue = math.max(0, (tonumber(currentValue) or 0) + (tonumber(delta) or 0))
+		return updatedValue
+	end)
+	MoneyChanged:Fire(player, previousValue, updatedValue, tonumber(delta) or 0)
+
+	return updatedValue
+end
+
+function DataService:AddMoney(player: Player, amount: number): number
+	return self:AdjustMoney(player, amount)
 end
 
 function DataService:GetSuccessfulRollCount(player: Player): number
@@ -567,16 +699,51 @@ function DataService:GetSuccessfulRollCount(player: Player): number
 	return math.max(0, clampWholeNumber(self:Get(player, SUCCESSFUL_ROLL_COUNT_KEY), 0))
 end
 
+function DataService:GetEquippedTitleId(player: Player): string?
+	if not EQUIPPED_TITLE_ID_KEY then
+		return nil
+	end
+
+	local normalizedEquippedTitleId = normalizeOptionalString(self:Get(player, EQUIPPED_TITLE_ID_KEY))
+	if normalizedEquippedTitleId == "" then
+		return nil
+	end
+
+	return normalizedEquippedTitleId
+end
+
+function DataService:SetEquippedTitleId(player: Player, equippedTitleId: string?): (boolean, string?)
+	if not EQUIPPED_TITLE_ID_KEY then
+		return false, "Equipped title persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return false, "Player data is not loaded."
+	end
+
+	self:Set(player, EQUIPPED_TITLE_ID_KEY, normalizeOptionalString(equippedTitleId))
+	return true, "Equipped title updated."
+end
+
+function DataService:GetAchievementsState(player: Player): AchievementState.AchievementsState
+	if not ACHIEVEMENTS_KEY then
+		return AchievementState.CreateEmptyState()
+	end
+
+	return AchievementState.Normalize(self:Get(player, ACHIEVEMENTS_KEY))
+end
+
 function DataService:IncrementSuccessfulRollCount(player: Player): number
 	if not SUCCESSFUL_ROLL_COUNT_KEY then
 		return 0
 	end
 
+	local previousValue = self:GetSuccessfulRollCount(player)
 	local updatedValue = 0
 	self:Set(player, SUCCESSFUL_ROLL_COUNT_KEY, function(currentValue)
 		updatedValue = math.max(0, clampWholeNumber(currentValue, 0)) + 1
 		return updatedValue
 	end)
+	SuccessfulRollIncremented:Fire(player, previousValue, updatedValue)
 
 	return updatedValue
 end
@@ -673,6 +840,57 @@ function DataService:SetQuickRollEnabled(player: Player, enabled: boolean): (boo
 	return true, "Quick roll updated."
 end
 
+function DataService:GetAutoSellRarities(player: Player): { [string]: boolean }
+	if not AUTO_SELL_RARITIES_KEY then
+		return RollingConfig.CreateDefaultAutoSellState()
+	end
+
+	return RollingConfig.NormalizeAutoSellState(self:Get(player, AUTO_SELL_RARITIES_KEY))
+end
+
+function DataService:IsAutoSellEnabledForRarity(player: Player, displayRarity: any): boolean
+	local normalizedRarity = RollingConfig.NormalizeDisplayRarity(displayRarity)
+	return self:GetAutoSellRarities(player)[normalizedRarity] == true
+end
+
+function DataService:SetAutoSellRarityEnabled(player: Player, displayRarity: any, enabled: boolean): (boolean, string?)
+	if not AUTO_SELL_RARITIES_KEY then
+		return false, "Auto-sell persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return false, "Player data is not loaded."
+	end
+
+	local normalizedRarity = RollingConfig.ResolveDisplayRarity(displayRarity)
+	if not RollingConfig.IsValidDisplayRarity(normalizedRarity) then
+		return false, "That auto-sell rarity does not exist."
+	end
+
+	self:Set(player, AUTO_SELL_RARITIES_KEY, function(currentValue)
+		local autoSellState = RollingConfig.NormalizeAutoSellState(currentValue)
+		autoSellState[normalizedRarity] = enabled == true
+		return autoSellState
+	end)
+
+	return true, string.format(
+		"%s auto-sell %s.",
+		normalizedRarity,
+		if enabled == true then "enabled" else "disabled"
+	)
+end
+
+function DataService:SetEquippedLoadout(player: Player, equippedState: BodyPartLoadout.EquippedState): (boolean, string?)
+	if not EQUIPPED_LOADOUT_KEY then
+		return false, "Equipped loadout persistence is not configured."
+	end
+	if not waitForActiveReplica(player, 15) then
+		return false, "Player data is not loaded."
+	end
+
+	self:Set(player, EQUIPPED_LOADOUT_KEY, BodyPartLoadout.NormalizeEquippedState(equippedState))
+	return true, "Equipped loadout updated."
+end
+
 function DataService:GetNextSerialForPiece(pieceId: string): (number?, string?)
 	return BodyPartSerialStore:GetNextSerialForPiece(pieceId)
 end
@@ -746,6 +964,7 @@ function DataService:AddOwnedBodyPart(player: Player, payload: OwnedBodyParts.Ow
 	end
 
 	local createdRecord: OwnedBodyParts.OwnedBodyPartRecord? = nil
+	local updatedBodyPartsState: OwnedBodyParts.OwnedBodyPartsState? = nil
 
 	self:Set(player, BODY_PARTS_KEY, function(currentBodyPartsState)
 		local bodyPartsState = cloneOwnedBodyPartsState(currentBodyPartsState)
@@ -777,11 +996,16 @@ function DataService:AddOwnedBodyPart(player: Player, payload: OwnedBodyParts.Ow
 		bodyPartsState.ownedById[ownedId] = createdRecord
 		bodyPartsState.discoveredPieceIds[pieceId] = true
 		bodyPartsState.nextOwnedId += 1
+		updatedBodyPartsState = cloneOwnedBodyPartsState(bodyPartsState)
 		return bodyPartsState
 	end)
 
 	if not createdRecord then
 		return nil, "Failed to store owned body part."
+	end
+
+	if updatedBodyPartsState then
+		OwnedBodyPartAdded:Fire(player, deepCopy(createdRecord), cloneOwnedBodyPartsState(updatedBodyPartsState))
 	end
 
 	return deepCopy(createdRecord), nil
@@ -815,6 +1039,39 @@ function DataService:RemoveOwnedBodyPart(player: Player, ownedId: string): (Owne
 	end
 
 	return deepCopy(removedRecord), nil
+end
+
+function DataService:SetOwnedBodyPartFavorite(player: Player, ownedId: string, isFavorite: boolean): (OwnedBodyParts.OwnedBodyPartRecord?, string?)
+	if not BODY_PARTS_KEY then
+		return nil, "Body parts persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return nil, "Player data is not loaded."
+	end
+	if typeof(ownedId) ~= "string" or ownedId == "" then
+		return nil, "ownedId is required."
+	end
+
+	local updatedRecord: OwnedBodyParts.OwnedBodyPartRecord? = nil
+
+	self:Set(player, BODY_PARTS_KEY, function(currentBodyPartsState)
+		local bodyPartsState = cloneOwnedBodyPartsState(currentBodyPartsState)
+		local existingRecord = bodyPartsState.ownedById[ownedId]
+		if not existingRecord then
+			return bodyPartsState
+		end
+
+		existingRecord.isFavorite = isFavorite == true
+		updatedRecord = existingRecord
+		bodyPartsState.ownedById[ownedId] = existingRecord
+		return bodyPartsState
+	end)
+
+	if not updatedRecord then
+		return nil, string.format("Owned body part '%s' was not found.", ownedId)
+	end
+
+	return deepCopy(updatedRecord), nil
 end
 
 function DataService:Get(player: Player, key: string?)

@@ -1,5 +1,8 @@
 local Players = game:GetService("Players")
 local TextChatService = game:GetService("TextChatService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local TitleUtil = require(ReplicatedStorage.Shared.Titles.TitleUtil)
 
 local ChatTagController = {}
 
@@ -11,10 +14,16 @@ function ChatTagController:OnStart()
 		end
 
 		local player = Players:GetPlayerByUserId(textSource.UserId)
-		if player and player:GetAttribute("VIP") then
-			local overrideProperties = Instance.new("TextChatMessageProperties")
-			overrideProperties.PrefixText = `<font color="#ff8c00"><b>[VIP]</b></font> ` .. message.PrefixText
-			return overrideProperties
+		if player then
+			local richPrefix = TitleUtil.BuildRichTextPrefix(
+				player:GetAttribute("VIP") == true,
+				player:GetAttribute("EquippedTitleId")
+			)
+			if richPrefix ~= "" then
+				local overrideProperties = Instance.new("TextChatMessageProperties")
+				overrideProperties.PrefixText = richPrefix .. " " .. message.PrefixText
+				return overrideProperties
+			end
 		end
 
 		return nil

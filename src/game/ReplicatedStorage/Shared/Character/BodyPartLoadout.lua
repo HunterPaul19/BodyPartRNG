@@ -1,4 +1,6 @@
 local BodyPartRegions = require(script.Parent.BodyPartRegions)
+local BodyPartsCatalog = require(script.Parent.Parent.Config.BodyParts.Catalog)
+local BodyPartRuntimeConfig = require(script.Parent.Parent.Config.BodyParts.Runtime)
 
 local BodyPartLoadout = {}
 
@@ -26,6 +28,37 @@ local function cloneLoadoutEntry(entry: LoadoutEntry?): LoadoutEntry?
 	}
 end
 
+local function normalizeLoadoutEntry(region: string, entry: any, ownedBodyPartsById: { [string]: any }?): LoadoutEntry?
+	if typeof(entry) ~= "table" then
+		return nil
+	end
+
+	local ownedId = if typeof(entry.ownedId) == "string" and entry.ownedId ~= "" then entry.ownedId else nil
+	local pieceId = if typeof(entry.pieceId) == "string" and entry.pieceId ~= "" then entry.pieceId else nil
+	if ownedId == nil or pieceId == nil then
+		return nil
+	end
+
+	local piece = BodyPartsCatalog.GetPiece(pieceId)
+	if not piece or piece.region ~= region then
+		return nil
+	end
+
+	if ownedBodyPartsById ~= nil then
+		local ownedRecord = ownedBodyPartsById[ownedId]
+		if typeof(ownedRecord) ~= "table" or ownedRecord.pieceId ~= pieceId then
+			return nil
+		end
+	end
+
+	return {
+		ownedId = ownedId,
+		pieceId = pieceId,
+		region = region,
+		scale = BodyPartRuntimeConfig.ClampScale(pieceId, entry.scale),
+	}
+end
+
 function BodyPartLoadout.CreateEmptyEquippedState(): EquippedState
 	local equipped = {}
 	for _, region in ipairs(BodyPartRegions.Order) do
@@ -50,6 +83,41 @@ function BodyPartLoadout.CloneEquippedState(equippedState: EquippedState?): Equi
 	end
 
 	return clone
+end
+
+function BodyPartLoadout.NormalizeEquippedState(equippedState: any, ownedBodyPartsById: { [string]: any }?): EquippedState
+	local normalized = BodyPartLoadout.CreateEmptyEquippedState()
+
+	if typeof(equippedState) ~= "table" then
+		return normalized
+	end
+
+	for _, region in ipairs(BodyPartRegions.Order) do
+		normalized[region] = normalizeLoadoutEntry(region, equippedState[region], ownedBodyPartsById)
+	end
+
+	return normalized
+end
+
+function BodyPartLoadout.AreEquippedStatesEqual(left: EquippedState?, right: EquippedState?): boolean
+	for _, region in ipairs(BodyPartRegions.Order) do
+		local leftEntry = left and left[region] or nil
+		local rightEntry = right and right[region] or nil
+
+		if leftEntry == nil or rightEntry == nil then
+			if leftEntry ~= rightEntry then
+				return false
+			end
+		elseif leftEntry.ownedId ~= rightEntry.ownedId
+			or leftEntry.pieceId ~= rightEntry.pieceId
+			or leftEntry.region ~= rightEntry.region
+			or leftEntry.scale ~= rightEntry.scale
+		then
+			return false
+		end
+	end
+
+	return true
 end
 
 function BodyPartLoadout.HasAnyEquipped(equippedState: EquippedState?): boolean

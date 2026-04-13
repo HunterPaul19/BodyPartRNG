@@ -16,6 +16,7 @@ export type OwnedBodyPartRecord = {
 	variantMultiplier: number?,
 	finalPassiveIncomePerSecond: number?,
 	serialNumber: number,
+	isFavorite: boolean,
 }
 
 export type OwnedBodyPartGrantPayload = {

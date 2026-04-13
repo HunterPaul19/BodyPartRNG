@@ -26,7 +26,6 @@ local Panels = {
 	["Leaderboard"] = Main:WaitForChild("Leaderboard"),
 	["PlayerInfo"] = Main:WaitForChild("PlayerInfo"),
 	["RobuxStore"] = Main:WaitForChild("RobuxStore"),
-	["Shop"] = Main:WaitForChild("ShopUI"),
 	["Roll"] = Main:WaitForChild("Roll"),
 } :: { Frame }
 
@@ -123,10 +122,40 @@ function GUIController:TogglePanel(panelName: string, forceToggle: boolean)
 	end
 end
 
+function GUIController:IsPanelVisible(panelName: string): boolean
+	local found = GetPanel(panelName)
+	return found.Frame.Visible
+end
+
 function GUIController:CloseAll()
 	for key in PanelInfo do
 		GUIController:ClosePanel(key)
 	end
+end
+
+function GUIController:OpenExclusive(panelName: string)
+	local found = GetPanel(panelName)
+	local hadOtherOpen = false
+
+	for key, panel in PanelInfo do
+		if key ~= panelName and panel.Frame.Visible then
+			hadOtherOpen = true
+			GUIController:ClosePanel(key, true)
+		end
+	end
+
+	if found.Frame.Visible and not hadOtherOpen then
+		return
+	end
+
+	if hadOtherOpen then
+		task.delay(CloseTwinf.Time, function()
+			GUIController:OpenPanel(panelName, true)
+		end)
+		return
+	end
+
+	GUIController:OpenPanel(panelName, true)
 end
 
 function GUIController:HideMain()
@@ -172,8 +201,6 @@ UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
 		GUIController:TogglePanel("Appraisal")
 	elseif input.KeyCode == Enum.KeyCode.G then
 		FrameController:ToggleFrame("Inventory")
-	elseif input.KeyCode == Enum.KeyCode.B then
-		GUIController:TogglePanel("Dialogue")
 	end
 end)
 

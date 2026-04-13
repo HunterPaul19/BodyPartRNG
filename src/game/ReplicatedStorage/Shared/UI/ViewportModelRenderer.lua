@@ -48,7 +48,20 @@ local function facePreviewModel(previewModel: Model)
 	previewModel:PivotTo(rotatedPivot)
 end
 
-local function renderModel(viewportFrame: ViewportFrame, sourceModel: Model?): boolean
+local function createPreviewClone(sourceModel: Model, name: string): Model?
+	local previewModel = sourceModel:Clone()
+	previewModel.Name = name
+
+	if not sanitizePreviewModel(previewModel) then
+		previewModel:Destroy()
+		return nil
+	end
+	facePreviewModel(previewModel)
+
+	return previewModel
+end
+
+local function renderModel(viewportFrame: ViewportFrame, sourceModel: Model?, framingModel: Model?): boolean
 	clearViewport(viewportFrame)
 
 	if not (viewportFrame and viewportFrame:IsA("ViewportFrame")) then
@@ -62,19 +75,30 @@ local function renderModel(viewportFrame: ViewportFrame, sourceModel: Model?): b
 	worldModel.Name = "PreviewWorld"
 	worldModel.Parent = viewportFrame
 
-	local previewModel = sourceModel:Clone()
-	previewModel.Name = "PreviewModel"
-
-	if not sanitizePreviewModel(previewModel) then
-		previewModel:Destroy()
+	local previewModel = createPreviewClone(sourceModel, "PreviewModel")
+	if not previewModel then
 		worldModel:Destroy()
 		return false
 	end
 
 	previewModel.Parent = worldModel
-	facePreviewModel(previewModel)
 
-	local boundingBoxCFrame, boundingBoxSize = previewModel:GetBoundingBox()
+	local framingPreviewModel = nil
+	if framingModel and framingModel:IsA("Model") then
+		framingPreviewModel = createPreviewClone(framingModel, "FramingModel")
+	end
+
+	if framingPreviewModel then
+		previewModel:PivotTo(framingPreviewModel:GetPivot())
+	end
+
+	local boundingBoxCFrame, boundingBoxSize
+	if framingPreviewModel then
+		boundingBoxCFrame, boundingBoxSize = framingPreviewModel:GetBoundingBox()
+		framingPreviewModel:Destroy()
+	else
+		boundingBoxCFrame, boundingBoxSize = previewModel:GetBoundingBox()
+	end
 	local extent = math.max(boundingBoxSize.X, boundingBoxSize.Y, boundingBoxSize.Z, MINIMUM_EXTENT)
 
 	local camera = Instance.new("Camera")
@@ -99,11 +123,15 @@ function ViewportModelRenderer.Clear(viewportFrame: ViewportFrame)
 end
 
 function ViewportModelRenderer.RenderBundle(viewportFrame: ViewportFrame, bundleModel: Model?): boolean
-	return renderModel(viewportFrame, bundleModel)
+	return renderModel(viewportFrame, bundleModel, nil)
+end
+
+function ViewportModelRenderer.RenderCharacterModel(viewportFrame: ViewportFrame, characterModel: Model?, framingModel: Model?): boolean
+	return renderModel(viewportFrame, characterModel, framingModel)
 end
 
 function ViewportModelRenderer.RenderBaseRig(viewportFrame: ViewportFrame, baseRigModel: Model?): boolean
-	return renderModel(viewportFrame, baseRigModel)
+	return ViewportModelRenderer.RenderCharacterModel(viewportFrame, baseRigModel, baseRigModel)
 end
 
 return table.freeze(ViewportModelRenderer)

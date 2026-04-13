@@ -1,14 +1,14 @@
 local Sets = {
 	classic = {
 		id = "classic",
-		displayName = "Classic Set",
+		displayName = "Default",
 		assetGroup = "Examples",
 		assetModel = "Classic",
 		rollDisplay = {
-			displayName = "Classic",
+			displayName = "Default",
 			rarity = "Basic",
-			chance = 100,
-			passiveIncomePerSecond = 100,
+			chance = 1,
+			passiveIncomePerSecond = 0,
 			color = Color3.fromRGB(255, 255, 255),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -22,51 +22,22 @@ local Sets = {
 			RightLeg = "classic_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 4,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.1,
 			rollSpeedBonus = 0.05,
 		},
 	},
 
-	test_alt = {
-		id = "test_alt",
-		displayName = "Test Alt Set",
-		assetGroup = "Examples",
-		assetModel = "TestAlt",
-		rollDisplay = {
-			displayName = "Test Alt",
-			rarity = "Clean",
-			chance = 500,
-			passiveIncomePerSecond = 250,
-			color = Color3.fromRGB(134, 231, 255),
-			fontFace = Font.fromId(12187375422),
-			fontWeight = Enum.FontWeight.Medium,
-		},
-		piecesByRegion = {
-			Head = "test_alt_head",
-			Torso = "test_alt_torso",
-			LeftArm = "test_alt_left_arm",
-			RightArm = "test_alt_right_arm",
-			LeftLeg = "test_alt_left_leg",
-			RightLeg = "test_alt_right_leg",
-		},
-		fullSetBonus = {
-			passiveIncomePerSecond = 10,
-			luckBonus = 0.2,
-			rollSpeedBonus = 0.1,
-		},
-	},
-
 	korblox_deathspeaker = {
 		id = "korblox_deathspeaker",
-		displayName = "Korblox Deathspeaker Set",
+		displayName = "Korblox Deathspeaker",
 		assetGroup = "Korblox",
 		assetModel = "Deathspeaker",
 		rollDisplay = {
-			displayName = "Deathspeaker",
-			rarity = "Apex",
-			chance = 10000000000000,
-			passiveIncomePerSecond = 100,
+			displayName = "Korblox Deathspeaker",
+			rarity = "Prime",
+			chance = 16384,
+			passiveIncomePerSecond = 4500,
 			color = Color3.fromRGB(0, 153, 255),
 			fontFace = Font.fromId(12187375194),
 			fontWeight = Enum.FontWeight.Light,
@@ -80,7 +51,7 @@ local Sets = {
 			RightLeg = "korblox_deathspeaker_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 120,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.55,
 			rollSpeedBonus = 0.3,
 		},
@@ -88,15 +59,15 @@ local Sets = {
 
 	["67_brainrot"] = {
 		id = "67_brainrot",
-		displayName = "67 (Brainrot) Set",
+		displayName = "67",
 		sourceModelName = "67 (Brainrot)",
 		assetGroup = "ImportedCommon",
 		assetModel = "67_brainrot",
 		rollDisplay = {
-			displayName = "67 (Brainrot)",
-			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			displayName = "67",
+			rarity = "Elite",
+			chance = 625000,
+			passiveIncomePerSecond = 118000,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -110,7 +81,7 @@ local Sets = {
 			RightLeg = "67_brainrot_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
@@ -118,15 +89,15 @@ local Sets = {
 
 	absolute_unit = {
 		id = "absolute_unit",
-		displayName = "Absolute Unit Set",
+		displayName = "Absolute Unit (Fat Guy)",
 		sourceModelName = "Absolute Unit",
 		assetGroup = "ImportedUncommon",
 		assetModel = "absolute_unit",
 		rollDisplay = {
-			displayName = "Absolute Unit",
-			rarity = "Clean",
-			chance = 2500,
-			passiveIncomePerSecond = 150,
+			displayName = "Absolute Unit (Fat Guy)",
+			rarity = "Apex",
+			chance = 2500000,
+			passiveIncomePerSecond = 300000,
 			color = Color3.fromRGB(154, 246, 176),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -140,7 +111,7 @@ local Sets = {
 			RightLeg = "absolute_unit_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.08,
 			rollSpeedBonus = 0.04,
 		},
@@ -148,15 +119,15 @@ local Sets = {
 
 	banana_bro = {
 		id = "banana_bro",
-		displayName = "Banana Bro Set",
+		displayName = "Banana Bro",
 		sourceModelName = "Banana Bro",
 		assetGroup = "ImportedCommon",
 		assetModel = "banana_bro",
 		rollDisplay = {
 			displayName = "Banana Bro",
-			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			rarity = "Elite",
+			chance = 250000,
+			passiveIncomePerSecond = 65000,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -170,7 +141,7 @@ local Sets = {
 			RightLeg = "banana_bro_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
@@ -178,15 +149,15 @@ local Sets = {
 
 	bastion_mech_robot_recolorable = {
 		id = "bastion_mech_robot_recolorable",
-		displayName = "Bastion Mech Robot Set",
+		displayName = "Giant Mech",
 		sourceModelName = "Bastion mech robot [recolorable]",
 		assetGroup = "ImportedRare",
 		assetModel = "bastion_mech_robot_recolorable",
 		rollDisplay = {
-			displayName = "Bastion Mech Robot",
-			rarity = "Prime",
-			chance = 15000,
-			passiveIncomePerSecond = 350,
+			displayName = "Giant Mech",
+			rarity = "Apex",
+			chance = 1250000,
+			passiveIncomePerSecond = 190000,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -200,7 +171,7 @@ local Sets = {
 			RightLeg = "bastion_mech_robot_recolorable_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 26,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.14,
 			rollSpeedBonus = 0.07,
 		},
@@ -208,15 +179,15 @@ local Sets = {
 
 	billy = {
 		id = "billy",
-		displayName = "Billy Set",
+		displayName = "Billy",
 		sourceModelName = "Billy",
 		assetGroup = "ImportedCommon",
 		assetModel = "billy",
 		rollDisplay = {
 			displayName = "Billy",
 			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			chance = 256,
+			passiveIncomePerSecond = 100,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -230,7 +201,7 @@ local Sets = {
 			RightLeg = "billy_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
@@ -238,15 +209,15 @@ local Sets = {
 
 	capybara = {
 		id = "capybara",
-		displayName = "Capybara Set",
+		displayName = "Capybara",
 		sourceModelName = "Capybara",
 		assetGroup = "ImportedCommon",
 		assetModel = "capybara",
 		rollDisplay = {
 			displayName = "Capybara",
-			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			rarity = "Prime",
+			chance = 24000,
+			passiveIncomePerSecond = 6500,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -260,7 +231,7 @@ local Sets = {
 			RightLeg = "capybara_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
@@ -268,15 +239,15 @@ local Sets = {
 
 	cat_mech = {
 		id = "cat_mech",
-		displayName = "Cat Mech Set",
+		displayName = "Cat Mech",
 		sourceModelName = "Cat Mech",
 		assetGroup = "ImportedUncommon",
 		assetModel = "cat_mech",
 		rollDisplay = {
 			displayName = "Cat Mech",
-			rarity = "Clean",
-			chance = 2500,
-			passiveIncomePerSecond = 150,
+			rarity = "Elite",
+			chance = 400000,
+			passiveIncomePerSecond = 88000,
 			color = Color3.fromRGB(154, 246, 176),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -290,7 +261,7 @@ local Sets = {
 			RightLeg = "cat_mech_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.08,
 			rollSpeedBonus = 0.04,
 		},
@@ -298,15 +269,15 @@ local Sets = {
 
 	chef_tortrdee = {
 		id = "chef_tortrdee",
-		displayName = "Chef Tortrdee Set",
+		displayName = "Chef Tortrdee",
 		sourceModelName = "Chef Tortrdee",
 		assetGroup = "ImportedUncommon",
 		assetModel = "chef_tortrdee",
 		rollDisplay = {
 			displayName = "Chef Tortrdee",
-			rarity = "Clean",
-			chance = 2500,
-			passiveIncomePerSecond = 150,
+			rarity = "Prime",
+			chance = 60000,
+			passiveIncomePerSecond = 17250,
 			color = Color3.fromRGB(154, 246, 176),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -320,53 +291,23 @@ local Sets = {
 			RightLeg = "chef_tortrdee_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.08,
 			rollSpeedBonus = 0.04,
 		},
 	},
 
-	davy_bazooka = {
-		id = "davy_bazooka",
-		displayName = "Davy Bazooka Set",
-		sourceModelName = "Davy Bazooka",
-		assetGroup = "ImportedRare",
-		assetModel = "davy_bazooka",
-		rollDisplay = {
-			displayName = "Davy Bazooka",
-			rarity = "Prime",
-			chance = 15000,
-			passiveIncomePerSecond = 350,
-			color = Color3.fromRGB(119, 198, 255),
-			fontFace = Font.fromId(12187375422),
-			fontWeight = Enum.FontWeight.SemiBold,
-		},
-		piecesByRegion = {
-			Head = "davy_bazooka_head",
-			Torso = "davy_bazooka_torso",
-			LeftArm = "davy_bazooka_left_arm",
-			RightArm = "davy_bazooka_right_arm",
-			LeftLeg = "davy_bazooka_left_leg",
-			RightLeg = "davy_bazooka_right_leg",
-		},
-		fullSetBonus = {
-			passiveIncomePerSecond = 26,
-			luckBonus = 0.14,
-			rollSpeedBonus = 0.07,
-		},
-	},
-
 	deer_monster_99_nights_in_the_forest = {
 		id = "deer_monster_99_nights_in_the_forest",
-		displayName = "Deer Monster Set",
+		displayName = "99 Nights",
 		sourceModelName = "Deer Monster (99 Nights in the Forest)",
 		assetGroup = "ImportedRare",
 		assetModel = "deer_monster_99_nights_in_the_forest",
 		rollDisplay = {
-			displayName = "Deer Monster",
-			rarity = "Prime",
-			chance = 15000,
-			passiveIncomePerSecond = 350,
+			displayName = "99 Nights",
+			rarity = "Elite",
+			chance = 1000000,
+			passiveIncomePerSecond = 160000,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -380,7 +321,7 @@ local Sets = {
 			RightLeg = "deer_monster_99_nights_in_the_forest_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 26,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.14,
 			rollSpeedBonus = 0.07,
 		},
@@ -388,15 +329,15 @@ local Sets = {
 
 	el_gato = {
 		id = "el_gato",
-		displayName = "El Gato Set",
+		displayName = "El Gato",
 		sourceModelName = "El Gato",
 		assetGroup = "ImportedUncommon",
 		assetModel = "el_gato",
 		rollDisplay = {
 			displayName = "El Gato",
-			rarity = "Clean",
-			chance = 2500,
-			passiveIncomePerSecond = 150,
+			rarity = "Prime",
+			chance = 70000,
+			passiveIncomePerSecond = 22000,
 			color = Color3.fromRGB(154, 246, 176),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -410,7 +351,7 @@ local Sets = {
 			RightLeg = "el_gato_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.08,
 			rollSpeedBonus = 0.04,
 		},
@@ -418,15 +359,15 @@ local Sets = {
 
 	elemental_crystal_golem = {
 		id = "elemental_crystal_golem",
-		displayName = "Elemental Crystal Golem Set",
+		displayName = "Elemental Crystal Golem",
 		sourceModelName = "Elemental Crystal Golem",
 		assetGroup = "ImportedRare",
 		assetModel = "elemental_crystal_golem",
 		rollDisplay = {
 			displayName = "Elemental Crystal Golem",
 			rarity = "Prime",
-			chance = 15000,
-			passiveIncomePerSecond = 350,
+			chance = 32768,
+			passiveIncomePerSecond = 9250,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -440,7 +381,7 @@ local Sets = {
 			RightLeg = "elemental_crystal_golem_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 26,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.14,
 			rollSpeedBonus = 0.07,
 		},
@@ -448,15 +389,15 @@ local Sets = {
 
 	frost_guard_general = {
 		id = "frost_guard_general",
-		displayName = "Frost Guard General Set",
+		displayName = "Frost Guard",
 		sourceModelName = "Frost Guard General",
 		assetGroup = "ImportedRare",
 		assetModel = "frost_guard_general",
 		rollDisplay = {
-			displayName = "Frost Guard General",
-			rarity = "Prime",
-			chance = 15000,
-			passiveIncomePerSecond = 350,
+			displayName = "Frost Guard",
+			rarity = "Clean",
+			chance = 6000,
+			passiveIncomePerSecond = 1500,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -470,7 +411,7 @@ local Sets = {
 			RightLeg = "frost_guard_general_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 26,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.14,
 			rollSpeedBonus = 0.07,
 		},
@@ -478,15 +419,15 @@ local Sets = {
 
 	gang_o_fries = {
 		id = "gang_o_fries",
-		displayName = "Gang O' Fries Set",
+		displayName = "Fries",
 		sourceModelName = "Gang O' Fries",
 		assetGroup = "ImportedCommon",
 		assetModel = "gang_o_fries",
 		rollDisplay = {
-			displayName = "Gang O' Fries",
-			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			displayName = "Fries",
+			rarity = "Prime",
+			chance = 25000,
+			passiveIncomePerSecond = 7250,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -500,7 +441,7 @@ local Sets = {
 			RightLeg = "gang_o_fries_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
@@ -508,15 +449,15 @@ local Sets = {
 
 	gingerbread_man = {
 		id = "gingerbread_man",
-		displayName = "Gingerbread Man Set",
+		displayName = "Gingerbread",
 		sourceModelName = "Gingerbread Man",
 		assetGroup = "ImportedCommon",
 		assetModel = "gingerbread_man",
 		rollDisplay = {
-			displayName = "Gingerbread Man",
-			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			displayName = "Gingerbread",
+			rarity = "Clean",
+			chance = 3000,
+			passiveIncomePerSecond = 775,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -530,7 +471,7 @@ local Sets = {
 			RightLeg = "gingerbread_man_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
@@ -538,15 +479,15 @@ local Sets = {
 
 	handsome_squidward = {
 		id = "handsome_squidward",
-		displayName = "Handsome Squidward Set",
+		displayName = "Handsome Squidward",
 		sourceModelName = "Handsome Squidward",
 		assetGroup = "ImportedUncommon",
 		assetModel = "handsome_squidward",
 		rollDisplay = {
 			displayName = "Handsome Squidward",
-			rarity = "Clean",
-			chance = 2500,
-			passiveIncomePerSecond = 150,
+			rarity = "Elite",
+			chance = 500000,
+			passiveIncomePerSecond = 102000,
 			color = Color3.fromRGB(154, 246, 176),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -560,7 +501,7 @@ local Sets = {
 			RightLeg = "handsome_squidward_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.08,
 			rollSpeedBonus = 0.04,
 		},
@@ -568,15 +509,15 @@ local Sets = {
 
 	headless_horseman = {
 		id = "headless_horseman",
-		displayName = "Headless Horseman Set",
+		displayName = "Headless Horseman",
 		sourceModelName = "Headless Horseman",
 		assetGroup = "ImportedLegendary",
 		assetModel = "headless_horseman",
 		rollDisplay = {
 			displayName = "Headless Horseman",
-			rarity = "Elite",
-			chance = 500000,
-			passiveIncomePerSecond = 2200,
+			rarity = "Prime",
+			chance = 18000,
+			passiveIncomePerSecond = 5000,
 			color = Color3.fromRGB(255, 214, 92),
 			fontFace = Font.fromId(12187375194),
 			fontWeight = Enum.FontWeight.Heavy,
@@ -590,7 +531,7 @@ local Sets = {
 			RightLeg = "headless_horseman_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 110,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.4,
 			rollSpeedBonus = 0.18,
 		},
@@ -598,15 +539,15 @@ local Sets = {
 
 	heart = {
 		id = "heart",
-		displayName = "Heart Set",
+		displayName = "Heart",
 		sourceModelName = "Heart",
 		assetGroup = "ImportedCommon",
 		assetModel = "heart",
 		rollDisplay = {
 			displayName = "Heart",
-			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			rarity = "Prime",
+			chance = 100000,
+			passiveIncomePerSecond = 37000,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -620,7 +561,7 @@ local Sets = {
 			RightLeg = "heart_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
@@ -628,15 +569,15 @@ local Sets = {
 
 	iron_slayer = {
 		id = "iron_slayer",
-		displayName = "Iron Slayer Set",
+		displayName = "Iron Slayer",
 		sourceModelName = "Iron Slayer",
 		assetGroup = "ImportedRare",
 		assetModel = "iron_slayer",
 		rollDisplay = {
 			displayName = "Iron Slayer",
 			rarity = "Prime",
-			chance = 15000,
-			passiveIncomePerSecond = 350,
+			chance = 50000,
+			passiveIncomePerSecond = 15250,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -650,7 +591,7 @@ local Sets = {
 			RightLeg = "iron_slayer_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 26,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.14,
 			rollSpeedBonus = 0.07,
 		},
@@ -658,15 +599,15 @@ local Sets = {
 
 	junkbot = {
 		id = "junkbot",
-		displayName = "Junkbot Set",
+		displayName = "Junkbot",
 		sourceModelName = "Junkbot",
 		assetGroup = "ImportedUncommon",
 		assetModel = "junkbot",
 		rollDisplay = {
 			displayName = "Junkbot",
-			rarity = "Clean",
-			chance = 2500,
-			passiveIncomePerSecond = 150,
+			rarity = "Basic",
+			chance = 64,
+			passiveIncomePerSecond = 35,
 			color = Color3.fromRGB(154, 246, 176),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -680,7 +621,7 @@ local Sets = {
 			RightLeg = "junkbot_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.08,
 			rollSpeedBonus = 0.04,
 		},
@@ -688,15 +629,15 @@ local Sets = {
 
 	knights_of_redcliff_paladin = {
 		id = "knights_of_redcliff_paladin",
-		displayName = "Knights Of Redcliff: Paladin Set",
+		displayName = "Paladin",
 		sourceModelName = "Knights of Redcliff: Paladin",
 		assetGroup = "ImportedEpic",
 		assetModel = "knights_of_redcliff_paladin",
 		rollDisplay = {
-			displayName = "Knights Of Redcliff: Paladin",
-			rarity = "Prime",
-			chance = 90000,
-			passiveIncomePerSecond = 900,
+			displayName = "Paladin",
+			rarity = "Basic",
+			chance = 128,
+			passiveIncomePerSecond = 60,
 			color = Color3.fromRGB(255, 157, 117),
 			fontFace = Font.fromId(12187375194),
 			fontWeight = Enum.FontWeight.Bold,
@@ -710,53 +651,23 @@ local Sets = {
 			RightLeg = "knights_of_redcliff_paladin_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 55,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.24,
 			rollSpeedBonus = 0.11,
 		},
 	},
 
-	korblox_deathspeaker_imported = {
-		id = "korblox_deathspeaker_imported",
-		displayName = "Korblox Deathspeaker (Imported) Set",
-		sourceModelName = "Korblox Deathspeaker",
-		assetGroup = "ImportedLegendary",
-		assetModel = "korblox_deathspeaker_imported",
-		rollDisplay = {
-			displayName = "Korblox Deathspeaker (Imported)",
-			rarity = "Elite",
-			chance = 500000,
-			passiveIncomePerSecond = 2200,
-			color = Color3.fromRGB(255, 214, 92),
-			fontFace = Font.fromId(12187375194),
-			fontWeight = Enum.FontWeight.Heavy,
-		},
-		piecesByRegion = {
-			Head = "korblox_deathspeaker_imported_head",
-			Torso = "korblox_deathspeaker_imported_torso",
-			LeftArm = "korblox_deathspeaker_imported_left_arm",
-			RightArm = "korblox_deathspeaker_imported_right_arm",
-			LeftLeg = "korblox_deathspeaker_imported_left_leg",
-			RightLeg = "korblox_deathspeaker_imported_right_leg",
-		},
-		fullSetBonus = {
-			passiveIncomePerSecond = 110,
-			luckBonus = 0.4,
-			rollSpeedBonus = 0.18,
-		},
-	},
-
 	korblox_mage = {
 		id = "korblox_mage",
-		displayName = "Korblox Mage Set",
+		displayName = "Korblox Mage",
 		sourceModelName = "Korblox Mage",
 		assetGroup = "ImportedRare",
 		assetModel = "korblox_mage",
 		rollDisplay = {
 			displayName = "Korblox Mage",
 			rarity = "Prime",
-			chance = 15000,
-			passiveIncomePerSecond = 350,
+			chance = 12500,
+			passiveIncomePerSecond = 3500,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -770,7 +681,7 @@ local Sets = {
 			RightLeg = "korblox_mage_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 26,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.14,
 			rollSpeedBonus = 0.07,
 		},
@@ -778,15 +689,15 @@ local Sets = {
 
 	los_tralaleritos_brainrot = {
 		id = "los_tralaleritos_brainrot",
-		displayName = "Los Tralaleritos (Brainrot) Set",
+		displayName = "Los Tralaleritos",
 		sourceModelName = "Los Tralaleritos (Brainrot)",
 		assetGroup = "ImportedEpic",
 		assetModel = "los_tralaleritos_brainrot",
 		rollDisplay = {
-			displayName = "Los Tralaleritos (Brainrot)",
+			displayName = "Los Tralaleritos",
 			rarity = "Prime",
-			chance = 90000,
-			passiveIncomePerSecond = 900,
+			chance = 80000,
+			passiveIncomePerSecond = 28500,
 			color = Color3.fromRGB(255, 157, 117),
 			fontFace = Font.fromId(12187375194),
 			fontWeight = Enum.FontWeight.Bold,
@@ -800,7 +711,7 @@ local Sets = {
 			RightLeg = "los_tralaleritos_brainrot_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 55,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.24,
 			rollSpeedBonus = 0.11,
 		},
@@ -808,15 +719,15 @@ local Sets = {
 
 	mahoraga = {
 		id = "mahoraga",
-		displayName = "Mahoraga Set",
+		displayName = "Mahoraga",
 		sourceModelName = "Mahoraga",
 		assetGroup = "ImportedLegendary",
 		assetModel = "mahoraga",
 		rollDisplay = {
 			displayName = "Mahoraga",
 			rarity = "Elite",
-			chance = 500000,
-			passiveIncomePerSecond = 2200,
+			chance = 800000,
+			passiveIncomePerSecond = 138000,
 			color = Color3.fromRGB(255, 214, 92),
 			fontFace = Font.fromId(12187375194),
 			fontWeight = Enum.FontWeight.Heavy,
@@ -830,7 +741,7 @@ local Sets = {
 			RightLeg = "mahoraga_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 110,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.4,
 			rollSpeedBonus = 0.18,
 		},
@@ -838,15 +749,15 @@ local Sets = {
 
 	man = {
 		id = "man",
-		displayName = "Man Set",
+		displayName = "Man",
 		sourceModelName = "Man   ",
 		assetGroup = "ImportedCommon",
 		assetModel = "man",
 		rollDisplay = {
 			displayName = "Man",
 			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			chance = 8,
+			passiveIncomePerSecond = 8,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -860,7 +771,7 @@ local Sets = {
 			RightLeg = "man_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
@@ -868,15 +779,15 @@ local Sets = {
 
 	mech_golem = {
 		id = "mech_golem",
-		displayName = "Mech Golem Set",
+		displayName = "Mech (Golem)",
 		sourceModelName = "Mech Golem",
 		assetGroup = "ImportedRare",
 		assetModel = "mech_golem",
 		rollDisplay = {
-			displayName = "Mech Golem",
+			displayName = "Mech (Golem)",
 			rarity = "Prime",
-			chance = 15000,
-			passiveIncomePerSecond = 350,
+			chance = 75000,
+			passiveIncomePerSecond = 25000,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -890,7 +801,7 @@ local Sets = {
 			RightLeg = "mech_golem_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 26,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.14,
 			rollSpeedBonus = 0.07,
 		},
@@ -898,15 +809,15 @@ local Sets = {
 
 	mr_roboto = {
 		id = "mr_roboto",
-		displayName = "Mr. Roboto Set",
+		displayName = "Robot",
 		sourceModelName = "Mr. Roboto",
 		assetGroup = "ImportedUncommon",
 		assetModel = "mr_roboto",
 		rollDisplay = {
-			displayName = "Mr. Roboto",
+			displayName = "Robot",
 			rarity = "Clean",
-			chance = 2500,
-			passiveIncomePerSecond = 150,
+			chance = 4096,
+			passiveIncomePerSecond = 1050,
 			color = Color3.fromRGB(154, 246, 176),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -920,7 +831,7 @@ local Sets = {
 			RightLeg = "mr_roboto_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.08,
 			rollSpeedBonus = 0.04,
 		},
@@ -928,15 +839,15 @@ local Sets = {
 
 	mr_toilet = {
 		id = "mr_toilet",
-		displayName = "Mr. Toilet Set",
+		displayName = "Toilet",
 		sourceModelName = "Mr. Toilet",
 		assetGroup = "ImportedUncommon",
 		assetModel = "mr_toilet",
 		rollDisplay = {
-			displayName = "Mr. Toilet",
+			displayName = "Toilet",
 			rarity = "Clean",
-			chance = 2500,
-			passiveIncomePerSecond = 150,
+			chance = 9000,
+			passiveIncomePerSecond = 2400,
 			color = Color3.fromRGB(154, 246, 176),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -950,7 +861,7 @@ local Sets = {
 			RightLeg = "mr_toilet_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.08,
 			rollSpeedBonus = 0.04,
 		},
@@ -958,15 +869,15 @@ local Sets = {
 
 	muscle_insane_chad_8_pack_body = {
 		id = "muscle_insane_chad_8_pack_body",
-		displayName = "Muscle Insane Chad 8 Pack Body Set",
+		displayName = "Chad (Insane Muscles)",
 		sourceModelName = "Muscle Insane Chad 8 Pack Body",
 		assetGroup = "ImportedEpic",
 		assetModel = "muscle_insane_chad_8_pack_body",
 		rollDisplay = {
-			displayName = "Muscle Insane Chad 8 Pack Body",
-			rarity = "Prime",
-			chance = 90000,
-			passiveIncomePerSecond = 900,
+			displayName = "Chad (Insane Muscles)",
+			rarity = "Apex",
+			chance = 5000000,
+			passiveIncomePerSecond = 500000,
 			color = Color3.fromRGB(255, 157, 117),
 			fontFace = Font.fromId(12187375194),
 			fontWeight = Enum.FontWeight.Bold,
@@ -980,7 +891,7 @@ local Sets = {
 			RightLeg = "muscle_insane_chad_8_pack_body_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 55,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.24,
 			rollSpeedBonus = 0.11,
 		},
@@ -988,15 +899,15 @@ local Sets = {
 
 	noob_attack_mech_mobility = {
 		id = "noob_attack_mech_mobility",
-		displayName = "Noob Attack: Mech Mobility Set",
+		displayName = "Mech (early)",
 		sourceModelName = "Noob Attack: Mech Mobility",
 		assetGroup = "ImportedUncommon",
 		assetModel = "noob_attack_mech_mobility",
 		rollDisplay = {
-			displayName = "Noob Attack: Mech Mobility",
+			displayName = "Mech (early)",
 			rarity = "Clean",
-			chance = 2500,
-			passiveIncomePerSecond = 150,
+			chance = 10000,
+			passiveIncomePerSecond = 3000,
 			color = Color3.fromRGB(154, 246, 176),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -1010,7 +921,7 @@ local Sets = {
 			RightLeg = "noob_attack_mech_mobility_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.08,
 			rollSpeedBonus = 0.04,
 		},
@@ -1018,15 +929,15 @@ local Sets = {
 
 	paper_sketch_boy_animated = {
 		id = "paper_sketch_boy_animated",
-		displayName = "Paper Sketch Boy Animated Set",
+		displayName = "Paper Boy",
 		sourceModelName = "Paper Sketch Boy Animated",
 		assetGroup = "ImportedRare",
 		assetModel = "paper_sketch_boy_animated",
 		rollDisplay = {
-			displayName = "Paper Sketch Boy Animated",
-			rarity = "Prime",
-			chance = 15000,
-			passiveIncomePerSecond = 350,
+			displayName = "Paper Boy",
+			rarity = "Clean",
+			chance = 9500,
+			passiveIncomePerSecond = 2700,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1040,7 +951,7 @@ local Sets = {
 			RightLeg = "paper_sketch_boy_animated_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 26,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.14,
 			rollSpeedBonus = 0.07,
 		},
@@ -1048,15 +959,15 @@ local Sets = {
 
 	penguin = {
 		id = "penguin",
-		displayName = "Penguin Set",
+		displayName = "Penguin",
 		sourceModelName = "Penguin",
 		assetGroup = "ImportedCommon",
 		assetModel = "penguin",
 		rollDisplay = {
 			displayName = "Penguin",
-			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			rarity = "Clean",
+			chance = 2500,
+			passiveIncomePerSecond = 650,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1070,7 +981,7 @@ local Sets = {
 			RightLeg = "penguin_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
@@ -1078,15 +989,15 @@ local Sets = {
 
 	pirate_swashbuckler = {
 		id = "pirate_swashbuckler",
-		displayName = "Pirate Swashbuckler Set",
+		displayName = "Pirate",
 		sourceModelName = "Pirate Swashbuckler",
 		assetGroup = "ImportedUncommon",
 		assetModel = "pirate_swashbuckler",
 		rollDisplay = {
-			displayName = "Pirate Swashbuckler",
+			displayName = "Pirate",
 			rarity = "Clean",
-			chance = 2500,
-			passiveIncomePerSecond = 150,
+			chance = 2048,
+			passiveIncomePerSecond = 550,
 			color = Color3.fromRGB(154, 246, 176),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -1100,7 +1011,7 @@ local Sets = {
 			RightLeg = "pirate_swashbuckler_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.08,
 			rollSpeedBonus = 0.04,
 		},
@@ -1108,15 +1019,15 @@ local Sets = {
 
 	potato_boy = {
 		id = "potato_boy",
-		displayName = "Potato Boy Set",
+		displayName = "Potato Boy",
 		sourceModelName = "Potato boy",
 		assetGroup = "ImportedCommon",
 		assetModel = "potato_boy",
 		rollDisplay = {
 			displayName = "Potato Boy",
-			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			rarity = "Clean",
+			chance = 1024,
+			passiveIncomePerSecond = 300,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1130,53 +1041,23 @@ local Sets = {
 			RightLeg = "potato_boy_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
 	},
 
-	r15_korblox_deathspeaker = {
-		id = "r15_korblox_deathspeaker",
-		displayName = "R15 Korblox Deathspeaker Set",
-		sourceModelName = "R15 - Korblox Deathspeaker",
-		assetGroup = "ImportedLegendary",
-		assetModel = "r15_korblox_deathspeaker",
-		rollDisplay = {
-			displayName = "R15 Korblox Deathspeaker",
-			rarity = "Elite",
-			chance = 500000,
-			passiveIncomePerSecond = 2200,
-			color = Color3.fromRGB(255, 214, 92),
-			fontFace = Font.fromId(12187375194),
-			fontWeight = Enum.FontWeight.Heavy,
-		},
-		piecesByRegion = {
-			Head = "r15_korblox_deathspeaker_head",
-			Torso = "r15_korblox_deathspeaker_torso",
-			LeftArm = "r15_korblox_deathspeaker_left_arm",
-			RightArm = "r15_korblox_deathspeaker_right_arm",
-			LeftLeg = "r15_korblox_deathspeaker_left_leg",
-			RightLeg = "r15_korblox_deathspeaker_right_leg",
-		},
-		fullSetBonus = {
-			passiveIncomePerSecond = 110,
-			luckBonus = 0.4,
-			rollSpeedBonus = 0.18,
-		},
-	},
-
 	rig = {
 		id = "rig",
-		displayName = "Rig Set",
+		displayName = "Lego",
 		sourceModelName = "Rig",
 		assetGroup = "ImportedCommon",
 		assetModel = "rig",
 		rollDisplay = {
-			displayName = "Rig",
+			displayName = "Lego",
 			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			chance = 512,
+			passiveIncomePerSecond = 170,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1190,7 +1071,7 @@ local Sets = {
 			RightLeg = "rig_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
@@ -1198,15 +1079,15 @@ local Sets = {
 
 	roblox_boy = {
 		id = "roblox_boy",
-		displayName = "ROBLOX Boy Set",
+		displayName = "Boy",
 		sourceModelName = "ROBLOX Boy",
 		assetGroup = "ImportedCommon",
 		assetModel = "roblox_boy",
 		rollDisplay = {
-			displayName = "ROBLOX Boy",
+			displayName = "Boy",
 			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			chance = 2,
+			passiveIncomePerSecond = 2,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1220,7 +1101,7 @@ local Sets = {
 			RightLeg = "roblox_boy_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
@@ -1228,15 +1109,15 @@ local Sets = {
 
 	roblox_girl = {
 		id = "roblox_girl",
-		displayName = "ROBLOX Girl Set",
+		displayName = "Girl",
 		sourceModelName = "ROBLOX Girl   ",
 		assetGroup = "ImportedCommon",
 		assetModel = "roblox_girl",
 		rollDisplay = {
-			displayName = "ROBLOX Girl",
+			displayName = "Girl",
 			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			chance = 4,
+			passiveIncomePerSecond = 4,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1250,7 +1131,7 @@ local Sets = {
 			RightLeg = "roblox_girl_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
@@ -1258,15 +1139,15 @@ local Sets = {
 
 	robloxian_2_0 = {
 		id = "robloxian_2_0",
-		displayName = "Robloxian 2.0 Set",
+		displayName = "Robloxian",
 		sourceModelName = "Robloxian 2.0",
 		assetGroup = "ImportedUncommon",
 		assetModel = "robloxian_2_0",
 		rollDisplay = {
-			displayName = "Robloxian 2.0",
-			rarity = "Clean",
-			chance = 2500,
-			passiveIncomePerSecond = 150,
+			displayName = "Robloxian",
+			rarity = "Basic",
+			chance = 32,
+			passiveIncomePerSecond = 20,
 			color = Color3.fromRGB(154, 246, 176),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -1280,7 +1161,7 @@ local Sets = {
 			RightLeg = "robloxian_2_0_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.08,
 			rollSpeedBonus = 0.04,
 		},
@@ -1288,15 +1169,15 @@ local Sets = {
 
 	shrek = {
 		id = "shrek",
-		displayName = "SHREK Set",
+		displayName = "Shrek",
 		sourceModelName = "SHREK",
 		assetGroup = "ImportedCommon",
 		assetModel = "shrek",
 		rollDisplay = {
-			displayName = "SHREK",
-			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			displayName = "Shrek",
+			rarity = "Elite",
+			chance = 200000,
+			passiveIncomePerSecond = 56000,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1310,7 +1191,7 @@ local Sets = {
 			RightLeg = "shrek_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
@@ -1318,15 +1199,15 @@ local Sets = {
 
 	skeleton = {
 		id = "skeleton",
-		displayName = "Skeleton Set",
+		displayName = "Skeleton",
 		sourceModelName = "Skeleton  ",
 		assetGroup = "ImportedCommon",
 		assetModel = "skeleton",
 		rollDisplay = {
 			displayName = "Skeleton",
-			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			rarity = "Clean",
+			chance = 3600,
+			passiveIncomePerSecond = 900,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1340,7 +1221,7 @@ local Sets = {
 			RightLeg = "skeleton_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
@@ -1348,15 +1229,15 @@ local Sets = {
 
 	smiling_freak = {
 		id = "smiling_freak",
-		displayName = "Smiling Freak Set",
+		displayName = "Smiling Freak",
 		sourceModelName = "Smiling Freak",
 		assetGroup = "ImportedRare",
 		assetModel = "smiling_freak",
 		rollDisplay = {
 			displayName = "Smiling Freak",
 			rarity = "Prime",
-			chance = 15000,
-			passiveIncomePerSecond = 350,
+			chance = 90000,
+			passiveIncomePerSecond = 32500,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1370,7 +1251,7 @@ local Sets = {
 			RightLeg = "smiling_freak_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 26,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.14,
 			rollSpeedBonus = 0.07,
 		},
@@ -1378,15 +1259,15 @@ local Sets = {
 
 	snow_gentleman = {
 		id = "snow_gentleman",
-		displayName = "Snow Gentleman Set",
+		displayName = "Snowman",
 		sourceModelName = "Snow Gentleman",
 		assetGroup = "ImportedUncommon",
 		assetModel = "snow_gentleman",
 		rollDisplay = {
-			displayName = "Snow Gentleman",
+			displayName = "Snowman",
 			rarity = "Clean",
-			chance = 2500,
-			passiveIncomePerSecond = 150,
+			chance = 5000,
+			passiveIncomePerSecond = 1250,
 			color = Color3.fromRGB(154, 246, 176),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -1400,7 +1281,7 @@ local Sets = {
 			RightLeg = "snow_gentleman_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.08,
 			rollSpeedBonus = 0.04,
 		},
@@ -1408,15 +1289,15 @@ local Sets = {
 
 	snow_queen = {
 		id = "snow_queen",
-		displayName = "Snow Queen Set",
+		displayName = "Snow Queen",
 		sourceModelName = "Snow Queen",
 		assetGroup = "ImportedRare",
 		assetModel = "snow_queen",
 		rollDisplay = {
 			displayName = "Snow Queen",
-			rarity = "Prime",
-			chance = 15000,
-			passiveIncomePerSecond = 350,
+			rarity = "Clean",
+			chance = 7500,
+			passiveIncomePerSecond = 1800,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1430,7 +1311,7 @@ local Sets = {
 			RightLeg = "snow_queen_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 26,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.14,
 			rollSpeedBonus = 0.07,
 		},
@@ -1438,15 +1319,15 @@ local Sets = {
 
 	steamboat_mouse = {
 		id = "steamboat_mouse",
-		displayName = "Steamboat Mouse Set",
+		displayName = "Steamboat Willie",
 		sourceModelName = "Steamboat Mouse",
 		assetGroup = "ImportedCommon",
 		assetModel = "steamboat_mouse",
 		rollDisplay = {
-			displayName = "Steamboat Mouse",
-			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			displayName = "Steamboat Willie",
+			rarity = "Prime",
+			chance = 45000,
+			passiveIncomePerSecond = 13500,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1460,7 +1341,7 @@ local Sets = {
 			RightLeg = "steamboat_mouse_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
@@ -1468,15 +1349,15 @@ local Sets = {
 
 	stinky_monkey = {
 		id = "stinky_monkey",
-		displayName = "Stinky Monkey Set",
+		displayName = "Stinky Monkey",
 		sourceModelName = "Stinky Monkey",
 		assetGroup = "ImportedUncommon",
 		assetModel = "stinky_monkey",
 		rollDisplay = {
 			displayName = "Stinky Monkey",
-			rarity = "Clean",
-			chance = 2500,
-			passiveIncomePerSecond = 150,
+			rarity = "Elite",
+			chance = 150000,
+			passiveIncomePerSecond = 48000,
 			color = Color3.fromRGB(154, 246, 176),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -1490,7 +1371,7 @@ local Sets = {
 			RightLeg = "stinky_monkey_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.08,
 			rollSpeedBonus = 0.04,
 		},
@@ -1498,15 +1379,15 @@ local Sets = {
 
 	superhero = {
 		id = "superhero",
-		displayName = "Superhero Set",
+		displayName = "Superhero",
 		sourceModelName = "Superhero",
 		assetGroup = "ImportedUncommon",
 		assetModel = "superhero",
 		rollDisplay = {
 			displayName = "Superhero",
 			rarity = "Clean",
-			chance = 2500,
-			passiveIncomePerSecond = 150,
+			chance = 1500,
+			passiveIncomePerSecond = 400,
 			color = Color3.fromRGB(154, 246, 176),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -1520,7 +1401,7 @@ local Sets = {
 			RightLeg = "superhero_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.08,
 			rollSpeedBonus = 0.04,
 		},
@@ -1528,15 +1409,15 @@ local Sets = {
 
 	supreme_claus = {
 		id = "supreme_claus",
-		displayName = "Supreme Claus Set",
+		displayName = "Supreme Claus",
 		sourceModelName = "Supreme Claus",
 		assetGroup = "ImportedUncommon",
 		assetModel = "supreme_claus",
 		rollDisplay = {
 			displayName = "Supreme Claus",
-			rarity = "Clean",
-			chance = 2500,
-			passiveIncomePerSecond = 150,
+			rarity = "Prime",
+			chance = 20000,
+			passiveIncomePerSecond = 5750,
 			color = Color3.fromRGB(154, 246, 176),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -1550,7 +1431,7 @@ local Sets = {
 			RightLeg = "supreme_claus_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.08,
 			rollSpeedBonus = 0.04,
 		},
@@ -1558,15 +1439,15 @@ local Sets = {
 
 	tentacled_alien = {
 		id = "tentacled_alien",
-		displayName = "Tentacled Alien Set",
+		displayName = "Alien",
 		sourceModelName = "Tentacled Alien  ",
 		assetGroup = "ImportedRare",
 		assetModel = "tentacled_alien",
 		rollDisplay = {
-			displayName = "Tentacled Alien",
-			rarity = "Prime",
-			chance = 15000,
-			passiveIncomePerSecond = 350,
+			displayName = "Alien",
+			rarity = "Clean",
+			chance = 8192,
+			passiveIncomePerSecond = 2100,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1580,7 +1461,7 @@ local Sets = {
 			RightLeg = "tentacled_alien_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 26,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.14,
 			rollSpeedBonus = 0.07,
 		},
@@ -1588,15 +1469,15 @@ local Sets = {
 
 	the_gnomsky_brothers = {
 		id = "the_gnomsky_brothers",
-		displayName = "The Gnomsky Brothers Set",
+		displayName = "Gnomsky Brothers",
 		sourceModelName = "The Gnomsky Brothers",
 		assetGroup = "ImportedRare",
 		assetModel = "the_gnomsky_brothers",
 		rollDisplay = {
-			displayName = "The Gnomsky Brothers",
+			displayName = "Gnomsky Brothers",
 			rarity = "Prime",
-			chance = 15000,
-			passiveIncomePerSecond = 350,
+			chance = 30000,
+			passiveIncomePerSecond = 8250,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1610,7 +1491,7 @@ local Sets = {
 			RightLeg = "the_gnomsky_brothers_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 26,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.14,
 			rollSpeedBonus = 0.07,
 		},
@@ -1618,15 +1499,15 @@ local Sets = {
 
 	the_overseer = {
 		id = "the_overseer",
-		displayName = "The Overseer Set",
+		displayName = "Overseer",
 		sourceModelName = "The Overseer",
 		assetGroup = "ImportedRare",
 		assetModel = "the_overseer",
 		rollDisplay = {
-			displayName = "The Overseer",
+			displayName = "Overseer",
 			rarity = "Prime",
 			chance = 15000,
-			passiveIncomePerSecond = 350,
+			passiveIncomePerSecond = 4000,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1640,7 +1521,7 @@ local Sets = {
 			RightLeg = "the_overseer_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 26,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.14,
 			rollSpeedBonus = 0.07,
 		},
@@ -1648,15 +1529,15 @@ local Sets = {
 
 	the_rulk_custom_colour = {
 		id = "the_rulk_custom_colour",
-		displayName = "The Rulk - Custom Colour Set",
+		displayName = "The Rulk",
 		sourceModelName = "The Rulk - Custom Colour",
 		assetGroup = "ImportedLegendary",
 		assetModel = "the_rulk_custom_colour",
 		rollDisplay = {
-			displayName = "The Rulk - Custom Colour",
+			displayName = "The Rulk",
 			rarity = "Elite",
-			chance = 500000,
-			passiveIncomePerSecond = 2200,
+			chance = 300000,
+			passiveIncomePerSecond = 75000,
 			color = Color3.fromRGB(255, 214, 92),
 			fontFace = Font.fromId(12187375194),
 			fontWeight = Enum.FontWeight.Heavy,
@@ -1670,7 +1551,7 @@ local Sets = {
 			RightLeg = "the_rulk_custom_colour_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 110,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.4,
 			rollSpeedBonus = 0.18,
 		},
@@ -1678,15 +1559,15 @@ local Sets = {
 
 	ud_zal = {
 		id = "ud_zal",
-		displayName = "Ud'zal Set",
+		displayName = "Ud'zal",
 		sourceModelName = "Ud'zal",
 		assetGroup = "ImportedRare",
 		assetModel = "ud_zal",
 		rollDisplay = {
 			displayName = "Ud'zal",
 			rarity = "Prime",
-			chance = 15000,
-			passiveIncomePerSecond = 350,
+			chance = 36000,
+			passiveIncomePerSecond = 10500,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1700,7 +1581,7 @@ local Sets = {
 			RightLeg = "ud_zal_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 26,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.14,
 			rollSpeedBonus = 0.07,
 		},
@@ -1708,14 +1589,14 @@ local Sets = {
 
 	werewolf = {
 		id = "werewolf",
-		displayName = "Werewolf Set",
+		displayName = "Werewolf",
 		sourceModelName = "Werewolf",
 		assetGroup = "ImportedRare",
 		assetModel = "werewolf",
 		rollDisplay = {
 			displayName = "Werewolf",
-			rarity = "Prime",
-			chance = 15000,
+			rarity = "Clean",
+			chance = 1250,
 			passiveIncomePerSecond = 350,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187375422),
@@ -1730,7 +1611,7 @@ local Sets = {
 			RightLeg = "werewolf_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 26,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.14,
 			rollSpeedBonus = 0.07,
 		},
@@ -1738,15 +1619,15 @@ local Sets = {
 
 	werner_weenie = {
 		id = "werner_weenie",
-		displayName = "Werner Weenie Set",
+		displayName = "Werner Weenie",
 		sourceModelName = "Werner Weenie",
 		assetGroup = "ImportedUncommon",
 		assetModel = "werner_weenie",
 		rollDisplay = {
 			displayName = "Werner Weenie",
-			rarity = "Clean",
-			chance = 2500,
-			passiveIncomePerSecond = 150,
+			rarity = "Prime",
+			chance = 40000,
+			passiveIncomePerSecond = 12000,
 			color = Color3.fromRGB(154, 246, 176),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -1760,7 +1641,7 @@ local Sets = {
 			RightLeg = "werner_weenie_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.08,
 			rollSpeedBonus = 0.04,
 		},
@@ -1768,15 +1649,15 @@ local Sets = {
 
 	woman = {
 		id = "woman",
-		displayName = "Woman Set",
+		displayName = "Woman",
 		sourceModelName = "Woman",
 		assetGroup = "ImportedCommon",
 		assetModel = "woman",
 		rollDisplay = {
 			displayName = "Woman",
 			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			chance = 16,
+			passiveIncomePerSecond = 12,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1790,7 +1671,7 @@ local Sets = {
 			RightLeg = "woman_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},
@@ -1798,15 +1679,15 @@ local Sets = {
 
 	zombie = {
 		id = "zombie",
-		displayName = "Zombie Set",
+		displayName = "Zombie",
 		sourceModelName = "Zombie",
 		assetGroup = "ImportedCommon",
 		assetModel = "zombie",
 		rollDisplay = {
 			displayName = "Zombie",
-			rarity = "Basic",
-			chance = 750,
-			passiveIncomePerSecond = 60,
+			rarity = "Clean",
+			chance = 1800,
+			passiveIncomePerSecond = 475,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1820,7 +1701,7 @@ local Sets = {
 			RightLeg = "zombie_right_leg",
 		},
 		fullSetBonus = {
-			passiveIncomePerSecond = 6,
+			passiveIncomePerSecond = 0,
 			luckBonus = 0.05,
 			rollSpeedBonus = 0.025,
 		},

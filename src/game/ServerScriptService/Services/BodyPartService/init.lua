@@ -1,8 +1,10 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local Signal = require(ReplicatedStorage.Common.Signal)
 local BodyPartLoadout = require(ReplicatedStorage.Shared.Character.BodyPartLoadout)
 local BodyPartCollection = require(ReplicatedStorage.Shared.Character.BodyPartCollection)
+local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
 local BodyPartVisuals = require(ReplicatedStorage.Shared.Character.BodyPartVisuals)
 local BodyPartRuntimeConfig = require(ReplicatedStorage.Shared.Config.BodyParts.Runtime)
@@ -16,6 +18,9 @@ local GET_STATE_REMOTE_NAME = "GetSessionLoadout"
 local EQUIP_REMOTE_NAME = "EquipOwnedBodyPart"
 local UNEQUIP_REMOTE_NAME = "UnequipRegion"
 local CLEAR_REMOTE_NAME = "ClearLoadout"
+local TOGGLE_FAVORITE_REMOTE_NAME = "ToggleFavoriteOwnedBodyPart"
+local SELL_OWNED_REMOTE_NAME = "SellOwnedBodyPart"
+local SELL_ALL_REMOTE_NAME = "SellAllUnfavoritedBodyParts"
 local UPDATED_REMOTE_NAME = "LoadoutUpdated"
 
 local REQUIRED_R15_PARTS = {
@@ -42,10 +47,14 @@ local getStateRemote: RemoteFunction? = nil
 local equipRemote: RemoteFunction? = nil
 local unequipRemote: RemoteFunction? = nil
 local clearRemote: RemoteFunction? = nil
+local toggleFavoriteRemote: RemoteFunction? = nil
+local sellOwnedRemote: RemoteFunction? = nil
+local sellAllRemote: RemoteFunction? = nil
 local updatedRemote: RemoteEvent? = nil
 local characterAddedConnections: { [Player]: RBXScriptConnection } = {}
 
 local BodyPartService = {}
+BodyPartService.LoadoutChanged = Signal.new()
 
 export type EquipOptions = {
 	applyVisuals: boolean?,
@@ -57,6 +66,10 @@ local function response(ok: boolean, message: string, state: any?)
 		message = message,
 		state = state,
 	}
+end
+
+local function notifyLoadoutChanged(player: Player)
+	BodyPartService.LoadoutChanged:Fire(player)
 end
 
 local function ensureRemotesFolder(): Folder
@@ -215,6 +228,28 @@ local function buildEquippedPieceIdsByRegion(equippedState: BodyPartLoadout.Equi
 	return pieceIdsByRegion
 end
 
+local function findEquippedEntryForOwnedId(
+	equippedState: BodyPartLoadout.EquippedState,
+	ownedId: string
+): (string?, BodyPartLoadout.LoadoutEntry?)
+	for _, region in ipairs(BodyPartRegions.Order) do
+		local entry = equippedState[region]
+		if entry and entry.ownedId == ownedId then
+			return region, entry
+		end
+	end
+
+	return nil, nil
+end
+
+local function getSellValueForRecord(record: OwnedBodyParts.OwnedBodyPartRecord): number
+	local piece = BodyPartsCatalog.GetPiece(record.pieceId)
+	local passiveIncomePerSecond = tonumber(record.finalPassiveIncomePerSecond)
+		or tonumber(piece and piece.passiveIncomePerSecond)
+		or 0
+	return math.max(1, math.floor(passiveIncomePerSecond * 60))
+end
+
 function BodyPartService:GetComputedLoadoutBonuses(player: Player)
 	local equippedState = SessionStore.GetEquipped(player)
 	local ownedBodyParts = DataService:GetOwnedBodyParts(player)
@@ -328,6 +363,36 @@ local function restoreSessionState(player: Player, previousState: BodyPartLoadou
 	SessionStore.Restore(player, previousState)
 end
 
+local function rollbackMutationState(player: Player, previousState: BodyPartLoadout.EquippedState, applyVisuals: boolean)
+	if applyVisuals then
+		rollbackVisualState(player, previousState)
+	else
+		restoreSessionState(player, previousState)
+	end
+end
+
+local function persistSessionLoadout(player: Player, previousState: BodyPartLoadout.EquippedState, applyVisuals: boolean): (boolean, string?)
+	local ok, message = DataService:SetEquippedLoadout(player, SessionStore.GetEquipped(player))
+	if ok then
+		return true, nil
+	end
+
+	rollbackMutationState(player, previousState, applyVisuals)
+	return false, message or "Failed to save the equipped body part loadout."
+end
+
+local function getSanitizedPersistedLoadout(player: Player): (BodyPartLoadout.EquippedState, boolean, string?)
+	local persistedState = DataService:GetEquippedLoadout(player)
+	local sanitizedState = BodyPartLoadout.NormalizeEquippedState(persistedState, DataService:GetOwnedBodyParts(player))
+	local didChange = not BodyPartLoadout.AreEquippedStatesEqual(persistedState, sanitizedState)
+	if not didChange then
+		return sanitizedState, false, nil
+	end
+
+	local ok, message = DataService:SetEquippedLoadout(player, sanitizedState)
+	return sanitizedState, ok, message
+end
+
 function BodyPartService:EquipOwnedBodyPart(player: Player, ownedId: string, requestedScale: number?, options: EquipOptions?): (boolean, string)
 	if typeof(ownedId) ~= "string" or ownedId == "" then
 		return false, "ownedId is required."
@@ -369,7 +434,13 @@ function BodyPartService:EquipOwnedBodyPart(player: Player, ownedId: string, req
 		end
 	end
 
+	local persisted, persistMessage = persistSessionLoadout(player, previousState, shouldApplyVisuals)
+	if not persisted then
+		return false, persistMessage or "Failed to save the equipped body part loadout."
+	end
+
 	self:NotifyClient(player, string.format("Equipped %s at %.2fx.", piece.displayName, scale))
+	notifyLoadoutChanged(player)
 	return true, string.format("Equipped %s.", piece.displayName)
 end
 
@@ -392,7 +463,13 @@ function BodyPartService:UnequipRegion(player: Player, region: string): (boolean
 		return false, applyMessage or "Failed to remove the equipped body part."
 	end
 
+	local persisted, persistMessage = persistSessionLoadout(player, previousState, true)
+	if not persisted then
+		return false, persistMessage or "Failed to save the equipped body part loadout."
+	end
+
 	self:NotifyClient(player, string.format("Unequipped %s.", region))
+	notifyLoadoutChanged(player)
 	return true, string.format("Unequipped %s.", region)
 end
 
@@ -411,8 +488,135 @@ function BodyPartService:ClearLoadout(player: Player): (boolean, string)
 		return false, applyMessage or "Failed to clear the loadout."
 	end
 
+	local persisted, persistMessage = persistSessionLoadout(player, previousState, true)
+	if not persisted then
+		return false, persistMessage or "Failed to save the equipped body part loadout."
+	end
+
 	self:NotifyClient(player, "Cleared the equipped body part loadout.")
+	notifyLoadoutChanged(player)
 	return true, "Cleared the equipped body part loadout."
+end
+
+function BodyPartService:ToggleFavoriteOwnedBodyPart(player: Player, ownedId: string, requestedFavoriteState: boolean?): (boolean, string)
+	if typeof(ownedId) ~= "string" or ownedId == "" then
+		return false, "ownedId is required."
+	end
+
+	local ownedRecord = DataService:GetOwnedBodyParts(player)[ownedId]
+	if not ownedRecord then
+		return false, "You do not own that body part."
+	end
+
+	local nextFavoriteState = if typeof(requestedFavoriteState) == "boolean"
+		then requestedFavoriteState
+		else not (ownedRecord.isFavorite == true)
+	local updatedRecord, updateError = DataService:SetOwnedBodyPartFavorite(player, ownedId, nextFavoriteState)
+	if not updatedRecord then
+		return false, updateError or "Failed to update favorite state."
+	end
+
+	local piece = BodyPartsCatalog.GetPiece(updatedRecord.pieceId)
+	local pieceName = if piece then piece.displayName else "body part"
+	local message = if updatedRecord.isFavorite
+		then string.format("Favorited %s.", pieceName)
+		else string.format("Unfavorited %s.", pieceName)
+
+	self:NotifyClient(player, message)
+	return true, message
+end
+
+function BodyPartService:SellOwnedBodyPart(player: Player, ownedId: string): (boolean, string)
+	if typeof(ownedId) ~= "string" or ownedId == "" then
+		return false, "ownedId is required."
+	end
+
+	local ownedRecord = DataService:GetOwnedBodyParts(player)[ownedId]
+	if not ownedRecord then
+		return false, "You do not own that body part."
+	end
+
+	local piece = BodyPartsCatalog.GetPiece(ownedRecord.pieceId)
+	local pieceName = if piece then piece.displayName else "body part"
+	local previousLoadoutState = SessionStore.GetEquipped(player)
+	local equippedRegion = findEquippedEntryForOwnedId(previousLoadoutState, ownedId)
+	if equippedRegion then
+		SessionStore.ClearRegion(player, equippedRegion)
+
+		local success, applyMessage = self:ApplySessionLoadout(player)
+		if not success then
+			rollbackVisualState(player, previousLoadoutState)
+			return false, applyMessage or "Failed to unequip the sold body part."
+		end
+
+		local persisted, persistMessage = persistSessionLoadout(player, previousLoadoutState, true)
+		if not persisted then
+			return false, persistMessage or "Failed to save the equipped body part loadout."
+		end
+	end
+
+	local removedRecord, removeError = DataService:RemoveOwnedBodyPart(player, ownedId)
+	if not removedRecord then
+		return false, removeError or "Failed to remove the sold body part."
+	end
+
+	local payout = getSellValueForRecord(removedRecord)
+	DataService:AddMoney(player, payout)
+
+	local message = string.format("Sold %s for $%s.", pieceName, tostring(payout))
+	self:NotifyClient(player, message)
+	if equippedRegion then
+		notifyLoadoutChanged(player)
+	end
+	return true, message
+end
+
+function BodyPartService:SellAllUnfavoritedBodyParts(player: Player): (boolean, string)
+	local ownedBodyParts = DataService:GetOwnedBodyParts(player)
+	local equippedState = SessionStore.GetEquipped(player)
+	local equippedOwnedIds = {}
+
+	for _, region in ipairs(BodyPartRegions.Order) do
+		local entry = equippedState[region]
+		if entry and typeof(entry.ownedId) == "string" and entry.ownedId ~= "" then
+			equippedOwnedIds[entry.ownedId] = true
+		end
+	end
+
+	local ownedIdsToSell = {}
+	for ownedId, record in pairs(ownedBodyParts) do
+		if record.isFavorite ~= true and equippedOwnedIds[ownedId] ~= true then
+			table.insert(ownedIdsToSell, ownedId)
+		end
+	end
+
+	if #ownedIdsToSell == 0 then
+		local message = "No unfavorited unequipped body parts were available to sell."
+		self:NotifyClient(player, message)
+		return true, message
+	end
+
+	table.sort(ownedIdsToSell)
+
+	local soldCount = 0
+	local totalPayout = 0
+	for _, ownedId in ipairs(ownedIdsToSell) do
+		local removedRecord = DataService:RemoveOwnedBodyPart(player, ownedId)
+		if removedRecord then
+			soldCount += 1
+			totalPayout += getSellValueForRecord(removedRecord)
+		end
+	end
+
+	if soldCount <= 0 then
+		return false, "Failed to sell the selected body parts."
+	end
+
+	DataService:AddMoney(player, totalPayout)
+
+	local message = string.format("Sold %d body parts for $%s.", soldCount, tostring(totalPayout))
+	self:NotifyClient(player, message)
+	return true, message
 end
 
 local function handleGetState(player: Player)
@@ -444,11 +648,37 @@ local function handleClear(player: Player)
 	return response(ok, message, BodyPartService:GetClientState(player))
 end
 
+local function handleToggleFavorite(player: Player, payload: any)
+	if typeof(payload) ~= "table" then
+		return response(false, "Favorite payload must be a table.", BodyPartService:GetClientState(player))
+	end
+
+	local ok, message = BodyPartService:ToggleFavoriteOwnedBodyPart(player, payload.ownedId, payload.isFavorite)
+	return response(ok, message, BodyPartService:GetClientState(player))
+end
+
+local function handleSellOwned(player: Player, payload: any)
+	if typeof(payload) ~= "table" then
+		return response(false, "Sell payload must be a table.", BodyPartService:GetClientState(player))
+	end
+
+	local ok, message = BodyPartService:SellOwnedBodyPart(player, payload.ownedId)
+	return response(ok, message, BodyPartService:GetClientState(player))
+end
+
+local function handleSellAll(player: Player)
+	local ok, message = BodyPartService:SellAllUnfavoritedBodyParts(player)
+	return response(ok, message, BodyPartService:GetClientState(player))
+end
+
 function BodyPartService:OnStart()
 	getStateRemote = ensureRemoteFunction(getStateRemote, GET_STATE_REMOTE_NAME)
 	equipRemote = ensureRemoteFunction(equipRemote, EQUIP_REMOTE_NAME)
 	unequipRemote = ensureRemoteFunction(unequipRemote, UNEQUIP_REMOTE_NAME)
 	clearRemote = ensureRemoteFunction(clearRemote, CLEAR_REMOTE_NAME)
+	toggleFavoriteRemote = ensureRemoteFunction(toggleFavoriteRemote, TOGGLE_FAVORITE_REMOTE_NAME)
+	sellOwnedRemote = ensureRemoteFunction(sellOwnedRemote, SELL_OWNED_REMOTE_NAME)
+	sellAllRemote = ensureRemoteFunction(sellAllRemote, SELL_ALL_REMOTE_NAME)
 	updatedRemote = ensureUpdatedRemote()
 
 	getStateRemote.OnServerInvoke = function(player: Player)
@@ -463,10 +693,23 @@ function BodyPartService:OnStart()
 	clearRemote.OnServerInvoke = function(player: Player)
 		return handleClear(player)
 	end
+	toggleFavoriteRemote.OnServerInvoke = function(player: Player, payload: any)
+		return handleToggleFavorite(player, payload)
+	end
+	sellOwnedRemote.OnServerInvoke = function(player: Player, payload: any)
+		return handleSellOwned(player, payload)
+	end
+	sellAllRemote.OnServerInvoke = function(player: Player)
+		return handleSellAll(player)
+	end
 end
 
 function BodyPartService:OnPlayerAdded(player: Player)
-	SessionStore.LoadPlayer(player)
+	local restoredState, savedCleanedState, savedCleanedStateMessage = getSanitizedPersistedLoadout(player)
+	SessionStore.LoadPlayer(player, restoredState)
+	if savedCleanedState == false and savedCleanedStateMessage then
+		warn(string.format("[BodyPartService] Failed to clean persisted loadout for %s: %s", player.Name, savedCleanedStateMessage))
+	end
 
 	if characterAddedConnections[player] then
 		characterAddedConnections[player]:Disconnect()
@@ -487,6 +730,7 @@ function BodyPartService:OnPlayerAdded(player: Player)
 			end
 
 			self:NotifyClient(player, "Body part runtime is ready on the live rig.")
+			notifyLoadoutChanged(player)
 		end)
 	end)
 
@@ -497,6 +741,8 @@ function BodyPartService:OnPlayerAdded(player: Player)
 				local success, applyMessage = self:ApplySessionLoadout(player)
 				if not success and applyMessage then
 					self:NotifyClient(player, applyMessage)
+				else
+					notifyLoadoutChanged(player)
 				end
 			end
 		end)

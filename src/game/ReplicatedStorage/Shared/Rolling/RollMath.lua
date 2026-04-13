@@ -32,8 +32,21 @@ end
 
 function RollMath.IsBonusRoll(successfulRollCount: number, interval: number): boolean
 	local safeInterval = math.max(1, math.floor(tonumber(interval) or 1))
-	local nextRollNumber = math.max(0, math.floor(tonumber(successfulRollCount) or 0)) + 1
-	return nextRollNumber % safeInterval == 0
+	local cycleLength = safeInterval + 1
+	local safeSuccessfulRollCount = math.max(0, math.floor(tonumber(successfulRollCount) or 0))
+	return safeSuccessfulRollCount % cycleLength == safeInterval
+end
+
+function RollMath.GetBonusChargeProgress(successfulRollCount: number, interval: number): number
+	local safeInterval = math.max(1, math.floor(tonumber(interval) or 1))
+	local cycleLength = safeInterval + 1
+	local safeSuccessfulRollCount = math.max(0, math.floor(tonumber(successfulRollCount) or 0))
+	return safeSuccessfulRollCount % cycleLength
+end
+
+function RollMath.IsBonusReady(successfulRollCount: number, interval: number): boolean
+	local safeInterval = math.max(1, math.floor(tonumber(interval) or 1))
+	return RollMath.GetBonusChargeProgress(successfulRollCount, safeInterval) == safeInterval
 end
 
 function RollMath.GetEffectiveLuck(rawLuck: number, rarityEffectiveness: number): number

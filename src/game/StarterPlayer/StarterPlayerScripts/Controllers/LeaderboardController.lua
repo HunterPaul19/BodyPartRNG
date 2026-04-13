@@ -1,5 +1,8 @@
 local Players = game:GetService("Players")
 local StarterGui = game:GetService("StarterGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local TitleUtil = require(ReplicatedStorage.Shared.Titles.TitleUtil)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local THUMBNAIL_TYPE = Enum.ThumbnailType.HeadShot
@@ -8,6 +11,18 @@ local LEADERBOARD_OPEN_POSITION = UDim2.fromScale(0.5, 0.5)
 local LEADERBOARD_CLOSED_POSITION = UDim2.fromScale(1.5, 0.5)
 
 local LeaderboardController = {}
+
+local function getRichDisplayName(player: Player): string
+	return TitleUtil.BuildRichTextDisplayName(
+		player:GetAttribute("VIP") == true,
+		player:GetAttribute("EquippedTitleId"),
+		player.DisplayName
+	)
+end
+
+local function getRichTitlePrefix(player: Player): string
+	return TitleUtil.BuildRichTextPrefix(player:GetAttribute("VIP") == true, player:GetAttribute("EquippedTitleId"))
+end
 
 local function setCoreWithRetry(key: string, value: any): boolean
 	for _ = 1, 8 do
@@ -83,6 +98,20 @@ function LeaderboardController:_getRollCount(player: Player): number
 	return 0
 end
 
+function LeaderboardController:_getMoneyText(player: Player): string
+	local stats = player:FindFirstChild("leaderstats")
+	if not stats then
+		return "0"
+	end
+
+	local money = stats:FindFirstChild("money")
+	if money and money:IsA("StringValue") then
+		return money.Value
+	end
+
+	return "0"
+end
+
 function LeaderboardController:_getSortedPlayers(): { Player }
 	local entries = {}
 
@@ -124,12 +153,18 @@ function LeaderboardController:_configureRow(row: Frame, player: Player, order: 
 
 	local nameLabel = row:FindFirstChild("PlayerName")
 	if nameLabel and nameLabel:IsA("TextLabel") then
-		nameLabel.Text = player.Name
+		nameLabel.RichText = true
+		nameLabel.Text = getRichDisplayName(player)
 	end
 
 	local rollsLabel = row:FindFirstChild("Rolls")
 	if rollsLabel and rollsLabel:IsA("TextLabel") then
 		rollsLabel.Text = tostring(self:_getRollCount(player))
+	end
+
+	local moneyLabel = row:FindFirstChild("Money")
+	if moneyLabel and moneyLabel:IsA("TextLabel") then
+		moneyLabel.Text = self:_getMoneyText(player)
 	end
 
 	local toggle = row:FindFirstChild("Toggle")
@@ -191,6 +226,12 @@ function LeaderboardController:_watchRollsValue(rollsValue: IntValue, playerConn
 	end))
 end
 
+function LeaderboardController:_watchMoneyValue(moneyValue: StringValue, playerConnections: { RBXScriptConnection })
+	table.insert(playerConnections, moneyValue:GetPropertyChangedSignal("Value"):Connect(function()
+		self:_scheduleRefresh()
+	end))
+end
+
 function LeaderboardController:_watchLeaderstats(player: Player, playerConnections: { RBXScriptConnection })
 	local function bindLeaderstats(stats: Instance)
 		if not stats:IsA("Folder") or stats.Name ~= "leaderstats" then
@@ -202,9 +243,17 @@ function LeaderboardController:_watchLeaderstats(player: Player, playerConnectio
 			self:_watchRollsValue(rolls, playerConnections)
 		end
 
+		local money = stats:FindFirstChild("money")
+		if money and money:IsA("StringValue") then
+			self:_watchMoneyValue(money, playerConnections)
+		end
+
 		table.insert(playerConnections, stats.ChildAdded:Connect(function(child)
 			if child.Name == "Rolls" and child:IsA("IntValue") then
 				self:_watchRollsValue(child, playerConnections)
+				self:_scheduleRefresh()
+			elseif child.Name == "money" and child:IsA("StringValue") then
+				self:_watchMoneyValue(child, playerConnections)
 				self:_scheduleRefresh()
 			end
 		end))
@@ -230,6 +279,24 @@ function LeaderboardController:_trackPlayer(player: Player)
 	local playerConnections = {}
 	self._playerConnections[player] = playerConnections
 	self:_watchLeaderstats(player, playerConnections)
+	table.insert(playerConnections, player:GetAttributeChangedSignal("VIP"):Connect(function()
+		self:_scheduleRefresh()
+		if self._selectedPlayer == player then
+			self:_syncSelectedPlayerInfo()
+		end
+	end))
+	table.insert(playerConnections, player:GetAttributeChangedSignal("EquippedTitleId"):Connect(function()
+		self:_scheduleRefresh()
+		if self._selectedPlayer == player then
+			self:_syncSelectedPlayerInfo()
+		end
+	end))
+	table.insert(playerConnections, player:GetPropertyChangedSignal("DisplayName"):Connect(function()
+		self:_scheduleRefresh()
+		if self._selectedPlayer == player then
+			self:_syncSelectedPlayerInfo()
+		end
+	end))
 	self:_scheduleRefresh()
 end
 
@@ -331,9 +398,18 @@ function LeaderboardController:_syncSelectedPlayerInfo()
 	end
 
 	playerInfo.Visible = true
-	ui.displayNameLabel.Text = selectedPlayer.DisplayName
+	ui.displayNameLabel.RichText = true
+	ui.displayNameLabel.Text = getRichDisplayName(selectedPlayer)
 	ui.usernameLabel.Text = "@" .. selectedPlayer.Name
 	ui.rollInfoContext.Text = self:_getSelectedRollCount()
+	if ui.titleInfoTitle and ui.titleInfoTitle:IsA("TextLabel") then
+		ui.titleInfoTitle.Text = "Title"
+	end
+	if ui.titleInfoContext and ui.titleInfoContext:IsA("TextLabel") then
+		local richPrefix = getRichTitlePrefix(selectedPlayer)
+		ui.titleInfoContext.RichText = true
+		ui.titleInfoContext.Text = if richPrefix ~= "" then richPrefix else "No title equipped"
+	end
 	self:_syncActionButtons()
 end
 
@@ -406,6 +482,8 @@ function LeaderboardController:_cacheUi(playerGui: PlayerGui)
 		displayNameLabel = playerInfo:WaitForChild("DisplayName"),
 		usernameLabel = playerInfo:WaitForChild("Username"),
 		rollInfoContext = playerInfo:WaitForChild("RollInfo"):WaitForChild("Context"),
+		titleInfoTitle = playerInfo:WaitForChild("TitleInfo"):WaitForChild("Title"),
+		titleInfoContext = playerInfo:WaitForChild("TitleInfo"):WaitForChild("Context"),
 		friendButton = playerInfo:WaitForChild("AddFriendButton"),
 		blockButton = playerInfo:WaitForChild("BlockButton"),
 		closeButton = playerInfo:WaitForChild("CloseButton"),

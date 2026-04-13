@@ -48,9 +48,13 @@ local BUTTON_NAME_TO_REGION = {
 	RightLegs = "RightLeg",
 }
 
-type OwnedBodyPartRecord = OwnedBodyParts.OwnedBodyPartRecord
 type OwnedBodyPartsState = OwnedBodyParts.OwnedBodyPartsState
 type SetSummary = BodyPartCollection.SetSummary
+type TextLabelStyle = {
+	fontFace: Font,
+	textColor3: Color3,
+	textTransparency: number,
+}
 
 local IndexController = {}
 
@@ -187,8 +191,8 @@ function IndexController:_ensureState()
 	self._selectedRegion = nil :: string?
 	self._orderedSummaries = {} :: { SetSummary }
 	self._summariesBySetId = {} :: { [string]: SetSummary }
-	self._ownedRecordByPieceId = {} :: { [string]: OwnedBodyPartRecord }
 	self._catalogOrderBySetId = {} :: { [string]: number }
+	self._defaultPieceNameLabelStyle = nil :: TextLabelStyle?
 	self._completedSetCount = 0
 end
 
@@ -214,23 +218,6 @@ function IndexController:_getRarityTemplatesFolder(): Folder?
 	end
 
 	return nil
-end
-
-function IndexController:_getOwnedRecordByPieceId(): { [string]: OwnedBodyPartRecord }
-	local ownedRecordByPieceId = {}
-
-	for _, record in pairs(getBodyPartsState().ownedById) do
-		if typeof(record) ~= "table" or typeof(record.pieceId) ~= "string" then
-			continue
-		end
-
-		local current = ownedRecordByPieceId[record.pieceId]
-		if current == nil or (tonumber(record.serialNumber) or math.huge) < (tonumber(current.serialNumber) or math.huge) then
-			ownedRecordByPieceId[record.pieceId] = record
-		end
-	end
-
-	return ownedRecordByPieceId
 end
 
 function IndexController:_rebuildDerivedState()
@@ -271,8 +258,6 @@ function IndexController:_rebuildDerivedState()
 			self._completedSetCount += 1
 		end
 	end
-
-	self._ownedRecordByPieceId = self:_getOwnedRecordByPieceId()
 end
 
 function IndexController:_syncSelectionState()
@@ -432,45 +417,81 @@ function IndexController:_syncSummaryLabel()
 	summaryLabel.Text = string.format("%d/%d Bundles Completed", self._completedSetCount, #self._orderedSummaries)
 end
 
+function IndexController:_restoreDefaultPieceNameLabelStyle()
+	local pieceNameLabel = self._ui.pieceNameLabel
+	local defaultStyle = self._defaultPieceNameLabelStyle
+	if not (pieceNameLabel and defaultStyle) then
+		return
+	end
+
+	pieceNameLabel.FontFace = defaultStyle.fontFace
+	pieceNameLabel.TextColor3 = defaultStyle.textColor3
+	pieceNameLabel.TextTransparency = defaultStyle.textTransparency
+end
+
+function IndexController:_applyPieceNameLabelStyle(summary: SetSummary?, selectedPieceId: string?)
+	local pieceNameLabel = self._ui.pieceNameLabel
+	if not pieceNameLabel then
+		return
+	end
+
+	if not (summary and typeof(selectedPieceId) == "string" and selectedPieceId ~= "") then
+		self:_restoreDefaultPieceNameLabelStyle()
+		return
+	end
+
+	local rollDisplay = summary.setConfig and summary.setConfig.rollDisplay or nil
+	if not rollDisplay then
+		self:_restoreDefaultPieceNameLabelStyle()
+		return
+	end
+
+	if typeof(rollDisplay.fontFace) ~= "Font" or typeof(rollDisplay.fontWeight) ~= "EnumItem" or typeof(rollDisplay.color) ~= "Color3" then
+		self:_restoreDefaultPieceNameLabelStyle()
+		return
+	end
+
+	pieceNameLabel.FontFace = getFontWithWeight(rollDisplay.fontFace, rollDisplay.fontWeight)
+	pieceNameLabel.TextColor3 = rollDisplay.color
+	pieceNameLabel.TextTransparency = 0
+end
+
 function IndexController:_syncPieceButtons()
 	local selectedSummary = self:_getSelectedSummary()
+	local hasSelection = selectedSummary ~= nil
 
 	for region, button in pairs(self._ui.regionButtons) do
+		local regionIndex = table.find(BodyPartRegions.Order, region) or math.huge
 		local usageLabel = button:FindFirstChild("Usage")
 		if usageLabel and usageLabel:IsA("TextLabel") then
 			usageLabel.Text = REGION_LABELS[region] or region
 		end
 
 		local icon = button:FindFirstChild("Icon")
-		local isDiscovered = selectedSummary ~= nil and selectedSummary.discoveredPieceIdsByRegion[region] ~= nil
-		local isSelected = selectedSummary ~= nil and self._selectedRegion == region
-		local hasSelection = selectedSummary ~= nil
+		local isDiscovered = hasSelection and selectedSummary.discoveredPieceIdsByRegion[region] ~= nil
+		local isSelected = hasSelection and self._selectedRegion == region
 		local outlineTransparency = INACTIVE_OUTLINE_TRANSPARENCY
 		local outlineColor = DEFAULT_OUTLINE_COLOR
 
-		if not hasSelection then
+		button.LayoutOrder = regionIndex
+
+		if not (hasSelection and isDiscovered) then
+			button.Visible = false
 			button.Active = false
-			if usageLabel and usageLabel:IsA("TextLabel") then
-				usageLabel.TextTransparency = 0.6
-			end
-			if icon and icon:IsA("ImageLabel") then
-				icon.ImageTransparency = 0.7
-			end
 			setOutlineColor(button, DEFAULT_OUTLINE_COLOR, 0.7)
 			continue
 		end
 
+		button.Visible = true
 		button.Active = true
 		if usageLabel and usageLabel:IsA("TextLabel") then
-			usageLabel.TextTransparency = if isDiscovered then 0 else 0.45
+			usageLabel.TextTransparency = 0
 		end
 		if icon and icon:IsA("ImageLabel") then
-			icon.ImageTransparency = if isDiscovered then 0.2 else 0.6
+			icon.ImageTransparency = 0.2
 		end
 
-		if isDiscovered then
-			outlineTransparency = 0.18
-		end
+		outlineTransparency = 0.18
 		if isSelected then
 			outlineColor = SELECTED_COLOR
 			outlineTransparency = 0
@@ -504,10 +525,6 @@ function IndexController:_renderViewportForPiece(pieceId: string?)
 	self:_clearViewport()
 
 	if typeof(pieceId) ~= "string" or pieceId == "" then
-		return
-	end
-
-	if self._ownedRecordByPieceId[pieceId] == nil then
 		return
 	end
 
@@ -559,6 +576,7 @@ function IndexController:_syncDetailPanel()
 		if pieceNameLabel then
 			pieceNameLabel.Text = "Select a Piece"
 		end
+		self:_restoreDefaultPieceNameLabelStyle()
 		self:_clearViewport()
 		return
 	end
@@ -579,6 +597,7 @@ function IndexController:_syncDetailPanel()
 		if pieceNameLabel then
 			pieceNameLabel.Text = "No Piece Discovered"
 		end
+		self:_restoreDefaultPieceNameLabelStyle()
 		self:_clearViewport()
 		return
 	end
@@ -595,7 +614,9 @@ function IndexController:_syncDetailPanel()
 		end
 	end
 
-	if discoveredPieceId and self._ownedRecordByPieceId[discoveredPieceId] ~= nil then
+	self:_applyPieceNameLabelStyle(selectedSummary, discoveredPieceId)
+
+	if discoveredPieceId then
 		self:_renderViewportForPiece(discoveredPieceId)
 	else
 		self:_clearViewport()
@@ -681,7 +702,9 @@ function IndexController:_cacheUi(playerGui: PlayerGui)
 		error("Index row templates are missing.")
 	end
 
-	local selectorButtonsContainer = selectorPanel:FindFirstChild("Rarities") or selectorPanel
+	local selectorButtonsContainer = selectorPanel:FindFirstChild("RegionButtons")
+		or selectorPanel:FindFirstChild("Rarities")
+		or selectorPanel
 	local regionButtons = {}
 	for _, child in ipairs(selectorButtonsContainer:GetChildren()) do
 		if child:IsA("GuiButton") then
@@ -742,6 +765,14 @@ function IndexController:_cacheUi(playerGui: PlayerGui)
 		buyBundleButton = if buyBundleButton and buyBundleButton:IsA("GuiButton") then buyBundleButton else nil,
 	}
 
+	if self._ui.pieceNameLabel then
+		self._defaultPieceNameLabelStyle = {
+			fontFace = self._ui.pieceNameLabel.FontFace,
+			textColor3 = self._ui.pieceNameLabel.TextColor3,
+			textTransparency = self._ui.pieceNameLabel.TextTransparency,
+		}
+	end
+
 	self._setTemplate.Visible = false
 	self._lockedTemplate.Visible = false
 	self._scrollingFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
@@ -762,7 +793,12 @@ end
 function IndexController:_bindRegionButtons()
 	for region, button in pairs(self._ui.regionButtons) do
 		UIController:CreateButton(button, function()
-			if self._selectedSetId == nil then
+			local selectedSummary = self:_getSelectedSummary()
+			if self._selectedSetId == nil or selectedSummary == nil then
+				return
+			end
+
+			if selectedSummary.discoveredPieceIdsByRegion[region] == nil then
 				return
 			end
 

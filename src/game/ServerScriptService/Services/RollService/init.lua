@@ -20,6 +20,8 @@ local SELECT_ROLL_TYPE_REMOTE_NAME = "SelectRollType"
 local SELECT_ROLL_REGION_REMOTE_NAME = "SelectRollRegion"
 local PERFORM_ROLL_REMOTE_NAME = "PerformRoll"
 local TOGGLE_QUICK_ROLL_REMOTE_NAME = "ToggleQuickRoll"
+local TOGGLE_AUTO_SELL_RARITY_REMOTE_NAME = "ToggleAutoSellRarity"
+local FINALIZE_AUTO_SELL_ROLL_REMOTE_NAME = "FinalizeAutoSellRoll"
 local PROMPT_QUICK_ROLL_PURCHASE_REMOTE_NAME = "PromptQuickRollPurchase"
 local UPDATED_REMOTE_NAME = "RollingUpdated"
 local PREVIEW_SEQUENCE_LENGTH = 10
@@ -31,9 +33,13 @@ local selectRollTypeRemote: RemoteFunction? = nil
 local selectRollRegionRemote: RemoteFunction? = nil
 local performRollRemote: RemoteFunction? = nil
 local toggleQuickRollRemote: RemoteFunction? = nil
+local toggleAutoSellRarityRemote: RemoteFunction? = nil
+local finalizeAutoSellRollRemote: RemoteFunction? = nil
 local promptQuickRollPurchaseRemote: RemoteFunction? = nil
 local updatedRemote: RemoteEvent? = nil
 local rollLocks: { [Player]: boolean } = {}
+local pendingAutoSellByPlayer: { [Player]: { [string]: { displayRarity: string, ownedId: string } } } = {}
+local loadoutChangedConnection = nil
 
 local RollService = {}
 
@@ -190,10 +196,51 @@ local function buildQuickRollState(player: Player)
 	}
 end
 
+local function buildAutoSellState(player: Player)
+	return DataService:GetAutoSellRarities(player)
+end
+
+local function getPendingAutoSellState(player: Player): { [string]: { displayRarity: string, ownedId: string } }
+	local pendingState = pendingAutoSellByPlayer[player]
+	if pendingState then
+		return pendingState
+	end
+
+	pendingState = {}
+	pendingAutoSellByPlayer[player] = pendingState
+	return pendingState
+end
+
+local function clearPendingAutoSell(player: Player, ownedId: string)
+	local pendingState = pendingAutoSellByPlayer[player]
+	if not pendingState then
+		return
+	end
+
+	pendingState[ownedId] = nil
+	if next(pendingState) == nil then
+		pendingAutoSellByPlayer[player] = nil
+	end
+end
+
+local function isOwnedIdEquipped(player: Player, ownedId: string): boolean
+	local equippedState = BodyPartService:GetSessionLoadout(player)
+
+	for _, entry in pairs(equippedState) do
+		if typeof(entry) == "table" and entry.ownedId == ownedId then
+			return true
+		end
+	end
+
+	return false
+end
+
 local function computeLuckState(player: Player, rollTypeConfig, successfulRollCount: number)
 	local bonuses = BodyPartService:GetComputedLoadoutBonuses(player)
 	local equippedLuckBonus = math.max(0, tonumber(bonuses.luckBonus) or 0)
+	local rollsSinceBonusRoll = RollMath.GetBonusChargeProgress(successfulRollCount, RollingConfig.BonusInterval)
 	local useBonusRoll = RollMath.IsBonusRoll(successfulRollCount, RollingConfig.BonusInterval)
+	local luckBoostReady = RollMath.IsBonusReady(successfulRollCount, RollingConfig.BonusInterval)
 	local isVipOwned = DataService:GetVipOwned(player)
 	local machineLuck = math.max(0.05, tonumber(rollTypeConfig.luckMultiplier) or 1)
 	local bonusLuck = if useBonusRoll then machineLuck * RollingConfig.BonusMultiplier else machineLuck
@@ -208,10 +255,11 @@ local function computeLuckState(player: Player, rollTypeConfig, successfulRollCo
 		equippedLuckMultiplier = equippedLuckMultiplier,
 		rawLuck = rawLuck,
 		useBonusRoll = useBonusRoll,
+		luckBoostReady = luckBoostReady,
 		isVipOwned = isVipOwned,
 		successfulRollCount = successfulRollCount,
 		nextRollNumber = successfulRollCount + 1,
-		rollsSinceBonusRoll = successfulRollCount % RollingConfig.BonusInterval,
+		rollsSinceBonusRoll = rollsSinceBonusRoll,
 	}, bonuses
 end
 
@@ -461,6 +509,7 @@ function RollService:GetRollingState(player: Player, message: string?)
 		successfulRollCount = successfulRollCount,
 		rollsSinceLuckyRoll = luckState.rollsSinceBonusRoll,
 		luckyRollGoal = RollingConfig.BonusInterval,
+		luckBoostReady = luckState.luckBoostReady,
 		willUsePityBoost = luckState.useBonusRoll,
 		willUseBonusRoll = luckState.useBonusRoll,
 		baseTotalLuck = baseTotalLuck,
@@ -476,6 +525,7 @@ function RollService:GetRollingState(player: Player, message: string?)
 		vipMultiplier = RollingConfig.VipMultiplier,
 		nextRollNumber = luckState.nextRollNumber,
 		quickRoll = buildQuickRollState(player),
+		autoSellRarities = buildAutoSellState(player),
 		message = message,
 	}
 end
@@ -520,6 +570,54 @@ function RollService:ToggleQuickRoll(player: Player, enabled: boolean): (boolean
 	end
 
 	return true, if enabled then "Quick Roll enabled." else "Quick Roll disabled."
+end
+
+function RollService:ToggleAutoSellRarity(player: Player, displayRarity: any, enabled: boolean): (boolean, string)
+	local normalizedRarity = RollingConfig.ResolveDisplayRarity(displayRarity)
+	if not normalizedRarity then
+		return false, "That auto-sell rarity does not exist."
+	end
+
+	local ok, message = DataService:SetAutoSellRarityEnabled(player, normalizedRarity, enabled == true)
+	if not ok then
+		return false, message or "Failed to update auto-sell."
+	end
+
+	return true, message or string.format(
+		"%s auto-sell %s.",
+		normalizedRarity,
+		if enabled == true then "enabled" else "disabled"
+	)
+end
+
+function RollService:FinalizeAutoSellRoll(player: Player, payload: any): (boolean, string)
+	if typeof(payload) ~= "table" then
+		return false, "Finalize auto-sell payload must be a table."
+	end
+
+	local ownedId = payload.ownedId
+	if typeof(ownedId) ~= "string" or ownedId == "" then
+		return false, "ownedId is required."
+	end
+
+	local pendingState = pendingAutoSellByPlayer[player]
+	local pendingEntry = pendingState and pendingState[ownedId]
+	if not pendingEntry then
+		return false, "That roll is no longer pending auto-sell."
+	end
+
+	clearPendingAutoSell(player, ownedId)
+
+	if payload.keep == true or isOwnedIdEquipped(player, ownedId) then
+		return true, string.format("Kept %s roll result.", pendingEntry.displayRarity)
+	end
+
+	local sold, sellMessage = BodyPartService:SellOwnedBodyPart(player, ownedId)
+	if not sold then
+		return false, sellMessage or "Failed to auto-sell the roll result."
+	end
+
+	return true, sellMessage or string.format("Auto-sold %s roll result.", pendingEntry.displayRarity)
 end
 
 function RollService:PromptQuickRollPurchase(player: Player): (boolean, string)
@@ -592,8 +690,7 @@ function RollService:PerformRoll(player: Player): (boolean, string, any?)
 		return false, previewError or "Failed to build the roll preview sequence.", nil
 	end
 
-	local remainingMoney = currentMoney - selectedRollType.moneyCost
-	DataService:Set(player, "money", remainingMoney)
+	local remainingMoney = DataService:AdjustMoney(player, -selectedRollType.moneyCost)
 
 	local ownedRecord, grantError = DataService:AddOwnedBodyPart(player, {
 		pieceId = finalPiece.id,
@@ -611,17 +708,28 @@ function RollService:PerformRoll(player: Player): (boolean, string, any?)
 		finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
 	})
 	if not ownedRecord then
-		DataService:Set(player, "money", currentMoney)
+		DataService:AddMoney(player, selectedRollType.moneyCost)
 		rollLocks[player] = nil
 		return false, grantError or "Failed to save the rolled body part.", nil
 	end
 
 	local updatedSuccessfulRollCount = DataService:IncrementSuccessfulRollCount(player)
 	local finalResult = previewSequence[#previewSequence]
+	local autoSellRarity = RollingConfig.NormalizeDisplayRarity(finalSet.setConfig.rollDisplay.rarity)
+	local pendingAutoSell = DataService:IsAutoSellEnabledForRarity(player, autoSellRarity)
+	if pendingAutoSell then
+		getPendingAutoSellState(player)[ownedRecord.ownedId] = {
+			displayRarity = autoSellRarity,
+			ownedId = ownedRecord.ownedId,
+		}
+	end
 	local rollResult = {
 		previewSequence = previewSequence,
 		finalResult = finalResult,
 		ownedRecord = ownedRecord,
+		ownedId = ownedRecord.ownedId,
+		pendingAutoSell = pendingAutoSell,
+		autoSellRarity = if pendingAutoSell then autoSellRarity else nil,
 		rollTypeId = selectedRollType.id,
 		rollRegion = selectedRollRegion,
 		moneySpent = selectedRollType.moneyCost,
@@ -637,8 +745,9 @@ function RollService:PerformRoll(player: Player): (boolean, string, any?)
 		usedPityBoost = luckState.useBonusRoll,
 		usedBonusRoll = luckState.useBonusRoll,
 		successfulRollCount = updatedSuccessfulRollCount,
-		rollsSinceLuckyRoll = updatedSuccessfulRollCount % RollingConfig.BonusInterval,
+		rollsSinceLuckyRoll = RollMath.GetBonusChargeProgress(updatedSuccessfulRollCount, RollingConfig.BonusInterval),
 		luckyRollGoal = RollingConfig.BonusInterval,
+		luckBoostReady = RollMath.IsBonusReady(updatedSuccessfulRollCount, RollingConfig.BonusInterval),
 		nextRollWillUseBonus = RollMath.IsBonusRoll(updatedSuccessfulRollCount, RollingConfig.BonusInterval),
 		setResult = {
 			setId = finalSet.setId,
@@ -688,6 +797,20 @@ local function handleToggleQuickRoll(player: Player, payload: any)
 	return response(ok, message, RollService:GetRollingState(player))
 end
 
+local function handleToggleAutoSellRarity(player: Player, payload: any)
+	if typeof(payload) ~= "table" then
+		return response(false, "Auto-sell payload must be a table.", RollService:GetRollingState(player))
+	end
+
+	local ok, message = RollService:ToggleAutoSellRarity(player, payload.rarity, payload.enabled == true)
+	return response(ok, message, RollService:GetRollingState(player))
+end
+
+local function handleFinalizeAutoSellRoll(player: Player, payload: any)
+	local ok, message = RollService:FinalizeAutoSellRoll(player, payload)
+	return response(ok, message, RollService:GetRollingState(player))
+end
+
 local function handlePromptQuickRollPurchase(player: Player)
 	local ok, message = RollService:PromptQuickRollPurchase(player)
 	return response(ok, message, RollService:GetRollingState(player))
@@ -704,6 +827,8 @@ function RollService:OnStart()
 	selectRollRegionRemote = ensureRemoteFunction(selectRollRegionRemote, SELECT_ROLL_REGION_REMOTE_NAME)
 	performRollRemote = ensureRemoteFunction(performRollRemote, PERFORM_ROLL_REMOTE_NAME)
 	toggleQuickRollRemote = ensureRemoteFunction(toggleQuickRollRemote, TOGGLE_QUICK_ROLL_REMOTE_NAME)
+	toggleAutoSellRarityRemote = ensureRemoteFunction(toggleAutoSellRarityRemote, TOGGLE_AUTO_SELL_RARITY_REMOTE_NAME)
+	finalizeAutoSellRollRemote = ensureRemoteFunction(finalizeAutoSellRollRemote, FINALIZE_AUTO_SELL_ROLL_REMOTE_NAME)
 	promptQuickRollPurchaseRemote = ensureRemoteFunction(promptQuickRollPurchaseRemote, PROMPT_QUICK_ROLL_PURCHASE_REMOTE_NAME)
 	updatedRemote = ensureUpdatedRemote()
 
@@ -751,6 +876,28 @@ function RollService:OnStart()
 		warn(string.format("[RollService] ToggleQuickRoll failed for %s: %s", player.Name, tostring(result)))
 		return response(false, "Failed to update Quick Roll.", self:GetRollingState(player))
 	end
+	toggleAutoSellRarityRemote.OnServerInvoke = function(player: Player, payload: any)
+		local ok, result = pcall(function()
+			return handleToggleAutoSellRarity(player, payload)
+		end)
+		if ok then
+			return result
+		end
+
+		warn(string.format("[RollService] ToggleAutoSellRarity failed for %s: %s", player.Name, tostring(result)))
+		return response(false, "Failed to update auto-sell.", self:GetRollingState(player))
+	end
+	finalizeAutoSellRollRemote.OnServerInvoke = function(player: Player, payload: any)
+		local ok, result = pcall(function()
+			return handleFinalizeAutoSellRoll(player, payload)
+		end)
+		if ok then
+			return result
+		end
+
+		warn(string.format("[RollService] FinalizeAutoSellRoll failed for %s: %s", player.Name, tostring(result)))
+		return response(false, "Failed to finalize auto-sell.", self:GetRollingState(player))
+	end
 	promptQuickRollPurchaseRemote.OnServerInvoke = function(player: Player)
 		local ok, result = pcall(function()
 			return handlePromptQuickRollPurchase(player)
@@ -786,10 +933,27 @@ function RollService:OnStart()
 			self:NotifyClient(player)
 		end
 	end)
+
+	if BodyPartService.LoadoutChanged and not loadoutChangedConnection then
+		loadoutChangedConnection = BodyPartService.LoadoutChanged:Connect(function(player: Player)
+			self:NotifyClient(player)
+		end)
+	end
 end
 
 function RollService:OnPlayerRemoving(player: Player)
 	rollLocks[player] = nil
+
+	local pendingState = pendingAutoSellByPlayer[player]
+	if pendingState then
+		for ownedId in pairs(pendingState) do
+			if not isOwnedIdEquipped(player, ownedId) then
+				BodyPartService:SellOwnedBodyPart(player, ownedId)
+			end
+		end
+	end
+
+	pendingAutoSellByPlayer[player] = nil
 end
 
 return RollService

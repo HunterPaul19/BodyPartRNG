@@ -18,6 +18,10 @@ local BODY_PARTS_DATA_KEY = "bodyParts"
 local BODY_PARTS_REMOTES_FOLDER_NAME = "BodyParts"
 local GET_STATE_REMOTE_NAME = "GetSessionLoadout"
 local EQUIP_REMOTE_NAME = "EquipOwnedBodyPart"
+local UNEQUIP_REMOTE_NAME = "UnequipRegion"
+local TOGGLE_FAVORITE_REMOTE_NAME = "ToggleFavoriteOwnedBodyPart"
+local SELL_OWNED_REMOTE_NAME = "SellOwnedBodyPart"
+local SELL_ALL_REMOTE_NAME = "SellAllUnfavoritedBodyParts"
 local UPDATED_REMOTE_NAME = "LoadoutUpdated"
 local ITEM_COUNT_COLOR = Color3.fromRGB(205, 200, 0)
 local MUTATION_COLOR = Color3.fromRGB(210, 201, 0)
@@ -29,6 +33,7 @@ local INVENTORY_DEFAULT_ANCHOR_X = 0.4
 local INVENTORY_PREVIEW_ANCHOR_X = 0.5
 local INVENTORY_ANCHOR_Y = 0.5
 local INVENTORY_ANCHOR_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local SLOT_OVERLAY_Z_INDEX = 10
 
 local FILTER_BUTTON_TO_REGION = {
 	Heads = "Head",
@@ -69,6 +74,7 @@ type OwnedBodyPartRecord = {
 	finalPassiveIncomePerSecond: number?,
 	sizeMultiplier: number?,
 	serialNumber: number?,
+	isFavorite: boolean?,
 }
 
 type BodyPartClientState = {
@@ -97,6 +103,15 @@ type InventoryRecordView = {
 	setConfig: any,
 	bundleModel: Model?,
 	searchText: string,
+}
+
+type SlotPlaceholderState = {
+	imageTransparency: number,
+	children: {
+		[string]: {
+			visible: boolean,
+		},
+	},
 }
 
 local InventoryController = {}
@@ -167,6 +182,18 @@ local function getRecordPassiveIncomePerSecond(record: OwnedBodyPartRecord?, pie
 	return tonumber(record and record.finalPassiveIncomePerSecond) or tonumber(piece and piece.passiveIncomePerSecond) or 0
 end
 
+local function setGuiTreeZIndex(root: Instance, zIndex: number)
+	if root:IsA("GuiObject") then
+		root.ZIndex = zIndex
+	end
+
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("GuiObject") then
+			descendant.ZIndex = zIndex
+		end
+	end
+end
+
 function InventoryController:_ensureState()
 	if self._started then
 		return
@@ -183,8 +210,14 @@ function InventoryController:_ensureState()
 	self._selectedOwnedId = nil :: string?
 	self._previewState = nil :: PreviewState?
 	self._searchText = ""
-	self._rowsByOwnedId = {}
+	self._rowFramesByOwnedId = {}
+	self._rowButtonsByOwnedId = {}
+	self._equippedOwnedIdByRegion = {}
+	self._slotPlaceholderDefaults = {}
 	self._inventoryAnchorTween = nil
+	self._cachedCharacterPreviewModel = nil :: Model?
+	self._isResolvingCharacterPreviewModel = false
+	self._characterPreviewGeneration = 0
 end
 
 function InventoryController:_cancelInventoryAnchorTween()
@@ -222,14 +255,14 @@ function InventoryController:_syncInventoryAnchor(hasPreview: boolean)
 end
 
 function InventoryController:_getOwnedLookup(): { [string]: OwnedBodyPartRecord }
+	local latestOwnedBodyParts = self._loadoutState and self._loadoutState.ownedBodyParts
+	if typeof(latestOwnedBodyParts) == "table" then
+		return latestOwnedBodyParts
+	end
+
 	local bodyPartsState = DataController:Get(BODY_PARTS_DATA_KEY)
 	if typeof(bodyPartsState) == "table" and typeof(bodyPartsState.ownedById) == "table" then
 		return bodyPartsState.ownedById
-	end
-
-	local fallback = self._loadoutState and self._loadoutState.ownedBodyParts
-	if typeof(fallback) == "table" then
-		return fallback
 	end
 
 	return {}
@@ -250,7 +283,14 @@ function InventoryController:_getRemotesFolder(): Folder?
 end
 
 function InventoryController:_ensureRemotes(): boolean
-	if self._remotes.getState and self._remotes.equip and self._remotes.updated then
+	if self._remotes.getState
+		and self._remotes.equip
+		and self._remotes.unequip
+		and self._remotes.toggleFavorite
+		and self._remotes.sellOwned
+		and self._remotes.sellAll
+		and self._remotes.updated
+	then
 		return true
 	end
 
@@ -261,6 +301,10 @@ function InventoryController:_ensureRemotes(): boolean
 
 	local getStateRemote = bodyPartsFolder:FindFirstChild(GET_STATE_REMOTE_NAME)
 	local equipRemote = bodyPartsFolder:FindFirstChild(EQUIP_REMOTE_NAME)
+	local unequipRemote = bodyPartsFolder:FindFirstChild(UNEQUIP_REMOTE_NAME)
+	local toggleFavoriteRemote = bodyPartsFolder:FindFirstChild(TOGGLE_FAVORITE_REMOTE_NAME)
+	local sellOwnedRemote = bodyPartsFolder:FindFirstChild(SELL_OWNED_REMOTE_NAME)
+	local sellAllRemote = bodyPartsFolder:FindFirstChild(SELL_ALL_REMOTE_NAME)
 	local updatedRemote = bodyPartsFolder:FindFirstChild(UPDATED_REMOTE_NAME)
 
 	if not (getStateRemote and getStateRemote:IsA("RemoteFunction")) then
@@ -269,12 +313,28 @@ function InventoryController:_ensureRemotes(): boolean
 	if not (equipRemote and equipRemote:IsA("RemoteFunction")) then
 		return false
 	end
+	if not (unequipRemote and unequipRemote:IsA("RemoteFunction")) then
+		return false
+	end
+	if not (toggleFavoriteRemote and toggleFavoriteRemote:IsA("RemoteFunction")) then
+		return false
+	end
+	if not (sellOwnedRemote and sellOwnedRemote:IsA("RemoteFunction")) then
+		return false
+	end
+	if not (sellAllRemote and sellAllRemote:IsA("RemoteFunction")) then
+		return false
+	end
 	if not (updatedRemote and updatedRemote:IsA("RemoteEvent")) then
 		return false
 	end
 
 	self._remotes.getState = getStateRemote
 	self._remotes.equip = equipRemote
+	self._remotes.unequip = unequipRemote
+	self._remotes.toggleFavorite = toggleFavoriteRemote
+	self._remotes.sellOwned = sellOwnedRemote
+	self._remotes.sellAll = sellAllRemote
 	self._remotes.updated = updatedRemote
 	return true
 end
@@ -342,13 +402,14 @@ function InventoryController:_setPreviewState(previewState: PreviewState?)
 	self._previewState = previewState
 	self:_syncPreview()
 	self:_syncSlotButtons()
+	self:_syncSecondaryActionButtons()
 end
 
 function InventoryController:_clearPreview()
 	self._selectedOwnedId = nil
 	self:_setPreviewState(nil)
 	self:_syncList()
-	self:_syncEquipButton()
+	self:_syncActionButton()
 end
 
 function InventoryController:_setSelectedOwnedItem(ownedId: string)
@@ -358,7 +419,7 @@ function InventoryController:_setSelectedOwnedItem(ownedId: string)
 		ownedId = ownedId,
 	})
 	self:_syncList()
-	self:_syncEquipButton()
+	self:_syncActionButton()
 end
 
 function InventoryController:_setPreviewForRegion(region: string)
@@ -378,7 +439,7 @@ function InventoryController:_setPreviewForRegion(region: string)
 	end
 
 	self:_syncList()
-	self:_syncEquipButton()
+	self:_syncActionButton()
 end
 
 function InventoryController:_getInventoryRecords(): { InventoryRecordView }
@@ -430,22 +491,206 @@ end
 
 function InventoryController:_getVisibleRecords(): { InventoryRecordView }
 	local visibleRecords = {}
-	local searchText = string.lower(self._searchText or "")
-	local selectedFilterRegion = self._selectedFilterRegion
 
 	for _, record in ipairs(self:_getInventoryRecords()) do
-		if selectedFilterRegion and record.piece.region ~= selectedFilterRegion then
+		if self:_isOwnedIdEquipped(record.ownedId) then
 			continue
 		end
 
-		if searchText ~= "" and not string.find(record.searchText, searchText, 1, true) then
-			continue
+		if self:_recordMatchesFilters(record) then
+			table.insert(visibleRecords, record)
 		end
-
-		table.insert(visibleRecords, record)
 	end
 
 	return visibleRecords
+end
+
+function InventoryController:_recordMatchesFilters(record: InventoryRecordView): boolean
+	local searchText = string.lower(self._searchText or "")
+	local selectedFilterRegion = self._selectedFilterRegion
+
+	if selectedFilterRegion and record.piece.region ~= selectedFilterRegion then
+		return false
+	end
+
+	if searchText ~= "" and not string.find(record.searchText, searchText, 1, true) then
+		return false
+	end
+
+	return true
+end
+
+function InventoryController:_rebuildEquippedOwnedIdByRegion()
+	self._equippedOwnedIdByRegion = {}
+
+	local equipped = self._loadoutState and self._loadoutState.equipped or nil
+	for _, region in ipairs(BodyPartRegions.Order) do
+		local entry = equipped and equipped[region]
+		if typeof(entry) == "table" and typeof(entry.ownedId) == "string" and entry.ownedId ~= "" then
+			self._equippedOwnedIdByRegion[region] = entry.ownedId
+		end
+	end
+end
+
+function InventoryController:_isOwnedIdEquipped(ownedId: string): boolean
+	for _, equippedOwnedId in pairs(self._equippedOwnedIdByRegion) do
+		if equippedOwnedId == ownedId then
+			return true
+		end
+	end
+
+	return false
+end
+
+function InventoryController:_captureSlotPlaceholderState(button: ImageButton): SlotPlaceholderState
+	local children = {}
+
+	for _, child in ipairs(button:GetChildren()) do
+		if child:IsA("GuiObject") then
+			children[child.Name] = {
+				visible = child.Visible,
+			}
+		end
+	end
+
+	return {
+		imageTransparency = button.ImageTransparency,
+		children = children,
+	}
+end
+
+function InventoryController:_syncSlotPlaceholder(region: string, isFilled: boolean)
+	local button = self._ui.slotButtons[region]
+	local defaults = self._slotPlaceholderDefaults[region]
+	if not (button and defaults) then
+		return
+	end
+
+	if isFilled then
+		button.ImageTransparency = 1
+
+		for _, childName in ipairs({ "Icon", "Usage", "Viewport" }) do
+			local child = button:FindFirstChild(childName)
+			if child and child:IsA("GuiObject") then
+				child.Visible = false
+			end
+		end
+
+		local outline = button:FindFirstChild("Outline")
+		if outline and outline:IsA("GuiObject") then
+			outline.Visible = true
+		end
+		return
+	end
+
+	button.ImageTransparency = defaults.imageTransparency
+
+	for childName, childState in pairs(defaults.children) do
+		local child = button:FindFirstChild(childName)
+		if child and child:IsA("GuiObject") then
+			child.Visible = childState.visible
+		end
+	end
+end
+
+function InventoryController:_ensureRowForRecord(recordView: InventoryRecordView): Frame?
+	local row = self._rowFramesByOwnedId[recordView.ownedId]
+
+	if not row then
+		row = self._listTemplate:Clone()
+		row.Name = string.format("Owned_%s", recordView.ownedId)
+		row.Visible = true
+		self._rowFramesByOwnedId[recordView.ownedId] = row
+
+		local base = row:FindFirstChild("Base")
+		if base and base:IsA("ImageButton") then
+			UIController:CreateButton(base, function()
+				self:_setSelectedOwnedItem(recordView.ownedId)
+			end)
+			self._rowButtonsByOwnedId[recordView.ownedId] = base
+		end
+	end
+
+	local base = self._rowButtonsByOwnedId[recordView.ownedId]
+	if base then
+		local itemName = base:FindFirstChild("ItemName")
+		if itemName and itemName:IsA("TextLabel") then
+			itemName.Text = recordView.piece.displayName
+		end
+
+		local itemCount = base:FindFirstChild("ItemCount")
+		if itemCount and itemCount:IsA("TextLabel") then
+			itemCount.Text = formatMoneyPerSecond(getRecordPassiveIncomePerSecond(recordView.record, recordView.piece))
+		end
+
+		local itemViewport = base:FindFirstChild("ItemViewport")
+		if itemViewport and itemViewport:IsA("ViewportFrame") then
+			ViewportModelRenderer.RenderBundle(itemViewport, recordView.bundleModel)
+		end
+
+		local favoriteIcon = base:FindFirstChild("FavoriteIcon")
+		if favoriteIcon and favoriteIcon:IsA("GuiObject") then
+			favoriteIcon.Visible = recordView.record.isFavorite == true
+		end
+	end
+
+	return row
+end
+
+function InventoryController:_destroyRow(ownedId: string)
+	local row = self._rowFramesByOwnedId[ownedId]
+	if row then
+		row:Destroy()
+	end
+
+	self._rowFramesByOwnedId[ownedId] = nil
+	self._rowButtonsByOwnedId[ownedId] = nil
+end
+
+function InventoryController:_hideRow(ownedId: string)
+	local row = self._rowFramesByOwnedId[ownedId]
+	if not row then
+		return
+	end
+
+	row.Visible = false
+	row.Parent = nil
+end
+
+function InventoryController:_mountRowToList(ownedId: string, layoutOrder: number)
+	local row = self._rowFramesByOwnedId[ownedId]
+	if not row then
+		return
+	end
+
+	row.AnchorPoint = self._listTemplate.AnchorPoint
+	row.Position = self._listTemplate.Position
+	row.Size = self._listTemplate.Size
+	row.LayoutOrder = layoutOrder
+	row.Visible = true
+	row.Parent = self._scrollingFrame
+end
+
+function InventoryController:_mountRowToSlot(ownedId: string, region: string)
+	local row = self._rowFramesByOwnedId[ownedId]
+	local slotFrame = self._ui.slotFrames[region]
+	if not (row and slotFrame) then
+		return
+	end
+
+	row.AnchorPoint = Vector2.new(0.5, 0.5)
+	row.Position = UDim2.fromScale(0.5, 0.5)
+	row.Size = UDim2.fromScale(1.2, 1.2)
+	row.LayoutOrder = 0
+	row.Visible = true
+	row.Parent = slotFrame
+end
+
+function InventoryController:_syncRowSelectionStates()
+	for ownedId, button in pairs(self._rowButtonsByOwnedId) do
+		local isSelected = ownedId == self._selectedOwnedId
+		self:_setOutlineColor(button, if isSelected then SELECTED_COLOR else DEFAULT_OUTLINE_COLOR, if isSelected then 0 else 0.22)
+	end
 end
 
 function InventoryController:_setOutlineColor(button: GuiButton, color: Color3, transparency: number)
@@ -465,6 +710,12 @@ function InventoryController:_syncFilterButtons()
 	end
 end
 
+function InventoryController:_applyFilterRegion(region: string?)
+	self._selectedFilterRegion = region
+	self:_syncFilterButtons()
+	self:_syncList()
+end
+
 function InventoryController:_syncSlotButtons()
 	local equipped = self._loadoutState and self._loadoutState.equipped or {}
 	local previewState = self._previewState
@@ -472,10 +723,17 @@ function InventoryController:_syncSlotButtons()
 	for region, button in pairs(self._ui.slotButtons) do
 		local entry = equipped and equipped[region]
 		local isPreviewRegion = previewState ~= nil and previewState.kind == "equipped" and previewState.region == region
+		local isSelectedOwnedRegion = previewState ~= nil
+			and previewState.kind == "owned"
+			and self._selectedOwnedId ~= nil
+			and entry ~= nil
+			and entry.ownedId == self._selectedOwnedId
 		local outlineColor = DEFAULT_OUTLINE_COLOR
 		local outlineTransparency = 0.3
 
-		if isPreviewRegion then
+		self:_syncSlotPlaceholder(region, entry ~= nil)
+
+		if isPreviewRegion or isSelectedOwnedRegion then
 			outlineColor = SELECTED_COLOR
 			outlineTransparency = 0
 		elseif entry then
@@ -533,24 +791,221 @@ function InventoryController:_syncPreview()
 	self:_syncInventoryAnchor(true)
 end
 
-function InventoryController:_syncCharacterViewport()
-	ViewportModelRenderer.RenderBaseRig(self._ui.characterViewport, BodyPartsCatalog.GetDefaultBaseRig())
+function InventoryController:_getPreviewOwnedId(): string?
+	local previewState = self._previewState
+	if previewState and typeof(previewState.ownedId) == "string" and previewState.ownedId ~= "" then
+		return previewState.ownedId
+	end
+
+	if self._selectedOwnedId and self:_getOwnedLookup()[self._selectedOwnedId] ~= nil then
+		return self._selectedOwnedId
+	end
+
+	return nil
 end
 
-function InventoryController:_syncEquipButton()
-	local equipButton = self._ui.equipButton
+function InventoryController:_getPreviewOwnedRecord(): OwnedBodyPartRecord?
+	local ownedId = self:_getPreviewOwnedId()
+	if not ownedId then
+		return nil
+	end
+
+	return self:_getOwnedLookup()[ownedId]
+end
+
+function InventoryController:_getSellAllEligibleCount(): number
+	local count = 0
+	for _, recordView in ipairs(self:_getInventoryRecords()) do
+		if recordView.record.isFavorite ~= true and not self:_isOwnedIdEquipped(recordView.ownedId) then
+			count += 1
+		end
+	end
+
+	return count
+end
+
+function InventoryController:_buildSellWarningTitle(): string
+	local eligibleCount = self:_getSellAllEligibleCount()
+	if eligibleCount <= 0 then
+		return "No unfavorited, unequipped body parts are available to sell."
+	end
+
+	return string.format(
+		"Sell %d unfavorited, unequipped body parts? Favorites and equipped items will stay.",
+		eligibleCount
+	)
+end
+
+function InventoryController:_setSellWarningVisible(isVisible: boolean)
+	local warningFrame = self._ui.sellWarningFrame
+	if not warningFrame then
+		return
+	end
+
+	if isVisible and self._ui.sellWarningTitle then
+		self._ui.sellWarningTitle.Text = self:_buildSellWarningTitle()
+	end
+
+	warningFrame.Visible = isVisible
+end
+
+function InventoryController:_syncSecondaryActionButtons()
+	local hasOwnedSelection = self:_getPreviewOwnedRecord() ~= nil
+	local favoriteButton = self._ui.favoriteButton
+	if favoriteButton then
+		favoriteButton.Active = hasOwnedSelection
+		favoriteButton.AutoButtonColor = false
+	end
+
+	local sellButton = self._ui.sellButton
+	if sellButton then
+		sellButton.Active = hasOwnedSelection
+		sellButton.AutoButtonColor = false
+	end
+end
+
+function InventoryController:_destroyCachedCharacterPreviewModel()
+	local cachedModel = self._cachedCharacterPreviewModel
+	if cachedModel and cachedModel.Parent == nil then
+		cachedModel:Destroy()
+	end
+
+	self._cachedCharacterPreviewModel = nil
+end
+
+function InventoryController:_invalidateCharacterPreviewModel()
+	self._characterPreviewGeneration += 1
+	self._isResolvingCharacterPreviewModel = false
+	self:_destroyCachedCharacterPreviewModel()
+end
+
+function InventoryController:_getCurrentHumanoidDescription(): HumanoidDescription?
+	local character = LOCAL_PLAYER.Character
+	if not character then
+		return nil
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then
+		return nil
+	end
+
+	local ok, description = pcall(function()
+		return humanoid:GetAppliedDescription()
+	end)
+
+	if not ok or not description or not description:IsA("HumanoidDescription") then
+		return nil
+	end
+
+	return description
+end
+
+function InventoryController:_createCharacterPreviewModelFromDescription(description: HumanoidDescription?): Model?
+	if not description then
+		return nil
+	end
+
+	local baseRigModel = BodyPartsCatalog.GetDefaultBaseRig()
+	if not (baseRigModel and baseRigModel:IsA("Model")) then
+		return nil
+	end
+
+	local previewModel = baseRigModel:Clone()
+	previewModel.Name = "InventoryCharacterPreview"
+
+	local humanoid = previewModel:FindFirstChildOfClass("Humanoid")
+	if not humanoid then
+		previewModel:Destroy()
+		return nil
+	end
+
+	local ok = pcall(function()
+		humanoid:ApplyDescriptionReset(description)
+	end)
+
+	if not ok then
+		previewModel:Destroy()
+		return nil
+	end
+
+	return previewModel
+end
+
+function InventoryController:_buildDefaultCharacterPreviewModel(): Model?
+	local previewModel = self:_createCharacterPreviewModelFromDescription(self:_getCurrentHumanoidDescription())
+	if previewModel then
+		return previewModel
+	end
+
+	local ok, description = pcall(function()
+		return Players:GetHumanoidDescriptionFromUserId(LOCAL_PLAYER.UserId)
+	end)
+
+	if not ok or not description or not description:IsA("HumanoidDescription") then
+		return nil
+	end
+
+	return self:_createCharacterPreviewModelFromDescription(description)
+end
+
+function InventoryController:_resolveCharacterPreviewModelAsync()
+	if self._cachedCharacterPreviewModel or self._isResolvingCharacterPreviewModel then
+		return
+	end
+
+	self._isResolvingCharacterPreviewModel = true
+	local generation = self._characterPreviewGeneration
+
+	task.spawn(function()
+		local previewModel = self:_buildDefaultCharacterPreviewModel()
+		if self._characterPreviewGeneration ~= generation then
+			if previewModel and previewModel.Parent == nil then
+				previewModel:Destroy()
+			end
+			return
+		end
+
+		self._isResolvingCharacterPreviewModel = false
+
+		if not previewModel then
+			return
+		end
+
+		self:_destroyCachedCharacterPreviewModel()
+		self._cachedCharacterPreviewModel = previewModel
+		ViewportModelRenderer.RenderCharacterModel(self._ui.characterViewport, previewModel, BodyPartsCatalog.GetDefaultBaseRig())
+	end)
+end
+
+function InventoryController:_syncCharacterViewport()
+	local framingModel = BodyPartsCatalog.GetDefaultBaseRig()
+	local previewModel = self._cachedCharacterPreviewModel or BodyPartsCatalog.GetDefaultBaseRig()
+	ViewportModelRenderer.RenderCharacterModel(self._ui.characterViewport, previewModel, framingModel)
+
+	if self._cachedCharacterPreviewModel == nil then
+		self:_resolveCharacterPreviewModelAsync()
+	end
+end
+
+function InventoryController:_syncActionButton()
+	local actionButton = self._ui.equipButton
+	local previewState = self._previewState
 	local selectedRecord = self._selectedOwnedId and self:_getOwnedLookup()[self._selectedOwnedId] or nil
-	local enabled = selectedRecord ~= nil
+	local equippedEntry = previewState and previewState.kind == "equipped" and previewState.entry or nil
+	local isUnequipMode = equippedEntry ~= nil and previewState ~= nil and previewState.region ~= nil
+	local enabled = if isUnequipMode then true else selectedRecord ~= nil
 
-	equipButton.Active = enabled
-	equipButton.AutoButtonColor = false
+	actionButton.Active = enabled
+	actionButton.AutoButtonColor = false
 
-	local buttonText = equipButton:FindFirstChild("TextLabel")
+	local buttonText = actionButton:FindFirstChild("TextLabel")
 	if buttonText and buttonText:IsA("TextLabel") then
+		buttonText.Text = if isUnequipMode then "Unequip" else "Equip"
 		buttonText.TextTransparency = if enabled then 0 else 0.35
 	end
 
-	for _, child in ipairs(equipButton:GetChildren()) do
+	for _, child in ipairs(actionButton:GetChildren()) do
 		if child:IsA("ImageLabel") then
 			if child.Name == "Cover" or child.Name == "Cover2" then
 				child.ImageTransparency = if enabled then 0 else 0.25
@@ -562,54 +1017,44 @@ function InventoryController:_syncEquipButton()
 end
 
 function InventoryController:_refreshRows()
-	local scrollingFrame = self._scrollingFrame
-	local template = self._listTemplate
-	local selectedOwnedId = self._selectedOwnedId
+	self:_rebuildEquippedOwnedIdByRegion()
 
-	for _, child in ipairs(scrollingFrame:GetChildren()) do
-		if child ~= template and child:IsA("Frame") then
-			child:Destroy()
-		end
+	local recordsByOwnedId = {}
+	for _, recordView in ipairs(self:_getInventoryRecords()) do
+		recordsByOwnedId[recordView.ownedId] = recordView
+		self:_ensureRowForRecord(recordView)
 	end
 
-	self._rowsByOwnedId = {}
+	local ownedIdsToRemove = {}
+	for ownedId in pairs(self._rowFramesByOwnedId) do
+		if recordsByOwnedId[ownedId] == nil then
+			table.insert(ownedIdsToRemove, ownedId)
+		end
+	end
+	for _, ownedId in ipairs(ownedIdsToRemove) do
+		self:_destroyRow(ownedId)
+	end
 
+	local mountedOwnedIds = {}
 	for index, recordView in ipairs(self:_getVisibleRecords()) do
-		local row = template:Clone()
-		row.Name = string.format("Owned_%s", recordView.ownedId)
-		row.Visible = true
-		row.LayoutOrder = index
-		row.Parent = scrollingFrame
+		self:_mountRowToList(recordView.ownedId, index)
+		mountedOwnedIds[recordView.ownedId] = true
+	end
 
-		local base = row:FindFirstChild("Base")
-		if base and base:IsA("ImageButton") then
-			local itemName = base:FindFirstChild("ItemName")
-			if itemName and itemName:IsA("TextLabel") then
-				itemName.Text = recordView.piece.displayName
-			end
-
-			local itemCount = base:FindFirstChild("ItemCount")
-			if itemCount and itemCount:IsA("TextLabel") then
-				itemCount.Text = formatMoneyPerSecond(getRecordPassiveIncomePerSecond(recordView.record, recordView.piece))
-			end
-
-			local itemViewport = base:FindFirstChild("ItemViewport")
-			if itemViewport and itemViewport:IsA("ViewportFrame") then
-				ViewportModelRenderer.RenderBundle(itemViewport, recordView.bundleModel)
-			end
-
-			UIController:CreateButton(base, function()
-				self:_setSelectedOwnedItem(recordView.ownedId)
-			end)
-
-			self._rowsByOwnedId[recordView.ownedId] = base
+	for region, ownedId in pairs(self._equippedOwnedIdByRegion) do
+		if recordsByOwnedId[ownedId] ~= nil then
+			self:_mountRowToSlot(ownedId, region)
+			mountedOwnedIds[ownedId] = true
 		end
 	end
 
-	for ownedId, button in pairs(self._rowsByOwnedId) do
-		local isSelected = ownedId == selectedOwnedId
-		self:_setOutlineColor(button, if isSelected then SELECTED_COLOR else DEFAULT_OUTLINE_COLOR, if isSelected then 0 else 0.22)
+	for ownedId in pairs(self._rowFramesByOwnedId) do
+		if not mountedOwnedIds[ownedId] then
+			self:_hideRow(ownedId)
+		end
 	end
+
+	self:_syncRowSelectionStates()
 end
 
 function InventoryController:_syncList()
@@ -647,7 +1092,11 @@ function InventoryController:_applyLoadoutState(state: BodyPartClientState?)
 	self:_syncPreview()
 	self:_syncSummaryLabels()
 	self:_syncSlotButtons()
-	self:_syncEquipButton()
+	self:_syncActionButton()
+	self:_syncSecondaryActionButtons()
+	if self._ui.sellWarningFrame and self._ui.sellWarningFrame.Visible then
+		self:_setSellWarningVisible(true)
+	end
 end
 
 function InventoryController:_requestLoadoutState()
@@ -716,19 +1165,159 @@ function InventoryController:_equipSelectedOwnedItem()
 	self:_applyLoadoutState(result.state)
 end
 
+function InventoryController:_unequipPreviewedRegion()
+	local previewState = self._previewState
+	if not (previewState and previewState.kind == "equipped" and typeof(previewState.region) == "string") then
+		return
+	end
+
+	if not self:_ensureRemotes() then
+		return
+	end
+
+	local ok, result = pcall(function()
+		return self._remotes.unequip:InvokeServer({
+			region = previewState.region,
+		})
+	end)
+
+	if not ok then
+		showNotification("Inventory unequip failed. Check the output for details.")
+		warn(string.format("[InventoryController] Unequip invoke failed: %s", tostring(result)))
+		return
+	end
+
+	if typeof(result) ~= "table" then
+		showNotification("Inventory unequip returned an invalid response.")
+		return
+	end
+
+	if result.ok ~= true then
+		showNotification(tostring(result.message or "Could not unequip that body part."))
+		self:_applyLoadoutState(result.state)
+		return
+	end
+
+	showNotification(tostring(result.message or "Unequipped body part."))
+	self:_applyLoadoutState(result.state)
+end
+
+function InventoryController:_toggleFavoriteForPreviewedItem()
+	local ownedRecord = self:_getPreviewOwnedRecord()
+	if not ownedRecord then
+		return
+	end
+
+	if not self:_ensureRemotes() then
+		return
+	end
+
+	local ok, result = pcall(function()
+		return self._remotes.toggleFavorite:InvokeServer({
+			ownedId = ownedRecord.ownedId,
+			isFavorite = not (ownedRecord.isFavorite == true),
+		})
+	end)
+
+	if not ok then
+		showNotification("Inventory favorite failed. Check the output for details.")
+		warn(string.format("[InventoryController] Favorite invoke failed: %s", tostring(result)))
+		return
+	end
+
+	if typeof(result) ~= "table" then
+		showNotification("Inventory favorite returned an invalid response.")
+		return
+	end
+
+	if result.ok ~= true then
+		showNotification(tostring(result.message or "Could not update favorite state."))
+		self:_applyLoadoutState(result.state)
+		return
+	end
+
+	showNotification(tostring(result.message or "Updated favorite state."))
+	self:_applyLoadoutState(result.state)
+end
+
+function InventoryController:_sellPreviewedItem()
+	local ownedRecord = self:_getPreviewOwnedRecord()
+	if not ownedRecord then
+		return
+	end
+
+	if not self:_ensureRemotes() then
+		return
+	end
+
+	local ok, result = pcall(function()
+		return self._remotes.sellOwned:InvokeServer({
+			ownedId = ownedRecord.ownedId,
+		})
+	end)
+
+	if not ok then
+		showNotification("Inventory sell failed. Check the output for details.")
+		warn(string.format("[InventoryController] Sell invoke failed: %s", tostring(result)))
+		return
+	end
+
+	if typeof(result) ~= "table" then
+		showNotification("Inventory sell returned an invalid response.")
+		return
+	end
+
+	if result.ok ~= true then
+		showNotification(tostring(result.message or "Could not sell that body part."))
+		self:_applyLoadoutState(result.state)
+		return
+	end
+
+	showNotification(tostring(result.message or "Sold body part."))
+	self:_applyLoadoutState(result.state)
+end
+
+function InventoryController:_openSellWarning()
+	self:_setSellWarningVisible(true)
+end
+
+function InventoryController:_confirmSellAll()
+	if not self:_ensureRemotes() then
+		return
+	end
+
+	local ok, result = pcall(function()
+		return self._remotes.sellAll:InvokeServer()
+	end)
+
+	if not ok then
+		showNotification("Sell all failed. Check the output for details.")
+		warn(string.format("[InventoryController] Sell all invoke failed: %s", tostring(result)))
+		return
+	end
+
+	if typeof(result) ~= "table" then
+		showNotification("Sell all returned an invalid response.")
+		return
+	end
+
+	if result.ok ~= true then
+		showNotification(tostring(result.message or "Could not sell your unfavorited body parts."))
+		self:_applyLoadoutState(result.state)
+		return
+	end
+
+	self:_setSellWarningVisible(false)
+	showNotification(tostring(result.message or "Sold unfavorited body parts."))
+	self:_applyLoadoutState(result.state)
+end
+
 function InventoryController:_bindFilterButtons()
 	for buttonName, region in pairs(FILTER_BUTTON_TO_REGION) do
 		local button = self._ui.filterButtons[buttonName]
 		if button then
 			UIController:CreateButton(button, function()
-				if self._selectedFilterRegion == region then
-					self._selectedFilterRegion = nil
-				else
-					self._selectedFilterRegion = region
-				end
-
-				self:_syncFilterButtons()
-				self:_syncList()
+				self:_applyFilterRegion(if self._selectedFilterRegion == region then nil else region)
 			end)
 		end
 	end
@@ -742,7 +1331,14 @@ end
 function InventoryController:_bindSlotButtons()
 	for region, button in pairs(self._ui.slotButtons) do
 		UIController:CreateButton(button, function()
-			self:_setPreviewForRegion(region)
+			local equipped = self._loadoutState and self._loadoutState.equipped
+			local entry = equipped and equipped[region]
+			if entry then
+				self:_setPreviewForRegion(region)
+				return
+			end
+
+			self:_applyFilterRegion(region)
 		end)
 	end
 end
@@ -781,21 +1377,35 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 	local previewHolder = inventoryRoot:WaitForChild("ItemPreviewHolder", 30)
 	local previewViewport = previewHolder:WaitForChild("ViewportFrame", 30)
 	local previewDetails = previewHolder:WaitForChild("Frame", 30)
+	local favoriteButton = previewHolder:WaitForChild("FavoriteButton", 30)
+	local sellButton = previewHolder:WaitForChild("SellButton", 30)
 	local characterRoot = inventoryRoot:WaitForChild("Character", 30)
 	local characterFrame = characterRoot:WaitForChild("Character", 30)
+	local sellAllButton = characterRoot:WaitForChild("SellAllButton", 30)
 	local topBar = inventoryRoot:WaitForChild("TopBar", 30)
 	local topBarButtons = topBar:WaitForChild("ItemTypes", 30)
+	local sellWarningFrame = modalRoot:WaitForChild("SellWarningFrame", 30)
 	local openButton = mainInterface:WaitForChild("Main", 30):WaitForChild("ExtraButtons", 30):WaitForChild("Inventory", 30)
+	local sellWarningTitle = sellWarningFrame:WaitForChild("Title", 30)
+	local sellWarningConfirm = sellWarningFrame:WaitForChild("Confirm", 30)
+	local sellWarningNevermind = sellWarningFrame:WaitForChild("Nevermind", 30)
 
 	if not (
 		scrollingFrame:IsA("ScrollingFrame")
 		and template:IsA("Frame")
 		and previewHolder:IsA("Frame")
 		and previewViewport:IsA("ViewportFrame")
+		and favoriteButton:IsA("GuiButton")
+		and sellButton:IsA("GuiButton")
 		and characterRoot:IsA("Frame")
 		and characterFrame:IsA("ViewportFrame")
+		and sellAllButton:IsA("GuiButton")
 		and topBar:IsA("Frame")
 		and topBarButtons:IsA("Frame")
+		and sellWarningFrame:IsA("GuiObject")
+		and sellWarningTitle:IsA("TextLabel")
+		and sellWarningConfirm:IsA("GuiButton")
+		and sellWarningNevermind:IsA("GuiButton")
 		and openButton:IsA("GuiButton")
 	) then
 		error("Inventory UI hierarchy is missing required instances.")
@@ -818,12 +1428,18 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 	end
 
 	local slotButtons = {}
+	local slotFrames = {}
 	for _, region in ipairs(BodyPartRegions.Order) do
 		local slotFrame = characterFrame:FindFirstChild(region)
 		if slotFrame and slotFrame:IsA("Frame") then
+			slotFrame.ClipsDescendants = true
+			slotFrames[region] = slotFrame
+
 			local slotButton = slotFrame:FindFirstChild("Temp")
 			if slotButton and slotButton:IsA("ImageButton") then
+				setGuiTreeZIndex(slotButton, SLOT_OVERLAY_Z_INDEX)
 				slotButtons[region] = slotButton
+				self._slotPlaceholderDefaults[region] = self:_captureSlotPlaceholderState(slotButton)
 			end
 		end
 	end
@@ -832,6 +1448,8 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		openButton = openButton,
 		previewHolder = previewHolder,
 		previewViewport = previewViewport,
+		favoriteButton = favoriteButton,
+		sellButton = sellButton,
 		characterViewport = characterFrame,
 		previewLabels = {
 			Bundle = previewDetails:WaitForChild("Bundle", 30),
@@ -846,8 +1464,14 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		filterButtons = filterButtons,
 		auraButtons = auraButtons,
 		searchBox = topBar:WaitForChild("TextBox", 30),
+		slotFrames = slotFrames,
 		slotButtons = slotButtons,
 		equipButton = previewHolder:WaitForChild("EquipButton", 30),
+		sellAllButton = sellAllButton,
+		sellWarningFrame = sellWarningFrame,
+		sellWarningTitle = sellWarningTitle,
+		sellWarningConfirm = sellWarningConfirm,
+		sellWarningNevermind = sellWarningNevermind,
 		capacityLabel = inventoryRoot:WaitForChild("Capacity", 30),
 		incomeLabel = inventoryRoot:WaitForChild("Character", 30):WaitForChild("Income", 30),
 		luckLabel = inventoryRoot:WaitForChild("Character", 30):WaitForChild("Luck", 30),
@@ -858,6 +1482,7 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 	self._scrollingFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
 	self._inventoryRoot.AnchorPoint = Vector2.new(INVENTORY_DEFAULT_ANCHOR_X, INVENTORY_ANCHOR_Y)
 	self._ui.previewHolder.Visible = false
+	self._ui.sellWarningFrame.Visible = false
 end
 
 function InventoryController:OnStart()
@@ -871,7 +1496,27 @@ function InventoryController:OnStart()
 	self:_bindSlotButtons()
 
 	UIController:CreateButton(self._ui.equipButton, function()
-		self:_equipSelectedOwnedItem()
+		local previewState = self._previewState
+		if previewState and previewState.kind == "equipped" and previewState.region then
+			self:_unequipPreviewedRegion()
+		else
+			self:_equipSelectedOwnedItem()
+		end
+	end)
+	UIController:CreateButton(self._ui.favoriteButton, function()
+		self:_toggleFavoriteForPreviewedItem()
+	end)
+	UIController:CreateButton(self._ui.sellButton, function()
+		self:_sellPreviewedItem()
+	end)
+	UIController:CreateButton(self._ui.sellAllButton, function()
+		self:_openSellWarning()
+	end)
+	UIController:CreateButton(self._ui.sellWarningNevermind, function()
+		self:_setSellWarningVisible(false)
+	end)
+	UIController:CreateButton(self._ui.sellWarningConfirm, function()
+		self:_confirmSellAll()
 	end)
 
 	if self._ui.searchBox and self._ui.searchBox:IsA("TextBox") then
@@ -884,7 +1529,8 @@ function InventoryController:OnStart()
 	DataController.DataReceived:Connect(function()
 		self:_syncList()
 		self:_syncPreview()
-		self:_syncEquipButton()
+		self:_syncActionButton()
+		self:_syncSecondaryActionButtons()
 	end)
 
 	DataController.DataUpdated:Connect(function(key)
@@ -894,7 +1540,21 @@ function InventoryController:OnStart()
 
 		self:_syncList()
 		self:_syncPreview()
-		self:_syncEquipButton()
+		self:_syncActionButton()
+		self:_syncSecondaryActionButtons()
+	end)
+
+	LOCAL_PLAYER.CharacterAdded:Connect(function()
+		self:_invalidateCharacterPreviewModel()
+		if FrameController:IsOpen(WINDOW_NAME) then
+			task.defer(function()
+				self:_syncCharacterViewport()
+			end)
+		end
+	end)
+
+	LOCAL_PLAYER.CharacterRemoving:Connect(function()
+		self:_invalidateCharacterPreviewModel()
 	end)
 
 	task.spawn(function()
@@ -914,7 +1574,8 @@ function InventoryController:OnStart()
 	self:_syncList()
 	self:_syncCharacterViewport()
 	self:_syncSummaryLabels()
-	self:_syncEquipButton()
+	self:_syncActionButton()
+	self:_syncSecondaryActionButtons()
 end
 
 return InventoryController

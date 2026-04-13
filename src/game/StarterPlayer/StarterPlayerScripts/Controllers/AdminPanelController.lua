@@ -6,11 +6,13 @@ local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormat
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
 local AdminPanelDefinitions = require(ReplicatedStorage.Shared.UI.AdminPanelDefinitions)
+local DialogueController = require(script.Parent.DialogueController)
 local HUDWindowController = require(script.Parent.HUDWindowController)
 local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local ACCESS_ATTRIBUTE = "CanUseAdminPanel"
+local OVERVIEW_TAB_ID = "overview"
 local BODY_PARTS_TAB_ID = "bodyParts"
 local WINDOW_NAME = "AdminPanel"
 local TOGGLE_KEY = Enum.KeyCode.P
@@ -258,6 +260,17 @@ function AdminPanelController:_invokeAction(tabId: string, actionId: string, act
 	local ok, result = self:_invokeAdminRequest(tabId, actionId, string.format("Sending %s", actionTitle), {})
 	if not ok or not result then
 		return
+	end
+
+	if result.ok and tabId == OVERVIEW_TAB_ID and actionId == "test_dialogue" then
+		local data = if typeof(result.data) == "table" then result.data else {}
+		local dialogueId = if typeof(data.dialogueId) == "string" and data.dialogueId ~= "" then data.dialogueId else "merchant_default"
+		local context = if typeof(data.context) == "table" then data.context else {}
+
+		HUDWindowController:CloseWindow(WINDOW_NAME, true)
+		task.defer(function()
+			DialogueController.StartDialogue(dialogueId, context)
+		end)
 	end
 
 	local message = tostring(result.message or "No response message provided.")

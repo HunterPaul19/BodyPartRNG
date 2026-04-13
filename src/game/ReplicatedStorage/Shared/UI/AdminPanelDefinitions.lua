@@ -12,6 +12,11 @@ AdminPanelDefinitions.Tabs = {
 				description = "High-level buttons for broad test coverage and smoke checks.",
 				actions = {
 					{
+						id = "test_dialogue",
+						title = "Test Dialogue",
+						description = "Launch the sample merchant dialogue locally so the dialogue tree and shop handoff can be verified from the admin panel.",
+					},
+					{
 						id = "refresh_server_state",
 						title = "Refresh Server State",
 						description = "Placeholder for forcing a server-wide refresh of tracked gameplay state.",
