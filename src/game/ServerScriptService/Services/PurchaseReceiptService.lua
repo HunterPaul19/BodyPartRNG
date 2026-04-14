@@ -3,6 +3,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local DataService = require(script.Parent.DataService)
+local StatsService = require(script.Parent.StatsService)
 local Signal = require(ReplicatedStorage.Common.Signal)
 local RobuxPurchases = require(ReplicatedStorage.Lists.RobuxPurchases)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
@@ -264,6 +265,7 @@ local function processProductReceipt(receiptInfo)
 			isNew = true,
 		}
 		PurchaseReceipt.PurchaseProcessed:Fire(player, key or tostring(productId), context)
+		StatsService:RecordPurchaseProcessed(player, context)
 		if key then
 			callConfigHook("product", key, "onProcessed", player, context)
 		end
@@ -319,6 +321,7 @@ local function onPromptGamePassFinished(a, b, c)
 	local isNew = logPurchase(player, key, nil, { via = "prompt" })
 	local context = { kind = "pass", key = key, id = gamePassId, source = "prompt", isNew = isNew == true }
 	PurchaseReceipt.PurchaseProcessed:Fire(player, key, context)
+	StatsService:RecordPurchaseProcessed(player, context)
 	if key == "vip" then
 		syncPersistedVipOwned(player, true)
 	end
@@ -349,6 +352,7 @@ local function refreshPassOwnership(player)
 					if isNew then
 						local context = { kind = "pass", key = key, id = passId, source = "offline", isNew = true }
 						PurchaseReceipt.PurchaseProcessed:Fire(player, key, context)
+						StatsService:RecordPurchaseProcessed(player, context)
 						callConfigHook("pass", key, "onProcessed", player, context)
 					end
 				end
@@ -458,6 +462,7 @@ function PurchaseReceipt:PromptPassPurchase(player: Player, passIdOrKey: any): (
 	if not ok then
 		return false, tostring(err)
 	end
+	StatsService:RecordPurchasePrompt(player, config.key or tostring(config.id))
 
 	return true, "Purchase prompt opened."
 end

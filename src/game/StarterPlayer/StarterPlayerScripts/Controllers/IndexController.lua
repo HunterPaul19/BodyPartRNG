@@ -5,6 +5,7 @@ local BodyPartCollection = require(ReplicatedStorage.Shared.Character.BodyPartCo
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
 local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 local DataController = require(script.Parent.DataController)
 local FrameController = require(script.Parent.FrameController)
 local UIController = require(script.Parent.UIController)
@@ -124,6 +125,19 @@ local function findScrollingFrame(container: Instance): ScrollingFrame?
 	return nil
 end
 
+local function summaryMatchesSearch(summary: SetSummary, searchText: string): boolean
+	if searchText == "" then
+		return true
+	end
+
+	local displayName = string.lower(summary.setConfig.rollDisplay.displayName or "")
+	if string.find(displayName, searchText, 1, true) then
+		return true
+	end
+
+	return string.find(string.lower(summary.setId), searchText, 1, true) ~= nil
+end
+
 local function findTopLevelLabel(indexRoot: GuiObject, exclude: { [Instance]: boolean }, predicate: (TextLabel) -> boolean): TextLabel?
 	for _, child in ipairs(indexRoot:GetChildren()) do
 		if child:IsA("TextLabel") and not exclude[child] and predicate(child) then
@@ -189,11 +203,14 @@ function IndexController:_ensureState()
 	self._rowsBySetId = {}
 	self._selectedSetId = nil :: string?
 	self._selectedRegion = nil :: string?
+	self._searchText = ""
 	self._orderedSummaries = {} :: { SetSummary }
 	self._summariesBySetId = {} :: { [string]: SetSummary }
 	self._catalogOrderBySetId = {} :: { [string]: number }
+	self._defaultSetNameLabelStyle = nil :: TextLabelStyle?
 	self._defaultPieceNameLabelStyle = nil :: TextLabelStyle?
 	self._completedSetCount = 0
+	self._bodyPartsRefreshScheduled = false
 end
 
 function IndexController:_getRarityTemplatesFolder(): Folder?
@@ -261,16 +278,29 @@ function IndexController:_rebuildDerivedState()
 end
 
 function IndexController:_syncSelectionState()
-	if self._selectedSetId ~= nil and self._summariesBySetId[self._selectedSetId] == nil then
-		self._selectedSetId = nil
-		self._selectedRegion = nil
-		return
+	local searchText = string.lower(self._searchText or "")
+	if self._selectedSetId ~= nil then
+		local currentSummary = self._summariesBySetId[self._selectedSetId]
+		if currentSummary == nil or not summaryMatchesSearch(currentSummary, searchText) then
+			self._selectedSetId = nil
+			self._selectedRegion = nil
+		end
 	end
 
 	local summary = self._selectedSetId and self._summariesBySetId[self._selectedSetId] or nil
 	if not summary then
-		self._selectedRegion = nil
-		return
+		for _, candidateSummary in ipairs(self._orderedSummaries) do
+			if candidateSummary.discoveredCount > 0 and summaryMatchesSearch(candidateSummary, searchText) then
+				self._selectedSetId = candidateSummary.setId
+				summary = candidateSummary
+				break
+			end
+		end
+
+		if not summary then
+			self._selectedRegion = nil
+			return
+		end
 	end
 
 	if self._selectedRegion ~= nil and summary.discoveredPieceIdsByRegion[self._selectedRegion] ~= nil then
@@ -335,10 +365,16 @@ end
 function IndexController:_applyUnlockedRowStyle(row: GuiButton, summary: SetSummary)
 	local rollDisplay = summary.setConfig.rollDisplay
 	local bundleLabel = row:FindFirstChild("BundleName")
+	local progressLabel = row:FindFirstChild("BundleProgress")
+	local outline = row:FindFirstChildWhichIsA("UIStroke")
 	if bundleLabel and bundleLabel:IsA("TextLabel") then
-		bundleLabel.Text = string.format("%s - %d/6 Unlocked", rollDisplay.displayName, summary.discoveredCount)
+		bundleLabel.RichText = false
+		bundleLabel.Text = rollDisplay.displayName
 		bundleLabel.TextColor3 = rollDisplay.color
 		bundleLabel.FontFace = getFontWithWeight(rollDisplay.fontFace, rollDisplay.fontWeight)
+		if progressLabel and progressLabel:IsA("TextLabel") then
+			progressLabel:Destroy()
+		end
 	end
 
 	row.ImageColor3 = rollDisplay.color
@@ -350,13 +386,22 @@ function IndexController:_applyUnlockedRowStyle(row: GuiButton, summary: SetSumm
 		end
 	end
 
+	if outline then
+		outline.Color = rollDisplay.color
+	end
+
 	self:_applyRarityLabel(row, rollDisplay.rarity)
 end
 
 function IndexController:_applyLockedRowStyle(row: GuiButton, summary: SetSummary)
 	local bundleLabel = row:FindFirstChild("BundleName")
+	local progressLabel = row:FindFirstChild("BundleProgress")
 	if bundleLabel and bundleLabel:IsA("TextLabel") then
+		bundleLabel.RichText = false
 		bundleLabel.Text = "0/6 Unlocked"
+	end
+	if progressLabel and progressLabel:IsA("TextLabel") then
+		progressLabel:Destroy()
 	end
 
 	self:_applyRarityLabel(row, summary.setConfig.rollDisplay.rarity)
@@ -378,12 +423,19 @@ function IndexController:_refreshRows()
 
 	self._rowsBySetId = {}
 
-	for index, summary in ipairs(self._orderedSummaries) do
+	local searchText = string.lower(self._searchText or "")
+	local visibleIndex = 0
+	for _, summary in ipairs(self._orderedSummaries) do
+		if not summaryMatchesSearch(summary, searchText) then
+			continue
+		end
+
+		visibleIndex += 1
 		local template = if summary.discoveredCount == 0 then lockedTemplate else setTemplate
 		local row = template:Clone()
 		row.Name = string.format("Set_%s", summary.setId)
 		row.Visible = true
-		row.LayoutOrder = index
+		row.LayoutOrder = visibleIndex
 		row.Parent = scrollingFrame
 
 		if summary.discoveredCount == 0 then
@@ -427,6 +479,40 @@ function IndexController:_restoreDefaultPieceNameLabelStyle()
 	pieceNameLabel.FontFace = defaultStyle.fontFace
 	pieceNameLabel.TextColor3 = defaultStyle.textColor3
 	pieceNameLabel.TextTransparency = defaultStyle.textTransparency
+end
+
+function IndexController:_restoreDefaultSetNameLabelStyle()
+	local setNameLabel = self._ui.setNameLabel
+	local defaultStyle = self._defaultSetNameLabelStyle
+	if not (setNameLabel and defaultStyle) then
+		return
+	end
+
+	setNameLabel.FontFace = defaultStyle.fontFace
+	setNameLabel.TextColor3 = defaultStyle.textColor3
+	setNameLabel.TextTransparency = defaultStyle.textTransparency
+end
+
+function IndexController:_applySetNameLabelStyle(summary: SetSummary?)
+	local setNameLabel = self._ui.setNameLabel
+	if not setNameLabel then
+		return
+	end
+
+	local rollDisplay = summary and summary.setConfig and summary.setConfig.rollDisplay or nil
+	if not rollDisplay then
+		self:_restoreDefaultSetNameLabelStyle()
+		return
+	end
+
+	if typeof(rollDisplay.fontFace) ~= "Font" or typeof(rollDisplay.fontWeight) ~= "EnumItem" or typeof(rollDisplay.color) ~= "Color3" then
+		self:_restoreDefaultSetNameLabelStyle()
+		return
+	end
+
+	setNameLabel.FontFace = getFontWithWeight(rollDisplay.fontFace, rollDisplay.fontWeight)
+	setNameLabel.TextColor3 = rollDisplay.color
+	setNameLabel.TextTransparency = 0
 end
 
 function IndexController:_applyPieceNameLabelStyle(summary: SetSummary?, selectedPieceId: string?)
@@ -507,13 +593,7 @@ function IndexController:_clearViewport()
 		return
 	end
 
-	for _, child in ipairs(viewportFrame:GetChildren()) do
-		if child:IsA("WorldModel") or child:IsA("Camera") or child:IsA("Model") then
-			child:Destroy()
-		end
-	end
-
-	viewportFrame.CurrentCamera = nil
+	ViewportModelRenderer.Clear(viewportFrame)
 end
 
 function IndexController:_renderViewportForPiece(pieceId: string?)
@@ -533,35 +613,7 @@ function IndexController:_renderViewportForPiece(pieceId: string?)
 		return
 	end
 
-	local worldModel = Instance.new("WorldModel")
-	worldModel.Name = "PreviewWorld"
-	worldModel.Parent = viewportFrame
-
-	local previewModel = bundleModel:Clone()
-	for _, descendant in ipairs(previewModel:GetDescendants()) do
-		if descendant:IsA("BasePart") then
-			descendant.Anchored = true
-			descendant.CanCollide = false
-		elseif descendant:IsA("Script") or descendant:IsA("LocalScript") then
-			descendant:Destroy()
-		end
-	end
-	previewModel.Parent = worldModel
-
-	local camera = Instance.new("Camera")
-	camera.Name = "PreviewCamera"
-	camera.FieldOfView = 35
-	camera.Parent = viewportFrame
-	viewportFrame.CurrentCamera = camera
-	viewportFrame.Ambient = Color3.fromRGB(255, 255, 255)
-	viewportFrame.LightColor = Color3.fromRGB(255, 255, 255)
-	viewportFrame.LightDirection = Vector3.new(-1, -0.6, -0.8)
-
-	-- Rebuild the preview scene each time so the selected bundle piece is the only rendered content.
-	local boundingBoxCFrame, boundingBoxSize = previewModel:GetBoundingBox()
-	local extent = math.max(boundingBoxSize.X, boundingBoxSize.Y, boundingBoxSize.Z, 2)
-	local cameraOffset = Vector3.new(extent * 0.65, extent * 0.2, extent * 1.85)
-	camera.CFrame = CFrame.lookAt(boundingBoxCFrame.Position + cameraOffset, boundingBoxCFrame.Position)
+	ViewportModelRenderer.RenderBundle(viewportFrame, bundleModel)
 end
 
 function IndexController:_syncDetailPanel()
@@ -576,6 +628,7 @@ function IndexController:_syncDetailPanel()
 		if pieceNameLabel then
 			pieceNameLabel.Text = "Select a Piece"
 		end
+		self:_restoreDefaultSetNameLabelStyle()
 		self:_restoreDefaultPieceNameLabelStyle()
 		self:_clearViewport()
 		return
@@ -597,6 +650,7 @@ function IndexController:_syncDetailPanel()
 		if pieceNameLabel then
 			pieceNameLabel.Text = "No Piece Discovered"
 		end
+		self:_restoreDefaultSetNameLabelStyle()
 		self:_restoreDefaultPieceNameLabelStyle()
 		self:_clearViewport()
 		return
@@ -605,16 +659,12 @@ function IndexController:_syncDetailPanel()
 	if setNameLabel then
 		setNameLabel.Text = selectedSummary.setConfig.rollDisplay.displayName
 	end
+	self:_applySetNameLabelStyle(selectedSummary)
 
 	if pieceNameLabel then
-		if discoveredPieceId and selectedPiece then
-			pieceNameLabel.Text = selectedPiece.displayName
-		else
-			pieceNameLabel.Text = displayedRegion and (REGION_LABELS[displayedRegion] or displayedRegion) or "Select a Piece"
-		end
+		pieceNameLabel.Text = displayedRegion and (REGION_LABELS[displayedRegion] or displayedRegion) or "Select a Piece"
 	end
-
-	self:_applyPieceNameLabelStyle(selectedSummary, discoveredPieceId)
+	self:_restoreDefaultPieceNameLabelStyle()
 
 	if discoveredPieceId then
 		self:_renderViewportForPiece(discoveredPieceId)
@@ -653,6 +703,26 @@ function IndexController:_syncAll()
 	self:_syncPieceButtons()
 	self:_syncDetailPanel()
 	self:_syncBuyBundleButton()
+end
+
+function IndexController:_flushScheduledBodyPartsRefresh()
+	self._bodyPartsRefreshScheduled = false
+	if not FrameController:IsOpen(WINDOW_NAME) then
+		return
+	end
+
+	self:_syncAll()
+end
+
+function IndexController:_scheduleBodyPartsRefresh()
+	if not FrameController:IsOpen(WINDOW_NAME) or self._bodyPartsRefreshScheduled then
+		return
+	end
+
+	self._bodyPartsRefreshScheduled = true
+	task.defer(function()
+		self:_flushScheduledBodyPartsRefresh()
+	end)
 end
 
 function IndexController:_cacheUi(playerGui: PlayerGui)
@@ -705,6 +775,7 @@ function IndexController:_cacheUi(playerGui: PlayerGui)
 	local selectorButtonsContainer = selectorPanel:FindFirstChild("RegionButtons")
 		or selectorPanel:FindFirstChild("Rarities")
 		or selectorPanel
+	local searchBox = selectorPanel:FindFirstChildWhichIsA("TextBox", true)
 	local regionButtons = {}
 	for _, child in ipairs(selectorButtonsContainer:GetChildren()) do
 		if child:IsA("GuiButton") then
@@ -760,6 +831,7 @@ function IndexController:_cacheUi(playerGui: PlayerGui)
 		summaryLabel = if summaryLabel and summaryLabel:IsA("TextLabel") then summaryLabel else nil,
 		setNameLabel = if setNameLabel and setNameLabel:IsA("TextLabel") then setNameLabel else nil,
 		pieceNameLabel = if pieceNameLabel and pieceNameLabel:IsA("TextLabel") then pieceNameLabel else nil,
+		searchBox = if searchBox and searchBox:IsA("TextBox") then searchBox else nil,
 		regionButtons = regionButtons,
 		viewportFrame = viewportFrame,
 		buyBundleButton = if buyBundleButton and buyBundleButton:IsA("GuiButton") then buyBundleButton else nil,
@@ -773,9 +845,21 @@ function IndexController:_cacheUi(playerGui: PlayerGui)
 		}
 	end
 
+	if self._ui.setNameLabel then
+		self._defaultSetNameLabelStyle = {
+			fontFace = self._ui.setNameLabel.FontFace,
+			textColor3 = self._ui.setNameLabel.TextColor3,
+			textTransparency = self._ui.setNameLabel.TextTransparency,
+		}
+	end
+
 	self._setTemplate.Visible = false
 	self._lockedTemplate.Visible = false
 	self._scrollingFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+
+	if self._ui.searchBox then
+		self._searchText = self._ui.searchBox.Text
+	end
 end
 
 function IndexController:_bindOpenButton(openButton: GuiButton)
@@ -818,13 +902,23 @@ function IndexController:OnStart()
 	self:_bindOpenButton(self._ui.openButton)
 	self:_bindRegionButtons()
 
+	if self._ui.searchBox then
+		self._ui.searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+			self._searchText = self._ui.searchBox.Text
+			self:_refreshRows()
+		end)
+	end
+
 	DataController.DataReceived:Connect(function()
+		if not FrameController:IsOpen(WINDOW_NAME) then
+			return
+		end
 		self:_syncAll()
 	end)
 
 	DataController.DataUpdated:Connect(function(key)
 		if key == BODY_PARTS_DATA_KEY then
-			self:_syncAll()
+			self:_scheduleBodyPartsRefresh()
 		end
 	end)
 

@@ -1,5 +1,5 @@
 local Lighting = game:GetService("Lighting")
-local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -13,6 +13,9 @@ local EFFECT_DEFINITIONS = {
 }
 
 local DayNightCycleService = {}
+local SERVER_START_TIME_ATTRIBUTE = "DayNightServerStartTime"
+local INITIAL_NORMALIZED_TIME_ATTRIBUTE = "DayNightInitialNormalizedTime"
+local LOOP_DURATION_ATTRIBUTE = "DayNightLoopDuration"
 
 local function lerpNumber(fromValue: number, toValue: number, alpha: number): number
 	return fromValue + (toValue - fromValue) * alpha
@@ -129,10 +132,9 @@ function DayNightCycleService:OnStart()
 	self._normalizedTime = DayNightCycleConfig.InitialNormalizedTime
 	self:_ensureEffects()
 	self:ApplyNormalizedTime(self._normalizedTime)
-
-	self._heartbeatConnection = RunService.Heartbeat:Connect(function(deltaTime: number)
-		self:ApplyNormalizedTime(self._normalizedTime + (deltaTime / DayNightCycleConfig.LoopDurationSeconds))
-	end)
+	Lighting:SetAttribute(SERVER_START_TIME_ATTRIBUTE, Workspace:GetServerTimeNow())
+	Lighting:SetAttribute(INITIAL_NORMALIZED_TIME_ATTRIBUTE, self._normalizedTime)
+	Lighting:SetAttribute(LOOP_DURATION_ATTRIBUTE, DayNightCycleConfig.LoopDurationSeconds)
 end
 
 return DayNightCycleService

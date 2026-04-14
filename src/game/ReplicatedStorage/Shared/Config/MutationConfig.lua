@@ -1,3 +1,5 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
 local MutationConfig = {}
 
 export type MutationEntry = {
@@ -5,6 +7,7 @@ export type MutationEntry = {
 	displayName: string,
 	weight: number,
 	multiplier: number,
+	color: Color3,
 }
 
 local ORDERED: { MutationEntry } = {
@@ -13,30 +16,35 @@ local ORDERED: { MutationEntry } = {
 		displayName = "None",
 		weight = 72,
 		multiplier = 1.0,
+		color = Color3.fromRGB(170, 170, 170),
 	},
 	{
-		id = "charged",
-		displayName = "Charged",
+		id = "magma",
+		displayName = "Magma",
 		weight = 18,
 		multiplier = 1.12,
+		color = Color3.fromRGB(255, 122, 54),
 	},
 	{
 		id = "prismatic",
 		displayName = "Prismatic",
 		weight = 7,
 		multiplier = 1.28,
+		color = Color3.fromRGB(180, 98, 255),
 	},
 	{
-		id = "radiant",
-		displayName = "Radiant",
+		id = "corrupted",
+		displayName = "Corrupted",
 		weight = 2.4,
 		multiplier = 1.48,
+		color = Color3.fromRGB(214, 46, 113),
 	},
 	{
-		id = "celestial",
-		displayName = "Celestial",
+		id = "diamond",
+		displayName = "Diamond",
 		weight = 0.6,
 		multiplier = 1.75,
+		color = Color3.fromRGB(94, 234, 255),
 	},
 }
 
@@ -47,6 +55,20 @@ local VISUALS = {
 local BY_ID: { [string]: MutationEntry } = {}
 local BY_DISPLAY_NAME: { [string]: MutationEntry } = {}
 local FROZEN_ORDERED = table.create(#ORDERED)
+
+local function getMutationVFXFolder(): Folder?
+	local gameAssets = ReplicatedStorage:WaitForChild("GameAssets", 10)
+	if not (gameAssets and gameAssets:IsA("Folder")) then
+		return nil
+	end
+
+	local mutationVFX = gameAssets:WaitForChild("MutationVFX", 10)
+	if mutationVFX and mutationVFX:IsA("Folder") then
+		return mutationVFX
+	end
+
+	return nil
+end
 
 local function normalizeName(name: any): string?
 	if typeof(name) ~= "string" then
@@ -134,6 +156,11 @@ function MutationConfig.GetMultiplier(id: any): number
 	return entry.multiplier
 end
 
+function MutationConfig.GetColor(id: any): Color3
+	local entry = BY_ID[MutationConfig.NormalizeId(id)] or MutationConfig.GetDefault()
+	return entry.color
+end
+
 function MutationConfig.GetVisual(name: string)
 	return VISUALS[name] or VISUALS.Default
 end
@@ -142,6 +169,30 @@ function MutationConfig.GetTextureVariant(name: string): string?
 	local visual = MutationConfig.GetVisual(name)
 	if typeof(visual) == "table" and typeof(visual.textureVariant) == "string" and visual.textureVariant ~= "" then
 		return visual.textureVariant
+	end
+
+	return nil
+end
+
+function MutationConfig.ResolveModel(value: any): Model?
+	local mutationId = MutationConfig.NormalizeId(value)
+	if mutationId == MutationConfig.GetDefault().id then
+		return nil
+	end
+
+	local mutationEntry = BY_ID[mutationId]
+	if mutationEntry == nil then
+		return nil
+	end
+
+	local mutationVFXFolder = getMutationVFXFolder()
+	if mutationVFXFolder == nil then
+		return nil
+	end
+
+	local mutationModel = mutationVFXFolder:FindFirstChild(mutationEntry.displayName)
+	if mutationModel and mutationModel:IsA("Model") then
+		return mutationModel
 	end
 
 	return nil

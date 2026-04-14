@@ -1,9 +1,13 @@
 local OwnedBodyParts = require(script.Parent.Parent.Shared.Character.OwnedBodyParts)
+local OwnedAuras = require(script.Parent.Parent.Shared.Character.OwnedAuras)
+local OwnedPotions = require(script.Parent.Parent.Shared.Character.OwnedPotions)
+local MerchantShopState = require(script.Parent.Parent.Shared.Character.MerchantShopState)
 local BodyPartLoadout = require(script.Parent.Parent.Shared.Character.BodyPartLoadout)
 local RollTargetRegions = require(script.Parent.Parent.Shared.Character.RollTargetRegions)
 local RollSelection = require(script.Parent.Parent.Shared.Character.OwnedRollTypes)
 local RollingConfig = require(script.Parent.Parent.Shared.Config.RollingConfig)
 local AchievementState = require(script.Parent.Parent.Shared.Titles.AchievementState)
+local PlayerStats = require(script.Parent.Parent.Shared.Stats.PlayerStats)
 
 return {
 	Money = {
@@ -21,9 +25,29 @@ return {
 		value = {},
 	},
 
+	Stats = {
+		key = "stats",
+		value = PlayerStats.CreateEmpty(),
+	},
+
 	BodyParts = {
 		key = "bodyParts",
 		value = OwnedBodyParts.CreateEmptyState(),
+	},
+
+	Auras = {
+		key = "auras",
+		value = OwnedAuras.CreateEmptyState(),
+	},
+
+	Potions = {
+		key = "potions",
+		value = OwnedPotions.CreateEmptyState(),
+	},
+
+	MerchantShop = {
+		key = "merchantShop",
+		value = MerchantShopState.CreateEmptyState(),
 	},
 
 	EquippedLoadout = {
@@ -38,6 +62,11 @@ return {
 
 	EquippedTitleId = {
 		key = "equippedTitleId",
+		value = "",
+	},
+
+	EquippedAuraId = {
+		key = "equippedAuraId",
 		value = "",
 	},
 
@@ -63,6 +92,11 @@ return {
 
 	QuickRollEnabled = {
 		key = "quickRollEnabled",
+		value = false,
+	},
+
+	AutoSizeEnabled = {
+		key = "autoSizeEnabled",
 		value = false,
 	},
 

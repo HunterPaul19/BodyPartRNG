@@ -1,8 +1,8 @@
 local Runtime = {}
 
 Runtime.DefaultScale = 1
-Runtime.MinScale = 0.4
-Runtime.MaxScale = 2.5
+Runtime.MinScale = 0.5
+Runtime.MaxScale = 3
 
 function Runtime.GetScaleBounds(_pieceId: string): (number, number)
 	return Runtime.MinScale, Runtime.MaxScale

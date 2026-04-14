@@ -1,6 +1,6 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Globals = require(ReplicatedStorage.Lists.Globals)
+local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local RollTypes = require(ReplicatedStorage.Shared.Config.RollTypes)
 local RollTargetRegions = require(ReplicatedStorage.Shared.Character.RollTargetRegions)
 local BodyPartIcons = require(ReplicatedStorage.Shared.Config.BodyPartIcons)
@@ -8,10 +8,13 @@ local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catal
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
+local PerfStats = require(ReplicatedStorage.Shared.Diagnostics.PerfStats)
 local RollMath = require(ReplicatedStorage.Shared.Rolling.RollMath)
 local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
+local PotionService = require(script.Parent.PotionService)
 local PurchaseReceiptService = require(script.Parent.PurchaseReceiptService)
+local StatsService = require(script.Parent.StatsService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local ROLLING_FOLDER_NAME = "Rolling"
@@ -24,7 +27,7 @@ local TOGGLE_AUTO_SELL_RARITY_REMOTE_NAME = "ToggleAutoSellRarity"
 local FINALIZE_AUTO_SELL_ROLL_REMOTE_NAME = "FinalizeAutoSellRoll"
 local PROMPT_QUICK_ROLL_PURCHASE_REMOTE_NAME = "PromptQuickRollPurchase"
 local UPDATED_REMOTE_NAME = "RollingUpdated"
-local PREVIEW_SEQUENCE_LENGTH = 10
+local BASE_ROLL_COOLDOWN = 1
 
 local remotesFolder: Folder? = nil
 local rollingRemotesFolder: Folder? = nil
@@ -40,8 +43,17 @@ local updatedRemote: RemoteEvent? = nil
 local rollLocks: { [Player]: boolean } = {}
 local pendingAutoSellByPlayer: { [Player]: { [string]: { displayRarity: string, ownedId: string } } } = {}
 local loadoutChangedConnection = nil
+local potionStateChangedConnection = nil
 
 local RollService = {}
+
+local function formatWholeNumber(value: any): string
+	return NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0)))
+end
+
+local function formatMoney(value: any): string
+	return "$" .. NumberFormatter.Format(math.max(0, math.round(tonumber(value) or 0)))
+end
 
 local function getQuickRollPassConfig()
 	return PurchaseReceiptService.RobuxPurchases.Passes.quick_roll
@@ -54,6 +66,11 @@ local function response(ok: boolean, message: string, state: any?, rollResult: a
 		state = state,
 		rollResult = rollResult,
 	}
+end
+
+local function markDeltaState(state: { [string]: any })
+	state._isDelta = true
+	return state
 end
 
 local function ensureRemotesFolder(): Folder
@@ -200,6 +217,28 @@ local function buildAutoSellState(player: Player)
 	return DataService:GetAutoSellRarities(player)
 end
 
+local function getEffectiveBonuses(player: Player)
+	local loadoutBonuses = BodyPartService:GetComputedLoadoutBonuses(player)
+	local potionBonuses = PotionService:GetRuntimeBonuses(player)
+
+	return {
+		passiveIncomePerSecond = tonumber(loadoutBonuses.passiveIncomePerSecond) or 0,
+		luckBonus = (tonumber(loadoutBonuses.luckBonus) or 0) + (tonumber(potionBonuses.luckBonus) or 0),
+		rollSpeedBonus = (tonumber(loadoutBonuses.rollSpeedBonus) or 0) + (tonumber(potionBonuses.rollSpeedBonus) or 0),
+		activeSetId = loadoutBonuses.activeSetId,
+	}, potionBonuses, loadoutBonuses
+end
+
+local function getEffectiveRollCooldown(player: Player, bonuses: any, quickRollState: any?): number
+	local totalRollSpeedBonus = math.max(0, tonumber(bonuses and bonuses.rollSpeedBonus) or 0)
+	local cooldownDuration = BASE_ROLL_COOLDOWN / math.max(1, 1 + totalRollSpeedBonus)
+	local resolvedQuickRollState = if typeof(quickRollState) == "table" then quickRollState else buildQuickRollState(player)
+	if resolvedQuickRollState.enabled == true then
+		cooldownDuration *= 0.5
+	end
+	return cooldownDuration
+end
+
 local function getPendingAutoSellState(player: Player): { [string]: { displayRarity: string, ownedId: string } }
 	local pendingState = pendingAutoSellByPlayer[player]
 	if pendingState then
@@ -236,20 +275,30 @@ local function isOwnedIdEquipped(player: Player, ownedId: string): boolean
 end
 
 local function computeLuckState(player: Player, rollTypeConfig, successfulRollCount: number)
-	local bonuses = BodyPartService:GetComputedLoadoutBonuses(player)
+	local bonuses, potionBonuses = getEffectiveBonuses(player)
 	local equippedLuckBonus = math.max(0, tonumber(bonuses.luckBonus) or 0)
 	local rollsSinceBonusRoll = RollMath.GetBonusChargeProgress(successfulRollCount, RollingConfig.BonusInterval)
 	local useBonusRoll = RollMath.IsBonusRoll(successfulRollCount, RollingConfig.BonusInterval)
 	local luckBoostReady = RollMath.IsBonusReady(successfulRollCount, RollingConfig.BonusInterval)
 	local isVipOwned = DataService:GetVipOwned(player)
-	local machineLuck = math.max(0.05, tonumber(rollTypeConfig.luckMultiplier) or 1)
-	local bonusLuck = if useBonusRoll then machineLuck * RollingConfig.BonusMultiplier else machineLuck
-	local vipLuck = bonusLuck * (if isVipOwned then RollingConfig.VipMultiplier else 1)
-	local equippedLuckMultiplier = math.max(0.05, 1 + equippedLuckBonus)
-	local rawLuck = vipLuck * equippedLuckMultiplier
+	local machineLuck = math.max(1, tonumber(rollTypeConfig.luckMultiplier) or 1)
+	local equippedLuckMultiplier = math.max(1, 1 + equippedLuckBonus)
+	local basicLuckBonus = math.max(0, (machineLuck - 1) + equippedLuckBonus)
+	local baseLuck = 1 + basicLuckBonus
+	local bonusRollMultiplier = if useBonusRoll then RollingConfig.BonusMultiplier else 1
+	local specialLuckBonus = 0
+	local vipMultiplier = if isVipOwned then RollingConfig.VipMultiplier else 1
+	local bonusLuck = (baseLuck * bonusRollMultiplier) + specialLuckBonus
+	local vipLuck = bonusLuck * vipMultiplier
+	local rawLuck = vipLuck
 
 	return {
 		machineLuck = machineLuck,
+		basicLuckBonus = basicLuckBonus,
+		baseLuck = baseLuck,
+		bonusRollMultiplier = bonusRollMultiplier,
+		specialLuckBonus = specialLuckBonus,
+		vipMultiplier = vipMultiplier,
 		bonusLuck = bonusLuck,
 		vipLuck = vipLuck,
 		equippedLuckMultiplier = equippedLuckMultiplier,
@@ -260,38 +309,48 @@ local function computeLuckState(player: Player, rollTypeConfig, successfulRollCo
 		successfulRollCount = successfulRollCount,
 		nextRollNumber = successfulRollCount + 1,
 		rollsSinceBonusRoll = rollsSinceBonusRoll,
-	}, bonuses
+		potionLuckBonus = tonumber(potionBonuses.luckBonus) or 0,
+	}, bonuses, potionBonuses
 end
 
 local function buildAdjustedRollEntries(rawLuck: number)
-	local adjustedEntries = table.create(#BodyPartsCatalog.GetRollEntries())
+	local rollEntries = BodyPartsCatalog.GetRollEntries()
+	local adjustedEntries = table.create(#rollEntries)
 
-	for index, rollEntry in ipairs(BodyPartsCatalog.GetRollEntries()) do
-		local rarityEffectiveness = RollingConfig.GetRarityEffectiveness(rollEntry.rollDisplay.rarity)
-		local effectiveLuck = RollMath.GetEffectiveLuck(rawLuck, rarityEffectiveness)
-		local adjustedWeight = RollMath.GetAdjustedWeight(rollEntry.baseChance, effectiveLuck)
-		adjustedEntries[index] = {
+	for index = #rollEntries, 1, -1 do
+		local rollEntry = rollEntries[index]
+		table.insert(adjustedEntries, {
 			setId = rollEntry.id,
 			setConfig = rollEntry,
 			displayedDenominator = rollEntry.displayedDenominator,
 			baseChance = rollEntry.baseChance,
-			rarityEffectiveness = rarityEffectiveness,
-			effectiveLuck = effectiveLuck,
-			adjustedWeight = adjustedWeight,
-		}
+			adjustedDenominator = RollMath.GetAdjustedDenominator(rollEntry.displayedDenominator, rawLuck),
+		})
 	end
 
-	local normalizedEntries, totalWeight = RollMath.NormalizeWeights(adjustedEntries, function(entry)
-		return entry.adjustedWeight
-	end)
+	local remainingProbability = 1
+	local lastIndex = #adjustedEntries
+	for index, entry in ipairs(adjustedEntries) do
+		entry.rollSuccessChance = 1 / entry.adjustedDenominator
+		if index == lastIndex then
+			entry.probability = remainingProbability
+		else
+			entry.probability = remainingProbability * entry.rollSuccessChance
+			remainingProbability *= 1 - entry.rollSuccessChance
+		end
+	end
 
-	return normalizedEntries, totalWeight
+	return adjustedEntries
 end
 
 local function chooseWeightedSet(randomSource: Random, adjustedEntries)
-	return RollMath.ChooseWeighted(randomSource, adjustedEntries, function(entry)
-		return entry.adjustedWeight
-	end)
+	for _, entry in ipairs(adjustedEntries) do
+		if RollMath.RollDenominator(randomSource, entry.adjustedDenominator) then
+			return entry
+		end
+	end
+
+	return adjustedEntries[#adjustedEntries]
 end
 
 local function choosePieceFromSet(randomSource: Random, setId: string)
@@ -333,7 +392,8 @@ local function rollMutation(randomSource: Random)
 end
 
 local function rollSize(randomSource: Random)
-	return chooseVariantEntry(randomSource, SizeConfig.GetOrdered()) or SizeConfig.GetDefault()
+	local sizeData = chooseVariantEntry(randomSource, SizeConfig.GetOrdered()) or SizeConfig.GetDefault()
+	return sizeData, SizeConfig.RollScale(randomSource, sizeData)
 end
 
 local function createRollDisplayEntry(piece, resultData): (any?, string?)
@@ -342,14 +402,11 @@ local function createRollDisplayEntry(piece, resultData): (any?, string?)
 		return nil, string.format("Missing set config for piece '%s'.", piece.id)
 	end
 
-	local bundleModel = BodyPartsCatalog.ResolveBundleModel(piece.id)
-	if not bundleModel then
-		return nil, string.format("Missing bundle model for piece '%s'.", piece.id)
-	end
-
 	local rollDisplay = setConfig.rollDisplay
 	local mutationData = resultData and resultData.mutationData or MutationConfig.GetDefault()
 	local sizeData = resultData and resultData.sizeData or SizeConfig.GetDefault()
+	local sizeScale = tonumber(resultData and resultData.sizeScale) or SizeConfig.GetRepresentativeScale(sizeData.id)
+	local sizeMoneyMultiplier = tonumber(resultData and resultData.sizeMoneyMultiplier) or SizeConfig.GetMoneyMultiplier(sizeData.id)
 	local finalPassiveIncomePerSecond = tonumber(resultData and resultData.finalPassiveIncomePerSecond) or piece.passiveIncomePerSecond
 
 	return {
@@ -363,7 +420,6 @@ local function createRollDisplayEntry(piece, resultData): (any?, string?)
 		Font = rollDisplay.fontFace,
 		Weight = rollDisplay.fontWeight,
 		Rarity = rollDisplay.rarity,
-		Model = bundleModel,
 		PieceId = piece.id,
 		PieceDisplayName = piece.displayName,
 		SetId = setConfig.id,
@@ -375,60 +431,36 @@ local function createRollDisplayEntry(piece, resultData): (any?, string?)
 		MutationMultiplier = mutationData.multiplier,
 		Size = sizeData.displayName,
 		SizeId = sizeData.id,
-		SizeMultiplier = sizeData.multiplier,
+		SizeMultiplier = sizeScale,
+		SizeMoneyMultiplier = sizeMoneyMultiplier,
 		VariantMultiplier = tonumber(resultData and resultData.variantMultiplier) or 1,
 		EffectiveRawLuck = tonumber(resultData and resultData.rawLuck) or nil,
 		IsBonusRoll = resultData and resultData.useBonusRoll == true or false,
 	}, nil
 end
 
-local function buildPreviewSequence(randomSource: Random, adjustedEntries, rollRegion: string, finalPiece, finalResultData): (any?, string?)
-	local previewSequence = table.create(PREVIEW_SEQUENCE_LENGTH)
-
-	for index = 1, PREVIEW_SEQUENCE_LENGTH - 1 do
-		local previewSet = chooseWeightedSet(randomSource, adjustedEntries)
-		if not previewSet then
-			return nil, "Preview roll failed because no body part sets were available."
-		end
-
-		local previewPiece = choosePieceFromSetForRegion(randomSource, previewSet.setId, rollRegion)
-		if not previewPiece then
-			return nil, string.format("Preview roll failed because set '%s' has no pieces for region '%s'.", previewSet.setId, rollRegion)
-		end
-
-		local previewEntry, previewError = createRollDisplayEntry(previewPiece, {
-			rawLuck = finalResultData.rawLuck,
-			useBonusRoll = finalResultData.useBonusRoll,
-		})
-		if not previewEntry then
-			return nil, previewError
-		end
-
-		previewSequence[index] = previewEntry
-	end
-
-	local finalEntry, finalError = createRollDisplayEntry(finalPiece, finalResultData)
-	if not finalEntry then
-		return nil, finalError
-	end
-
-	previewSequence[PREVIEW_SEQUENCE_LENGTH] = finalEntry
-	return previewSequence, nil
-end
-
 local function summarizeProbabilityTable(adjustedEntries)
+	local sortedEntries = table.clone(adjustedEntries)
+	table.sort(sortedEntries, function(a, b)
+		if a.probability ~= b.probability then
+			return a.probability > b.probability
+		end
+		return a.displayedDenominator < b.displayedDenominator
+	end)
+
 	local lines = {}
-	local maxLines = math.min(5, #adjustedEntries)
+	local maxLines = math.min(5, #sortedEntries)
 
 	for index = 1, maxLines do
-		local entry = adjustedEntries[index]
+		local entry = sortedEntries[index]
 		local rollDisplay = entry.setConfig.rollDisplay
 		table.insert(
 			lines,
 			string.format(
-				"%s | 1/%s shown | %.4f%% hidden",
+				"%s | 1/%s shown | 1/%s adjusted | %.4f%% hidden",
 				rollDisplay.displayName,
-				Globals.formatNumber(entry.displayedDenominator, false, true),
+				formatWholeNumber(entry.displayedDenominator),
+				formatWholeNumber(entry.adjustedDenominator),
 				(entry.probability or 0) * 100
 			)
 		)
@@ -446,14 +478,16 @@ function RollService:GetProbabilityDebug(player: Player, options: any?)
 	if typeof(options) == "table" then
 		if options.forceBonusRoll == true then
 			luckState.useBonusRoll = true
-			luckState.bonusLuck = luckState.machineLuck * RollingConfig.BonusMultiplier
-			luckState.vipLuck = luckState.bonusLuck * (if luckState.isVipOwned then RollingConfig.VipMultiplier else 1)
-			luckState.rawLuck = luckState.vipLuck * luckState.equippedLuckMultiplier
+			luckState.bonusRollMultiplier = RollingConfig.BonusMultiplier
+			luckState.bonusLuck = (luckState.baseLuck * luckState.bonusRollMultiplier) + luckState.specialLuckBonus
+			luckState.vipLuck = luckState.bonusLuck * luckState.vipMultiplier
+			luckState.rawLuck = luckState.vipLuck
 		end
 		if options.forceVipOwned ~= nil then
 			luckState.isVipOwned = options.forceVipOwned == true
-			luckState.vipLuck = luckState.bonusLuck * (if luckState.isVipOwned then RollingConfig.VipMultiplier else 1)
-			luckState.rawLuck = luckState.vipLuck * luckState.equippedLuckMultiplier
+			luckState.vipMultiplier = if luckState.isVipOwned then RollingConfig.VipMultiplier else 1
+			luckState.vipLuck = luckState.bonusLuck * luckState.vipMultiplier
+			luckState.rawLuck = luckState.vipLuck
 		end
 	end
 
@@ -470,6 +504,8 @@ function RollService:GetProbabilityDebug(player: Player, options: any?)
 		rollTypeDisplayName = rollType.displayName,
 		rawLuck = luckState.rawLuck,
 		machineLuck = luckState.machineLuck,
+		baseLuck = luckState.baseLuck,
+		basicLuckBonus = luckState.basicLuckBonus,
 		bonusLuck = luckState.bonusLuck,
 		vipLuck = luckState.vipLuck,
 		equippedLuckMultiplier = luckState.equippedLuckMultiplier,
@@ -489,8 +525,10 @@ function RollService:GetRollingState(player: Player, message: string?)
 	local rollRegionEntries, selectedRollRegion, selectedRollRegionIcon = buildRollRegionState(player)
 	local selectedRollType = RollTypes.Get(selectedRollTypeId) or RollTypes.GetDefault()
 	local successfulRollCount = DataService:GetSuccessfulRollCount(player)
-	local luckState, bonuses = computeLuckState(player, selectedRollType, successfulRollCount)
-	local baseTotalLuck = luckState.machineLuck * luckState.equippedLuckMultiplier
+	local quickRollState = buildQuickRollState(player)
+	local luckState, bonuses, potionBonuses = computeLuckState(player, selectedRollType, successfulRollCount)
+	local baseTotalLuck = luckState.baseLuck
+	local effectiveRollCooldown = getEffectiveRollCooldown(player, bonuses, quickRollState)
 
 	return {
 		money = DataService:GetMoney(player),
@@ -514,7 +552,7 @@ function RollService:GetRollingState(player: Player, message: string?)
 		willUseBonusRoll = luckState.useBonusRoll,
 		baseTotalLuck = baseTotalLuck,
 		totalLuck = luckState.rawLuck,
-		baseRawLuck = luckState.machineLuck,
+		baseRawLuck = luckState.baseLuck,
 		rawLuck = luckState.rawLuck,
 		bonusLuck = luckState.bonusLuck,
 		vipLuck = luckState.vipLuck,
@@ -524,14 +562,70 @@ function RollService:GetRollingState(player: Player, message: string?)
 		bonusMultiplier = RollingConfig.BonusMultiplier,
 		vipMultiplier = RollingConfig.VipMultiplier,
 		nextRollNumber = luckState.nextRollNumber,
-		quickRoll = buildQuickRollState(player),
+		potionBonuses = potionBonuses,
+		quickRoll = quickRollState,
+		effectiveRollCooldown = effectiveRollCooldown,
 		autoSellRarities = buildAutoSellState(player),
 		message = message,
 	}
 end
 
+function RollService:GetRollingDeltaState(player: Player, message: string?)
+	local selectedRollTypeId = DataService:GetSelectedRollType(player)
+	local selectedRollType = RollTypes.Get(selectedRollTypeId) or RollTypes.GetDefault()
+	local successfulRollCount = DataService:GetSuccessfulRollCount(player)
+	local quickRollState = buildQuickRollState(player)
+	local luckState, bonuses, potionBonuses = computeLuckState(player, selectedRollType, successfulRollCount)
+	local effectiveRollCooldown = getEffectiveRollCooldown(player, bonuses, quickRollState)
+	local rollRegionEntries, selectedRollRegion, selectedRollRegionIcon = buildRollRegionState(player)
+
+	return markDeltaState({
+		money = DataService:GetMoney(player),
+		rollRegions = rollRegionEntries,
+		selectedRollTypeId = selectedRollType.id,
+		selectedRollRegion = selectedRollRegion,
+		selectedRollRegionIcon = selectedRollRegionIcon,
+		selectedRollType = {
+			id = selectedRollType.id,
+			displayName = selectedRollType.displayName,
+			moneyCost = selectedRollType.moneyCost,
+			luckMultiplier = selectedRollType.luckMultiplier,
+		},
+		bonuses = bonuses,
+		potionBonuses = potionBonuses,
+		successfulRollCount = successfulRollCount,
+		rollsSinceLuckyRoll = luckState.rollsSinceBonusRoll,
+		luckyRollGoal = RollingConfig.BonusInterval,
+		luckBoostReady = luckState.luckBoostReady,
+		willUsePityBoost = luckState.useBonusRoll,
+		willUseBonusRoll = luckState.useBonusRoll,
+		baseTotalLuck = luckState.baseLuck,
+		totalLuck = luckState.rawLuck,
+		baseRawLuck = luckState.baseLuck,
+		rawLuck = luckState.rawLuck,
+		bonusLuck = luckState.bonusLuck,
+		vipLuck = luckState.vipLuck,
+		equippedLuckMultiplier = luckState.equippedLuckMultiplier,
+		isVipOwned = luckState.isVipOwned,
+		bonusInterval = RollingConfig.BonusInterval,
+		bonusMultiplier = RollingConfig.BonusMultiplier,
+		vipMultiplier = RollingConfig.VipMultiplier,
+		nextRollNumber = luckState.nextRollNumber,
+		quickRoll = quickRollState,
+		effectiveRollCooldown = effectiveRollCooldown,
+		autoSellRarities = buildAutoSellState(player),
+		message = message,
+	})
+end
+
 function RollService:NotifyClient(player: Player, message: string?)
-	ensureUpdatedRemote():FireClient(player, self:GetRollingState(player, message))
+	local startedAt = PerfStats.Begin()
+	local payload = self:GetRollingDeltaState(player, message)
+	ensureUpdatedRemote():FireClient(player, payload)
+	PerfStats.Measure("RollingUpdated", startedAt, {
+		payload = payload,
+		detail = player.Name,
+	})
 end
 
 function RollService:SelectRollType(player: Player, rollTypeId: string): (boolean, string)
@@ -540,18 +634,26 @@ function RollService:SelectRollType(player: Player, rollTypeId: string): (boolea
 		return false, "That roll type does not exist."
 	end
 
+	local previousRollTypeId = DataService:GetSelectedRollType(player)
 	local ok, message = DataService:SetSelectedRollType(player, rollTypeId)
 	if not ok then
 		return false, message or "Failed to select the roll type."
+	end
+	if previousRollTypeId ~= rollTypeId then
+		StatsService:RecordSettingChange(player, "roll_type")
 	end
 
 	return true, string.format("Selected %s.", rollType.displayName)
 end
 
 function RollService:SelectRollRegion(player: Player, rollRegion: string): (boolean, string)
+	local previousRollRegion = DataService:GetSelectedRollRegion(player)
 	local ok, message = DataService:SetSelectedRollRegion(player, rollRegion)
 	if not ok then
 		return false, message or "Failed to select the roll region."
+	end
+	if previousRollRegion ~= rollRegion then
+		StatsService:RecordSettingChange(player, "roll_region")
 	end
 
 	local iconEntry = BodyPartIcons[rollRegion]
@@ -564,9 +666,13 @@ function RollService:ToggleQuickRoll(player: Player, enabled: boolean): (boolean
 		return false, "Quick Roll requires the gamepass."
 	end
 
+	local previousEnabled = quickRollState.enabled == true
 	local ok, message = DataService:SetQuickRollEnabled(player, enabled == true)
 	if not ok then
 		return false, message or "Failed to update Quick Roll."
+	end
+	if previousEnabled ~= (enabled == true) then
+		StatsService:RecordSettingChange(player, "quick_roll")
 	end
 
 	return true, if enabled then "Quick Roll enabled." else "Quick Roll disabled."
@@ -578,9 +684,13 @@ function RollService:ToggleAutoSellRarity(player: Player, displayRarity: any, en
 		return false, "That auto-sell rarity does not exist."
 	end
 
+	local wasEnabled = DataService:IsAutoSellEnabledForRarity(player, normalizedRarity)
 	local ok, message = DataService:SetAutoSellRarityEnabled(player, normalizedRarity, enabled == true)
 	if not ok then
 		return false, message or "Failed to update auto-sell."
+	end
+	if wasEnabled ~= (enabled == true) then
+		StatsService:RecordSettingChange(player, "auto_sell")
 	end
 
 	return true, message or string.format(
@@ -609,6 +719,7 @@ function RollService:FinalizeAutoSellRoll(player: Player, payload: any): (boolea
 	clearPendingAutoSell(player, ownedId)
 
 	if payload.keep == true or isOwnedIdEquipped(player, ownedId) then
+		StatsService:RecordAutoSellOutcome(player, "kept")
 		return true, string.format("Kept %s roll result.", pendingEntry.displayRarity)
 	end
 
@@ -616,6 +727,7 @@ function RollService:FinalizeAutoSellRoll(player: Player, payload: any): (boolea
 	if not sold then
 		return false, sellMessage or "Failed to auto-sell the roll result."
 	end
+	StatsService:RecordAutoSellOutcome(player, "sold")
 
 	return true, sellMessage or string.format("Auto-sold %s roll result.", pendingEntry.displayRarity)
 end
@@ -635,7 +747,13 @@ function RollService:PromptQuickRollPurchase(player: Player): (boolean, string)
 end
 
 function RollService:PerformRoll(player: Player): (boolean, string, any?)
+	local startedAt = PerfStats.Begin()
+	StatsService:RecordRollRequest(player)
 	if rollLocks[player] then
+		StatsService:RecordRollFailure(player, "locked")
+		PerfStats.Measure("PerformRoll", startedAt, {
+			detail = string.format("%s:locked", player.Name),
+		})
 		return false, "A roll is already in progress.", nil
 	end
 
@@ -646,51 +764,80 @@ function RollService:PerformRoll(player: Player): (boolean, string, any?)
 	local selectedRollRegion = DataService:GetSelectedRollRegion(player)
 	if not selectedRollType then
 		rollLocks[player] = nil
+		StatsService:RecordRollFailure(player, "invalid_selection")
+		PerfStats.Measure("PerformRoll", startedAt, {
+			detail = string.format("%s:invalid_selection", player.Name),
+		})
 		return false, "No valid roll type is selected.", nil
 	end
 
 	local currentMoney = DataService:GetMoney(player)
 	if currentMoney < selectedRollType.moneyCost then
 		rollLocks[player] = nil
-		return false, string.format("You need %s more money to use %s.", Globals.formatNumber(selectedRollType.moneyCost - currentMoney, false, true), selectedRollType.displayName), nil
+		StatsService:RecordRollFailure(player, "insufficient_money")
+		PerfStats.Measure("PerformRoll", startedAt, {
+			detail = string.format("%s:insufficient_money", player.Name),
+		})
+		return false, string.format(
+			"You need %s more money to use %s.",
+			formatMoney(selectedRollType.moneyCost - currentMoney),
+			selectedRollType.displayName
+		), nil
 	end
 
 	local successfulRollCount = DataService:GetSuccessfulRollCount(player)
 	local luckState, bonuses = computeLuckState(player, selectedRollType, successfulRollCount)
+	local quickRollApplied = buildQuickRollState(player).enabled == true
 	local adjustedEntries = buildAdjustedRollEntries(luckState.rawLuck)
 	local randomSource = Random.new()
 	local finalSet = chooseWeightedSet(randomSource, adjustedEntries)
 	if not finalSet then
 		rollLocks[player] = nil
+		StatsService:RecordRollFailure(player, "missing_config")
+		PerfStats.Measure("PerformRoll", startedAt, {
+			detail = string.format("%s:missing_set", player.Name),
+		})
 		return false, "No body part sets are configured for rolling.", nil
 	end
 
 	local finalPiece = choosePieceFromSetForRegion(randomSource, finalSet.setId, selectedRollRegion)
 	if not finalPiece then
 		rollLocks[player] = nil
+		StatsService:RecordRollFailure(player, "missing_config")
+		PerfStats.Measure("PerformRoll", startedAt, {
+			detail = string.format("%s:missing_piece", player.Name),
+		})
 		return false, string.format("No body parts are configured for %s rolls.", selectedRollRegion), nil
 	end
+	local didDiscoverPieceFirstTime = not DataService:HasDiscoveredBodyPartPiece(player, finalPiece.id)
 
 	local mutationData = rollMutation(randomSource)
-	local sizeData = rollSize(randomSource)
-	local variantMultiplier = RollMath.ComputeVariantMultiplier(mutationData.multiplier, sizeData.multiplier)
+	local sizeData, sizeScale = rollSize(randomSource)
+	local sizeMoneyMultiplier = SizeConfig.GetMoneyMultiplier(sizeData.id)
+	local variantMultiplier = RollMath.ComputeVariantMultiplier(mutationData.multiplier, sizeMoneyMultiplier)
 	local finalPassiveIncomePerSecond = RollMath.ComputeFinalPassiveIncome(finalPiece.passiveIncomePerSecond, variantMultiplier)
 	local finalResultData = {
 		mutationData = mutationData,
 		sizeData = sizeData,
+		sizeScale = sizeScale,
+		sizeMoneyMultiplier = sizeMoneyMultiplier,
 		variantMultiplier = variantMultiplier,
 		finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
 		rawLuck = luckState.rawLuck,
 		useBonusRoll = luckState.useBonusRoll,
 	}
 
-	local previewSequence, previewError = buildPreviewSequence(randomSource, adjustedEntries, selectedRollRegion, finalPiece, finalResultData)
-	if not previewSequence then
+	local finalResult, finalResultError = createRollDisplayEntry(finalPiece, finalResultData)
+	if not finalResult then
 		rollLocks[player] = nil
-		return false, previewError or "Failed to build the roll preview sequence.", nil
+		StatsService:RecordRollFailure(player, "missing_config")
+		PerfStats.Measure("PerformRoll", startedAt, {
+			detail = string.format("%s:missing_result", player.Name),
+		})
+		return false, finalResultError or "Failed to build the final roll result.", nil
 	end
 
-	local remainingMoney = DataService:AdjustMoney(player, -selectedRollType.moneyCost)
+	local remainingMoney = DataService:AdjustMoney(player, -selectedRollType.moneyCost, "roll_cost")
 
 	local ownedRecord, grantError = DataService:AddOwnedBodyPart(player, {
 		pieceId = finalPiece.id,
@@ -703,41 +850,77 @@ function RollService:PerformRoll(player: Player): (boolean, string, any?)
 		mutation = mutationData.displayName,
 		mutationMultiplier = mutationData.multiplier,
 		sizeId = sizeData.id,
-		sizeMultiplier = sizeData.multiplier,
+		sizeMultiplier = sizeScale,
 		variantMultiplier = variantMultiplier,
 		finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
 	})
 	if not ownedRecord then
-		DataService:AddMoney(player, selectedRollType.moneyCost)
+		StatsService:RecordRollFailure(player, "grant_failed")
+		DataService:AddMoney(player, selectedRollType.moneyCost, "other")
 		rollLocks[player] = nil
+		PerfStats.Measure("PerformRoll", startedAt, {
+			detail = string.format("%s:grant_failed", player.Name),
+		})
 		return false, grantError or "Failed to save the rolled body part.", nil
 	end
 
 	local updatedSuccessfulRollCount = DataService:IncrementSuccessfulRollCount(player)
-	local finalResult = previewSequence[#previewSequence]
 	local autoSellRarity = RollingConfig.NormalizeDisplayRarity(finalSet.setConfig.rollDisplay.rarity)
-	local pendingAutoSell = DataService:IsAutoSellEnabledForRarity(player, autoSellRarity)
+	local autoSellEnabledForRarity = DataService:IsAutoSellEnabledForRarity(player, autoSellRarity)
+	local pendingAutoSell = (not quickRollApplied) and autoSellEnabledForRarity
+	local autoSoldInstantly = false
+	local rollMessage = string.format("Rolled %s.", finalResult.Name)
 	if pendingAutoSell then
 		getPendingAutoSellState(player)[ownedRecord.ownedId] = {
 			displayRarity = autoSellRarity,
 			ownedId = ownedRecord.ownedId,
 		}
+	elseif quickRollApplied and autoSellEnabledForRarity then
+		local sold, sellMessage = BodyPartService:SellOwnedBodyPart(player, ownedRecord.ownedId)
+		if sold then
+			autoSoldInstantly = true
+			StatsService:RecordAutoSellOutcome(player, "sold")
+			rollMessage = sellMessage or string.format("Auto-sold %s.", finalResult.Name)
+		else
+			warn(string.format(
+				"[RollService] Immediate auto-sell failed for %s (%s): %s",
+				player.Name,
+				ownedRecord.ownedId,
+				tostring(sellMessage)
+			))
+			rollMessage = string.format("Auto-sell failed for %s; item kept.", finalResult.Name)
+		end
 	end
+	StatsService:RecordRollSuccess(player, {
+		rollTypeId = selectedRollType.id,
+		rollRegion = selectedRollRegion,
+		displayRarity = autoSellRarity,
+		setId = finalSet.setId,
+		mutationId = mutationData.id,
+		sizeId = sizeData.id,
+		displayedDenominator = finalSet.displayedDenominator,
+		pieceId = finalPiece.id,
+		variantMultiplier = variantMultiplier,
+		serialNumber = ownedRecord.serialNumber,
+		didDiscoverPieceFirstTime = didDiscoverPieceFirstTime,
+		pendingAutoSell = pendingAutoSell,
+	})
 	local rollResult = {
-		previewSequence = previewSequence,
 		finalResult = finalResult,
 		ownedRecord = ownedRecord,
 		ownedId = ownedRecord.ownedId,
 		pendingAutoSell = pendingAutoSell,
-		autoSellRarity = if pendingAutoSell then autoSellRarity else nil,
+		autoSoldInstantly = autoSoldInstantly,
+		skipPresentation = quickRollApplied,
+		autoSellRarity = if (pendingAutoSell or autoSoldInstantly) then autoSellRarity else nil,
 		rollTypeId = selectedRollType.id,
 		rollRegion = selectedRollRegion,
 		moneySpent = selectedRollType.moneyCost,
 		remainingMoney = remainingMoney,
 		bonuses = bonuses,
-		baseTotalLuck = luckState.machineLuck * luckState.equippedLuckMultiplier,
+		baseTotalLuck = luckState.baseLuck,
 		totalLuck = luckState.rawLuck,
-		baseRawLuck = luckState.machineLuck,
+		baseRawLuck = luckState.baseLuck,
 		rawLuck = luckState.rawLuck,
 		bonusLuck = luckState.bonusLuck,
 		vipLuck = luckState.vipLuck,
@@ -756,14 +939,25 @@ function RollService:PerformRoll(player: Player): (boolean, string, any?)
 			displayRarity = finalSet.setConfig.rollDisplay.rarity,
 		},
 		mutationResult = mutationData,
-		sizeResult = sizeData,
+		sizeResult = {
+			id = sizeData.id,
+			displayName = sizeData.displayName,
+			minScale = sizeData.minScale,
+			maxScale = sizeData.maxScale,
+			moneyMultiplier = sizeMoneyMultiplier,
+			scale = sizeScale,
+		},
 		variantMultiplier = variantMultiplier,
 		finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
 	}
 
 	rollLocks[player] = nil
-	self:NotifyClient(player, string.format("Rolled %s.", finalResult.Name))
-	return true, string.format("Rolled %s.", finalResult.Name), rollResult
+	self:NotifyClient(player, rollMessage)
+	PerfStats.Measure("PerformRoll", startedAt, {
+		payload = rollResult,
+		detail = string.format("%s:ok", player.Name),
+	})
+	return true, rollMessage, rollResult
 end
 
 local function handleGetState(player: Player)
@@ -808,7 +1002,7 @@ end
 
 local function handleFinalizeAutoSellRoll(player: Player, payload: any)
 	local ok, message = RollService:FinalizeAutoSellRoll(player, payload)
-	return response(ok, message, RollService:GetRollingState(player))
+	return response(ok, message, RollService:GetRollingDeltaState(player, message))
 end
 
 local function handlePromptQuickRollPurchase(player: Player)
@@ -818,7 +1012,7 @@ end
 
 local function handlePerformRoll(player: Player)
 	local ok, message, rollResult = RollService:PerformRoll(player)
-	return response(ok, message, RollService:GetRollingState(player), rollResult)
+	return response(ok, message, RollService:GetRollingDeltaState(player, message), rollResult)
 end
 
 function RollService:OnStart()
@@ -918,6 +1112,7 @@ function RollService:OnStart()
 		end
 
 		rollLocks[player] = nil
+		StatsService:RecordRollFailure(player, "unexpected_error")
 		warn(string.format("[RollService] PerformRoll failed for %s: %s", player.Name, tostring(result)))
 		return response(false, "The roll failed on the server.", self:GetRollingState(player))
 	end
@@ -936,6 +1131,12 @@ function RollService:OnStart()
 
 	if BodyPartService.LoadoutChanged and not loadoutChangedConnection then
 		loadoutChangedConnection = BodyPartService.LoadoutChanged:Connect(function(player: Player)
+			self:NotifyClient(player)
+		end)
+	end
+
+	if PotionService.StateChanged and not potionStateChangedConnection then
+		potionStateChangedConnection = PotionService.StateChanged:Connect(function(player: Player)
 			self:NotifyClient(player)
 		end)
 	end

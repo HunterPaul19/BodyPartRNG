@@ -2,6 +2,13 @@
   "name": "GameTemplate",
   "tree": {
     "$className": "DataModel",
+    "ReplicatedFirst": {
+      "$className": "ReplicatedFirst",
+      "$ignoreUnknownInstances": true,
+      "LoadingBootstrap": {
+        "$path": "src/game/ReplicatedFirst/LoadingBootstrap.client.lua"
+      }
+    },
     "ReplicatedStorage": {
       "Packages": {
         "$path": "src/Packages"
@@ -54,6 +61,20 @@
           "$ignoreUnknownInstances": true,
           "Init": {
             "$path": "src/game/StarterGui/MainInterface/GUIControllerInit.client.lua"
+          }
+        },
+        "Roll": {
+          "$className": "Frame",
+          "$ignoreUnknownInstances": true,
+          "GUIControls": {
+            "$path": "src/game/StarterGui/MainInterface/Roll/GUIControls.lua"
+          }
+        },
+        "Leaderboard": {
+          "$className": "Frame",
+          "$ignoreUnknownInstances": true,
+          "GUIControls": {
+            "$path": "src/game/StarterGui/MainInterface/Leaderboard/GUIControls.lua"
           }
         }
       }

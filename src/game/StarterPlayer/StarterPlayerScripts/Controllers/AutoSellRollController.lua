@@ -55,7 +55,7 @@ end
 
 local function getPendingAutoSellPayload(guiControls): ({ [string]: any }?)
 	local rollResult = guiControls.CurrentRollResult
-	if typeof(rollResult) ~= "table" or rollResult.pendingAutoSell ~= true then
+	if typeof(rollResult) ~= "table" or rollResult.pendingAutoSell ~= true or rollResult.skipPresentation == true then
 		return nil
 	end
 
@@ -116,7 +116,7 @@ local function patchRollGuiControls(guiControls)
 		originalRefreshEquipButton(self)
 
 		local rollResult = self.CurrentRollResult
-		if typeof(rollResult) ~= "table" or rollResult.pendingAutoSell ~= true then
+		if typeof(rollResult) ~= "table" or rollResult.pendingAutoSell ~= true or rollResult.skipPresentation == true then
 			return
 		end
 

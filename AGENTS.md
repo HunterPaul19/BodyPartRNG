@@ -13,6 +13,7 @@ This file defines the required workflow for agents working in `C:\dev\BodyPartRN
 - Treat the local Rojo project as the source of truth for code.
 - Treat Roblox Studio, accessed through the MCP server, as the source of truth for non-code content.
 - Do not mix those ownership boundaries unless this file explicitly allows it.
+- Opt to not change the native text format of ui elements. Where possible try to just fill in values that should be templated.
 
 ## Local Filesystem / VS Code Only
 

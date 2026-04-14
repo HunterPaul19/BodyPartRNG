@@ -3,10 +3,12 @@ local ProximityPromptService = game:GetService("ProximityPromptService")
 local Workspace = game:GetService("Workspace")
 
 local DialogueController = require(script.Parent.DialogueController)
+local MerchantPresentationController = require(script.Parent.MerchantPresentationController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local DIALOGUE_ID_ATTRIBUTE = "DialogueId"
 local SHOP_FRAME_ATTRIBUTE = "ShopFrameName"
+local SHOP_CAMERA_PART_ATTRIBUTE = "ShopCameraPartName"
 
 local DialogueInteractionController = {
 	_started = false,
@@ -27,11 +29,60 @@ local function readStringAttribute(instance: Instance?, attributeName: string): 
 	return nil
 end
 
+local function findNamedBasePart(root: Instance, targetName: string): BasePart?
+	local current = root
+	if current:IsA("BasePart") and current.Name == targetName then
+		return current
+	end
+
+	local found = root:FindFirstChild(targetName, true)
+	if found and found:IsA("BasePart") then
+		return found
+	end
+
+	return nil
+end
+
+local function resolveShopCameraPart(source: Instance): BasePart?
+	local targetName = readStringAttribute(source, SHOP_CAMERA_PART_ATTRIBUTE)
+	if not targetName then
+		return nil
+	end
+
+	local current: Instance? = source
+	while current do
+		local resolved = findNamedBasePart(current, targetName)
+		if resolved then
+			return resolved
+		end
+		current = current.Parent
+	end
+
+	return nil
+end
+
+local function resolveSpeakerModel(source: Instance): Model?
+	local current: Instance? = source
+	while current do
+		if current:IsA("Model") then
+			local humanoid = current:FindFirstChildWhichIsA("Humanoid")
+			if humanoid then
+				return current
+			end
+		end
+		current = current.Parent
+	end
+
+	return nil
+end
+
 local function buildContext(source: Instance, interactionType: string): { [string]: any }
 	return {
 		interactionType = interactionType,
 		sourceInstance = source,
+		speakerModel = resolveSpeakerModel(source),
 		shopFrameName = readStringAttribute(source, SHOP_FRAME_ATTRIBUTE),
+		shopCameraPart = resolveShopCameraPart(source),
 	}
 end
 
@@ -40,6 +91,10 @@ local function resolveDialogueId(source: Instance): string?
 end
 
 function DialogueInteractionController:_handleInteraction(source: Instance, interactionType: string)
+	if MerchantPresentationController:IsOpen() then
+		return
+	end
+
 	local dialogueId = resolveDialogueId(source)
 	if not dialogueId then
 		return

@@ -6,6 +6,13 @@ local RawSets = require(script.Parent.Sets)
 
 export type BodyRegion = "Head" | "Torso" | "LeftArm" | "RightArm" | "LeftLeg" | "RightLeg"
 
+export type AttachRuleConfig = {
+	templateChildName: string?,
+	offsetCFrame: CFrame?,
+	visualOffsetCFrame: CFrame?,
+	hideCharacterPart: boolean?,
+}
+
 export type PieceConfig = {
 	id: string,
 	displayName: string,
@@ -17,6 +24,7 @@ export type PieceConfig = {
 	passiveIncomePerSecond: number,
 	luckBonus: number,
 	rollSpeedBonus: number,
+	attachRules: { [string]: AttachRuleConfig }?,
 }
 
 export type SetBonus = {
@@ -468,6 +476,15 @@ function Catalog.ResolveBundleModel(pieceId: string): Model?
 	end
 
 	return resolveBundleModelForPiece(piece)
+end
+
+function Catalog.ResolveAttachRules(pieceId: string): { [string]: AttachRuleConfig }?
+	local piece = PIECES_BY_ID[pieceId]
+	if not piece or typeof(piece.attachRules) ~= "table" then
+		return nil
+	end
+
+	return deepCopy(piece.attachRules)
 end
 
 function Catalog.GetDefaultBaseRig(): Model?

@@ -1,6 +1,9 @@
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local PerfStats = require(ReplicatedStorage.Shared.Diagnostics.PerfStats)
 
 type FadeTarget = BasePart | Decal | Texture
 type FadeState = {
@@ -15,7 +18,8 @@ FoliageController.TagName = "Foliage"
 FoliageController.FadeTransparency = 0.5
 FoliageController.FadeDuration = 0.2
 FoliageController.HorizontalFadeRadius = 4
-FoliageController.QueryInterval = 0.05
+FoliageController.QueryInterval = 0.15
+FoliageController.MaxFadeTargetsPerStep = 96
 
 local function warnf(message: string, ...)
 	warn(string.format("[FoliageController] " .. message, ...))
@@ -43,6 +47,14 @@ local function collectFadeTargets(part: BasePart): { FadeTarget }
 	return targets
 end
 
+local function countEntries(map): number
+	local count = 0
+	for _ in pairs(map) do
+		count += 1
+	end
+	return count
+end
+
 function FoliageController:_ensureState()
 	if self._started then
 		return
@@ -53,6 +65,7 @@ function FoliageController:_ensureState()
 	self._characterConnections = {}
 	self._trackedParts = {}
 	self._fadeStates = {}
+	self._fadeTargetCache = {}
 	self._character = nil
 	self._rootPart = nil
 	self._accumulator = 0
@@ -123,6 +136,11 @@ function FoliageController:_getFadeState(part: BasePart): FadeState
 	end
 
 	local targets = collectFadeTargets(part)
+	if self._fadeTargetCache[part] ~= nil then
+		targets = self._fadeTargetCache[part]
+	else
+		self._fadeTargetCache[part] = targets
+	end
 	local originalValues = {}
 
 	for _, target in ipairs(targets) do
@@ -166,6 +184,7 @@ function FoliageController:_trackTaggedPart(instance: Instance)
 	end
 
 	self._trackedParts[instance] = true
+	self._fadeTargetCache[instance] = collectFadeTargets(instance)
 end
 
 function FoliageController:_untrackTaggedPart(instance: Instance)
@@ -178,6 +197,7 @@ function FoliageController:_untrackTaggedPart(instance: Instance)
 	end
 
 	self._trackedParts[instance] = nil
+	self._fadeTargetCache[instance] = nil
 
 	local fadeState: FadeState? = self._fadeStates[instance]
 	if fadeState then
@@ -236,6 +256,7 @@ end
 
 function FoliageController:_updateFadeTargets(deltaTime: number)
 	local completedParts = {}
+	local updatedTargetCount = 0
 
 	for part, fadeState in pairs(self._fadeStates) do
 		if part.Parent == nil then
@@ -246,6 +267,11 @@ function FoliageController:_updateFadeTargets(deltaTime: number)
 		local isAtGoal = true
 
 		for _, target in ipairs(fadeState.Targets) do
+			if updatedTargetCount >= self.MaxFadeTargetsPerStep then
+				isAtGoal = false
+				break
+			end
+
 			if target.Parent == nil then
 				continue
 			end
@@ -262,6 +288,7 @@ function FoliageController:_updateFadeTargets(deltaTime: number)
 
 			local step = math.min(math.abs(delta), self._fadeSpeed * deltaTime)
 			target.LocalTransparencyModifier = currentValue + if delta > 0 then step else -step
+			updatedTargetCount += 1
 
 			if math.abs(target.LocalTransparencyModifier - targetValue) > 0.001 then
 				isAtGoal = false
@@ -284,6 +311,7 @@ function FoliageController:_updateFadeTargets(deltaTime: number)
 end
 
 function FoliageController:_step(deltaTime: number)
+	local startedAt = PerfStats.Begin()
 	self._accumulator += deltaTime
 
 	if self._accumulator >= self.QueryInterval then
@@ -298,6 +326,10 @@ function FoliageController:_step(deltaTime: number)
 	end
 
 	self:_updateFadeTargets(deltaTime)
+	PerfStats.Measure("FoliageStep", startedAt, {
+		trackedParts = countEntries(self._trackedParts),
+		activeFades = countEntries(self._fadeStates),
+	})
 end
 
 function FoliageController:OnStart()

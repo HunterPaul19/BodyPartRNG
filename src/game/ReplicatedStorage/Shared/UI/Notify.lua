@@ -6,41 +6,59 @@ local REMOTES_FOLDER_NAME = "Remotes"
 local REMOTE_NAME = "Notify"
 
 local Notify = {}
+local clientRemoteConnection: RBXScriptConnection? = nil
 
 Notify.Defaults = {
 	title = "Notice",
 	duration = 4,
 }
 
-local function ensureRemote(): RemoteEvent
+local function ensureServerRemote(): RemoteEvent
 	local remotesFolder = ReplicatedStorage:FindFirstChild(REMOTES_FOLDER_NAME)
-	if RunService:IsServer() then
-		if remotesFolder and not remotesFolder:IsA("Folder") then
-			remotesFolder:Destroy()
-			remotesFolder = nil
-		end
-		if not remotesFolder then
-			remotesFolder = Instance.new("Folder")
-			remotesFolder.Name = REMOTES_FOLDER_NAME
-			remotesFolder.Parent = ReplicatedStorage
-		end
+	if remotesFolder and not remotesFolder:IsA("Folder") then
+		remotesFolder:Destroy()
+		remotesFolder = nil
+	end
+	if not remotesFolder then
+		remotesFolder = Instance.new("Folder")
+		remotesFolder.Name = REMOTES_FOLDER_NAME
+		remotesFolder.Parent = ReplicatedStorage
+	end
 
-		local remote = remotesFolder:FindFirstChild(REMOTE_NAME)
-		if remote and remote:IsA("RemoteEvent") then
-			return remote
-		end
-		if remote then
-			remote:Destroy()
-		end
+	local remote = remotesFolder:FindFirstChild(REMOTE_NAME)
+	if remote and remote:IsA("RemoteEvent") then
+		return remote
+	end
+	if remote then
+		remote:Destroy()
+	end
 
-		remote = Instance.new("RemoteEvent")
-		remote.Name = REMOTE_NAME
-		remote.Parent = remotesFolder
+	remote = Instance.new("RemoteEvent")
+	remote.Name = REMOTE_NAME
+	remote.Parent = remotesFolder
+	return remote
+end
+
+local function findClientRemote(): RemoteEvent?
+	local remotesFolder = ReplicatedStorage:FindFirstChild(REMOTES_FOLDER_NAME)
+	if not (remotesFolder and remotesFolder:IsA("Folder")) then
+		return nil
+	end
+
+	local remote = remotesFolder:FindFirstChild(REMOTE_NAME)
+	if remote and remote:IsA("RemoteEvent") then
 		return remote
 	end
 
-	local safeRemotes = ReplicatedStorage:WaitForChild(REMOTES_FOLDER_NAME)
-	return safeRemotes:WaitForChild(REMOTE_NAME) :: RemoteEvent
+	return nil
+end
+
+local function ensureRemote(): RemoteEvent?
+	if RunService:IsServer() then
+		return ensureServerRemote()
+	end
+
+	return findClientRemote()
 end
 
 local function normalizePayload(text: any, opts)
@@ -86,10 +104,17 @@ end
 
 if RunService:IsClient() then
 	task.spawn(function()
-		local remote = ensureRemote()
-		remote.OnClientEvent:Connect(function(payload)
-			Notify.Show(payload.text, payload)
-		end)
+		while clientRemoteConnection == nil do
+			local remote = ensureRemote()
+			if remote then
+				clientRemoteConnection = remote.OnClientEvent:Connect(function(payload)
+					Notify.Show(payload.text, payload)
+				end)
+				return
+			end
+
+			task.wait(0.25)
+		end
 	end)
 end
 

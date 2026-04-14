@@ -1,7 +1,5 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local CollectionService = game:GetService("CollectionService")
-
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 local AchievementState = require(ReplicatedStorage.Shared.Titles.AchievementState)
 local TitleConfig = require(ReplicatedStorage.Shared.Config.TitleConfig)
@@ -17,8 +15,6 @@ local ACHIEVEMENTS_KEY = "achievements"
 local REMOTES_FOLDER_NAME = "Remotes"
 local TITLES_REMOTES_FOLDER_NAME = "Titles"
 local SET_EQUIPPED_TITLE_REMOTE_NAME = "SetEquippedTitle"
-local FRAME_TAG_NAME = "frame"
-local CLOSE_TAG_NAME = "close"
 
 local TitleController = {}
 
@@ -77,31 +73,6 @@ function TitleController:_getRemote(): RemoteFunction?
 	end
 
 	return nil
-end
-
-function TitleController:_ensureRuntimeModal(mainInterface: ScreenGui, modalRoot: ScreenGui): GuiObject
-	local existing = modalRoot:FindFirstChild(WINDOW_NAME)
-	if existing and existing:IsA("GuiObject") then
-		return existing
-	end
-
-	local source = mainInterface:FindFirstChild(WINDOW_NAME)
-	if not (source and source:IsA("GuiObject")) then
-		error("PlayerGui.MainInterface.Titles is missing.")
-	end
-
-	local clone = source:Clone()
-	clone.Name = WINDOW_NAME
-	clone.Visible = false
-	clone.Parent = modalRoot
-	CollectionService:AddTag(clone, FRAME_TAG_NAME)
-
-	local closeButton = clone:FindFirstChild("CloseButton", true)
-	if closeButton and closeButton:IsA("GuiButton") then
-		CollectionService:AddTag(closeButton, CLOSE_TAG_NAME)
-	end
-
-	return clone
 end
 
 function TitleController:_getUnlockedTitles(): { TitleConfig.TitleConfigEntry }
@@ -224,7 +195,7 @@ function TitleController:_syncList()
 	if #titles == 0 then
 		emptyStateLabel.Text = if self._searchText ~= ""
 			then "No unlocked titles match your search."
-			else "No titles unlocked yet. Keep progressing to earn your first one."
+			else "Keep progressing to unlock your first title."
 	end
 end
 
@@ -246,7 +217,7 @@ function TitleController:_syncPreview()
 	previewHolder.Visible = true
 	titleNameLabel.Text = selectedTitle.label
 	titleNameLabel.TextColor3 = selectedTitle.displayColor
-	titleDescriptionLabel.Text = string.format("%s\n\nHow to get: %s", selectedTitle.description, selectedTitle.howToGet)
+	titleDescriptionLabel.Text = string.format("%s\n\nUnlock by: %s", selectedTitle.description, selectedTitle.howToGet)
 
 	local equippedTitleId = getEquippedTitleId()
 	local isEquipped = equippedTitleId == selectedTitle.id
@@ -325,7 +296,7 @@ function TitleController:_cacheUi(playerGui: PlayerGui)
 		error("PlayerGui.ModalRoot is missing.")
 	end
 
-	local titlesRoot = self:_ensureRuntimeModal(mainInterface, modalRoot)
+	local titlesRoot = modalRoot:WaitForChild(WINDOW_NAME, 30)
 	local openButton = mainInterface:WaitForChild("Main", 30):WaitForChild("Titles", 30)
 	if not (titlesRoot and titlesRoot:IsA("GuiObject") and openButton and openButton:IsA("GuiButton")) then
 		error("Titles UI hierarchy is missing required instances.")

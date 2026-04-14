@@ -1,14 +1,18 @@
 local Players = game:GetService("Players")
 local StarterGui = game:GetService("StarterGui")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 
+local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
+local PerfStats = require(ReplicatedStorage.Shared.Diagnostics.PerfStats)
 local TitleUtil = require(ReplicatedStorage.Shared.Titles.TitleUtil)
-
 local LOCAL_PLAYER = Players.LocalPlayer
 local THUMBNAIL_TYPE = Enum.ThumbnailType.HeadShot
 local THUMBNAIL_SIZE = Enum.ThumbnailSize.Size420x420
 local LEADERBOARD_OPEN_POSITION = UDim2.fromScale(0.5, 0.5)
 local LEADERBOARD_CLOSED_POSITION = UDim2.fromScale(1.5, 0.5)
+local PANEL_TWEEN_INFO = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 local LeaderboardController = {}
 
@@ -24,10 +28,29 @@ local function getRichTitlePrefix(player: Player): string
 	return TitleUtil.BuildRichTextPrefix(player:GetAttribute("VIP") == true, player:GetAttribute("EquippedTitleId"))
 end
 
+local function formatRollCount(value: number): string
+	return NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0)))
+end
+
 local function setCoreWithRetry(key: string, value: any): boolean
 	for _ = 1, 8 do
 		local ok = pcall(function()
 			StarterGui:SetCore(key, value)
+		end)
+		if ok then
+			return true
+		end
+
+		task.wait(0.25)
+	end
+
+	return false
+end
+
+local function setCoreGuiEnabledWithRetry(coreGuiType: Enum.CoreGuiType, enabled: boolean): boolean
+	for _ = 1, 8 do
+		local ok = pcall(function()
+			StarterGui:SetCoreGuiEnabled(coreGuiType, enabled)
 		end)
 		if ok then
 			return true
@@ -70,16 +93,30 @@ function LeaderboardController:_ensureState()
 	self._thumbnailRequestId = 0
 	self._ui = nil
 	self._refreshScheduled = false
+	self._refreshGeneration = 0
+	self._refreshDeadline = nil
+	self._rowFramesByUserId = {}
 end
 
-function LeaderboardController:_scheduleRefresh()
-	if self._refreshScheduled then
+function LeaderboardController:_scheduleRefresh(delaySeconds: number?)
+	local delayTime = math.max(0, tonumber(delaySeconds) or 0)
+	local deadline = os.clock() + delayTime
+	if self._refreshDeadline and self._refreshDeadline <= deadline then
 		return
 	end
 
+	self._refreshDeadline = deadline
+	self._refreshGeneration += 1
+	local refreshGeneration = self._refreshGeneration
 	self._refreshScheduled = true
-	task.defer(function()
+
+	task.delay(delayTime, function()
+		if self._refreshGeneration ~= refreshGeneration then
+			return
+		end
+
 		self._refreshScheduled = false
+		self._refreshDeadline = nil
 		self:_refreshRows()
 	end)
 end
@@ -159,7 +196,7 @@ function LeaderboardController:_configureRow(row: Frame, player: Player, order: 
 
 	local rollsLabel = row:FindFirstChild("Rolls")
 	if rollsLabel and rollsLabel:IsA("TextLabel") then
-		rollsLabel.Text = tostring(self:_getRollCount(player))
+		rollsLabel.Text = formatRollCount(self:_getRollCount(player))
 	end
 
 	local moneyLabel = row:FindFirstChild("Money")
@@ -174,19 +211,23 @@ function LeaderboardController:_configureRow(row: Frame, player: Player, order: 
 		toggle.AutoButtonColor = false
 	end
 
-	local rowButton = Instance.new("TextButton")
-	rowButton.Name = "RowButton"
-	rowButton.BackgroundTransparency = 1
-	rowButton.BorderSizePixel = 0
-	rowButton.Text = ""
-	rowButton.AutoButtonColor = false
-	rowButton.Size = UDim2.fromScale(1, 1)
-	rowButton.ZIndex = row.ZIndex + 1
-	rowButton.Parent = row
+	local rowButton = row:FindFirstChild("RowButton")
+	if not rowButton then
+		rowButton = Instance.new("TextButton")
+		rowButton.Name = "RowButton"
+		rowButton.BackgroundTransparency = 1
+		rowButton.BorderSizePixel = 0
+		rowButton.Text = ""
+		rowButton.AutoButtonColor = false
+		rowButton.Size = UDim2.fromScale(1, 1)
+		rowButton.Parent = row
 
-	rowButton.Activated:Connect(function()
-		self:_openPlayerInfo(player)
-	end)
+		rowButton.Activated:Connect(function()
+			self:_openPlayerInfo(player)
+		end)
+	end
+
+	rowButton.ZIndex = row.ZIndex + 1
 end
 
 function LeaderboardController:_refreshRows()
@@ -196,18 +237,31 @@ function LeaderboardController:_refreshRows()
 		return
 	end
 
-	for _, child in ipairs(scrollingFrame:GetChildren()) do
-		if child ~= template and child:IsA("Frame") then
-			child:Destroy()
+	local startedAt = PerfStats.Begin()
+	local activeUserIds = {}
+	local rowCount = 0
+	for index, player in ipairs(self:_getSortedPlayers()) do
+		local row = self._rowFramesByUserId[player.UserId]
+		if not row or row.Parent == nil then
+			row = template:Clone()
+			self._rowFramesByUserId[player.UserId] = row
+		end
+		self:_configureRow(row, player, index)
+		activeUserIds[player.UserId] = true
+		rowCount += 1
+	end
+
+	for userId, row in pairs(self._rowFramesByUserId) do
+		if not activeUserIds[userId] then
+			row:Destroy()
+			self._rowFramesByUserId[userId] = nil
 		end
 	end
 
-	for index, player in ipairs(self:_getSortedPlayers()) do
-		local row = template:Clone()
-		self:_configureRow(row, player, index)
-	end
-
 	self:_syncSelectedPlayerInfo()
+	PerfStats.Measure("LeaderboardRefreshRows", startedAt, {
+		rowCount = rowCount,
+	})
 end
 
 function LeaderboardController:_disconnectPlayer(player: Player)
@@ -228,7 +282,7 @@ end
 
 function LeaderboardController:_watchMoneyValue(moneyValue: StringValue, playerConnections: { RBXScriptConnection })
 	table.insert(playerConnections, moneyValue:GetPropertyChangedSignal("Value"):Connect(function()
-		self:_scheduleRefresh()
+		self:_scheduleRefresh(1)
 	end))
 end
 
@@ -306,7 +360,7 @@ function LeaderboardController:_getSelectedRollCount(): string
 		return "0"
 	end
 
-	return tostring(self:_getRollCount(selectedPlayer))
+	return formatRollCount(self:_getRollCount(selectedPlayer))
 end
 
 function LeaderboardController:_setButtonVisible(button: GuiObject?, isVisible: boolean)
@@ -449,9 +503,45 @@ function LeaderboardController:_syncCollapseState()
 		return
 	end
 
-	if isCloseToPosition(leaderboardInner.Position, LEADERBOARD_CLOSED_POSITION) then
+	local isOpen = not isCloseToPosition(leaderboardInner.Position, LEADERBOARD_CLOSED_POSITION)
+	self._panelOpen = isOpen
+
+	local ui = self._ui
+	if ui and ui.rotateIcon and ui.rotateIcon:IsA("GuiObject") then
+		ui.rotateIcon.Rotation = if isOpen then 0 else 180
+	end
+
+	if not isOpen then
 		self:_closePlayerInfo()
 	end
+end
+
+function LeaderboardController:_setPanelOpen(isOpen: boolean)
+	local leaderboardInner = self._leaderboardInner
+	local ui = self._ui
+	if not (leaderboardInner and ui and ui.rotateIcon) then
+		return
+	end
+
+	self._panelOpen = isOpen
+	TweenService:Create(
+		leaderboardInner,
+		PANEL_TWEEN_INFO,
+		{ Position = if isOpen then LEADERBOARD_OPEN_POSITION else LEADERBOARD_CLOSED_POSITION }
+	):Play()
+	TweenService:Create(
+		ui.rotateIcon,
+		PANEL_TWEEN_INFO,
+		{ Rotation = if isOpen then 0 else 180 }
+	):Play()
+
+	if not isOpen then
+		self:_closePlayerInfo()
+	end
+end
+
+function LeaderboardController:_togglePanel()
+	self:_setPanelOpen(not self._panelOpen)
 end
 
 function LeaderboardController:_cacheUi(playerGui: PlayerGui)
@@ -484,12 +574,13 @@ function LeaderboardController:_cacheUi(playerGui: PlayerGui)
 		rollInfoContext = playerInfo:WaitForChild("RollInfo"):WaitForChild("Context"),
 		titleInfoTitle = playerInfo:WaitForChild("TitleInfo"):WaitForChild("Title"),
 		titleInfoContext = playerInfo:WaitForChild("TitleInfo"):WaitForChild("Context"),
+		rotateButton = inner:WaitForChild("TopFrame"):WaitForChild("RotateButton"),
 		friendButton = playerInfo:WaitForChild("AddFriendButton"),
 		blockButton = playerInfo:WaitForChild("BlockButton"),
 		closeButton = playerInfo:WaitForChild("CloseButton"),
 		playerIconImage = playerInfo:WaitForChild("PlayerIcon"):WaitForChild("Image"),
 	}
-
+	self._ui.rotateIcon = self._ui.rotateButton:WaitForChild("Icon")
 	self._scrollingFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
 	self._template.Visible = false
 	self._playerInfo.Visible = false
@@ -502,6 +593,11 @@ function LeaderboardController:OnStart()
 
 	local playerGui = LOCAL_PLAYER:WaitForChild("PlayerGui")
 	self:_cacheUi(playerGui)
+	setCoreGuiEnabledWithRetry(Enum.CoreGuiType.PlayerList, false)
+
+	self._ui.rotateButton.Activated:Connect(function()
+		self:_togglePanel()
+	end)
 
 	self._ui.closeButton.Activated:Connect(function()
 		self:_closePlayerInfo()
@@ -520,6 +616,16 @@ function LeaderboardController:OnStart()
 			self:_syncCollapseState()
 		end))
 	end
+
+	table.insert(self._connections, UserInputService.InputBegan:Connect(function(input: InputObject, gameProcessedEvent: boolean)
+		if gameProcessedEvent then
+			return
+		end
+
+		if input.KeyCode == Enum.KeyCode.Tab then
+			self:_togglePanel()
+		end
+	end))
 
 	for _, player in ipairs(Players:GetPlayers()) do
 		self:_trackPlayer(player)

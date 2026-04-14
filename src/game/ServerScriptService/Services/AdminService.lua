@@ -1,16 +1,22 @@
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local AdminConfig = require(script.Parent.AdminConfig)
+local AuraService = require(script.Parent.AuraService)
 local BodyPartService = require(script.Parent.BodyPartService)
+local DataService = require(script.Parent.DataService)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
 local BodyPartVisuals = require(ReplicatedStorage.Shared.Character.BodyPartVisuals)
+local AuraConfig = require(ReplicatedStorage.Shared.Config.AuraConfig)
+local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local RollService = require(script.Parent.RollService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local ADMIN_ACTION_REMOTE_NAME = "AdminAction"
 local ACCESS_ATTRIBUTE = "CanUseAdminPanel"
 local BODY_PARTS_TAB_ID = "bodyParts"
+local PLAYERS_TAB_ID = "players"
 local MIN_SANDBOX_SCALE = 0.4
 local MAX_SANDBOX_SCALE = 2.5
 
@@ -352,6 +358,33 @@ local function handleGetRuntimeState(player: Player)
 	return response(true, "OK", "Loaded body part runtime state.", BodyPartService:GetClientState(player))
 end
 
+local function getTargetPlayerFromPayload(payload: any): (Player?, string?)
+	if typeof(payload) ~= "table" then
+		return nil, "A payload table is required."
+	end
+
+	local targetUserId = math.floor(tonumber(payload.userId) or 0)
+	if targetUserId <= 0 then
+		return nil, "A valid target userId is required."
+	end
+
+	local targetPlayer = Players:GetPlayerByUserId(targetUserId)
+	if not targetPlayer then
+		return nil, "That player is no longer in this server."
+	end
+
+	return targetPlayer, nil
+end
+
+local function handleInspectPlayerProfile(payload: any)
+	local targetPlayer, errorMessage = getTargetPlayerFromPayload(payload)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	return response(true, "OK", "Loaded player summary.", BodyPartService:GetPlayerInspectSummary(targetPlayer))
+end
+
 local function handlePreviewRarityTable(player: Player)
 	local debugData = RollService:GetProbabilityDebug(player)
 	return response(
@@ -378,6 +411,77 @@ end
 local function handleClearRuntimeLoadout(player: Player)
 	local ok, message = BodyPartService:ClearLoadout(player)
 	return response(ok, if ok then "OK" else "CLEAR_FAILED", message, BodyPartService:GetClientState(player))
+end
+
+local function buildAdminGrantedBodyPartPayload(pieceId: string): (any?, string?)
+	local piece = BodyPartsCatalog.GetPiece(pieceId)
+	if not piece then
+		return nil, string.format("Unknown body part pieceId '%s'.", tostring(pieceId))
+	end
+
+	local setConfig = BodyPartsCatalog.GetSetForPiece(pieceId)
+	return {
+		pieceId = piece.id,
+		rarityDenominator = math.max(1, math.floor(tonumber(piece.rarity) or 1)),
+		rolledSetId = if setConfig then setConfig.id else nil,
+		rolledSetDisplayName = if setConfig then setConfig.rollDisplay.displayName else nil,
+		displayOddsDenominator = if setConfig then math.max(1, math.floor(tonumber(setConfig.rollDisplay.chance) or 1)) else math.max(1, math.floor(tonumber(piece.rarity) or 1)),
+		displayRarity = if setConfig then setConfig.rollDisplay.rarity else "Unknown",
+		mutationId = "none",
+		mutation = "None",
+		sizeId = "normal",
+	}, nil
+end
+
+local function handleGrantBodyPart(player: Player, payload: any)
+	local pieceId = payload.pieceId
+	if typeof(pieceId) ~= "string" or pieceId == "" then
+		return response(false, "BAD_REQUEST", "A valid pieceId is required.")
+	end
+
+	local grantPayload, payloadError = buildAdminGrantedBodyPartPayload(pieceId)
+	if not grantPayload then
+		return response(false, "BAD_REQUEST", payloadError or "Could not prepare the body part grant.")
+	end
+
+	local grantedRecord, grantError = DataService:AddOwnedBodyPart(player, grantPayload)
+	if not grantedRecord then
+		return response(false, "GRANT_FAILED", grantError or "Could not grant that body part.")
+	end
+
+	local piece = BodyPartsCatalog.GetPiece(pieceId)
+	local pieceName = if piece then piece.displayName else pieceId
+	return response(true, "OK", string.format('Granted "%s" (#%s).', pieceName, tostring(grantedRecord.serialNumber)), {
+		runtimeState = BodyPartService:GetClientState(player),
+		grantedRecord = grantedRecord,
+	})
+end
+
+local function handleGrantAura(player: Player, payload: any)
+	local auraId = payload.auraId
+	if typeof(auraId) ~= "string" or auraId == "" then
+		return response(false, "BAD_REQUEST", "A valid auraId is required.")
+	end
+
+	local auraConfig = AuraConfig.Get(auraId)
+	if not auraConfig then
+		return response(false, "BAD_REQUEST", string.format("Unknown auraId '%s'.", tostring(auraId)))
+	end
+
+	local hadAuraAlready = DataService:GetOwnedAuraByAuraId(player, auraId) ~= nil
+	local ok, message, didGrant = AuraService:GrantAuraUnlock(player, auraId)
+	if not ok then
+		return response(false, "GRANT_FAILED", message or "Could not grant that aura.")
+	end
+
+	local ownedRecord = DataService:GetOwnedAuraByAuraId(player, auraId)
+	local finalMessage = if hadAuraAlready or not didGrant
+		then string.format('You already own "%s".', auraConfig.label)
+		else (message or string.format('Granted "%s".', auraConfig.label))
+
+	return response(true, "OK", finalMessage, {
+		grantedRecord = ownedRecord,
+	})
 end
 
 local function handleApplyVisualRegion(player: Player, payload: any)
@@ -488,7 +592,19 @@ function AdminService:HandleAction(player: Player, request: any)
 		return handleTestDialogue()
 	end
 
+	if tabId == PLAYERS_TAB_ID and actionId == "inspect_player_profile" then
+		return handleInspectPlayerProfile(payload or {})
+	end
+
 	if tabId == BODY_PARTS_TAB_ID then
+		if actionId == "grant_body_part" then
+			return handleGrantBodyPart(player, payload or {})
+		end
+
+		if actionId == "grant_aura" then
+			return handleGrantAura(player, payload or {})
+		end
+
 		if actionId == "get_runtime_state" then
 			return handleGetRuntimeState(player)
 		end

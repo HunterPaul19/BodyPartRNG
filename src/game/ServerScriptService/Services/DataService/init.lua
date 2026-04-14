@@ -6,18 +6,25 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local Globals = require(ReplicatedStorage.Lists.Globals)
 local Schema = require(ReplicatedStorage.Lists.Schema)
 local Signal = require(ReplicatedStorage.Common.Signal)
+local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local BodyPartLoadout = require(ReplicatedStorage.Shared.Character.BodyPartLoadout)
+local OwnedAuras = require(ReplicatedStorage.Shared.Character.OwnedAuras)
 local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
+local OwnedPotions = require(ReplicatedStorage.Shared.Character.OwnedPotions)
 local OwnedRollTypes = require(ReplicatedStorage.Shared.Character.OwnedRollTypes)
 local RollTargetRegions = require(ReplicatedStorage.Shared.Character.RollTargetRegions)
+local PlayerStats = require(ReplicatedStorage.Shared.Stats.PlayerStats)
 local AchievementState = require(ReplicatedStorage.Shared.Titles.AchievementState)
+local AuraConfig = require(ReplicatedStorage.Shared.Config.AuraConfig)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
+local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
 local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
 local RollTypes = require(ReplicatedStorage.Shared.Config.RollTypes)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local ProfileService = require(ServerScriptService.Packages.ProfileService)
 local ReplicaService = require(ServerScriptService.Packages.ReplicaService)
+local AuraSerialStore = require(script.AuraSerialStore)
 local BodyPartSerialStore = require(script.BodyPartSerialStore)
 local Leaderboards = require(script.Leaderboards)
 
@@ -31,15 +38,21 @@ local LEGACY_CASH_KEY = "cash"
 local LEGACY_OWNED_ROLL_TYPES_KEY = "ownedRollTypes"
 local MONEY_KEY = Schema.Money and Schema.Money.key or nil
 local TIME_PLAYED_KEY = Schema.TimePlayed and Schema.TimePlayed.key or nil
+local DIAGNOSTICS_KEY = Schema.Diagnostics and Schema.Diagnostics.key or nil
+local STATS_KEY = Schema.Stats and Schema.Stats.key or nil
 local BODY_PARTS_KEY = Schema.BodyParts and Schema.BodyParts.key or nil
+local AURAS_KEY = Schema.Auras and Schema.Auras.key or nil
+local POTIONS_KEY = Schema.Potions and Schema.Potions.key or nil
 local EQUIPPED_LOADOUT_KEY = Schema.EquippedLoadout and Schema.EquippedLoadout.key or nil
 local SUCCESSFUL_ROLL_COUNT_KEY = Schema.SuccessfulRollCount and Schema.SuccessfulRollCount.key or nil
 local EQUIPPED_TITLE_ID_KEY = Schema.EquippedTitleId and Schema.EquippedTitleId.key or nil
+local EQUIPPED_AURA_ID_KEY = Schema.EquippedAuraId and Schema.EquippedAuraId.key or nil
 local ACHIEVEMENTS_KEY = Schema.Achievements and Schema.Achievements.key or nil
 local VIP_OWNED_KEY = Schema.VipOwned and Schema.VipOwned.key or nil
 local SELECTED_ROLL_TYPE_KEY = Schema.SelectedRollType and Schema.SelectedRollType.key or nil
 local SELECTED_ROLL_REGION_KEY = Schema.SelectedRollRegion and Schema.SelectedRollRegion.key or nil
 local QUICK_ROLL_ENABLED_KEY = Schema.QuickRollEnabled and Schema.QuickRollEnabled.key or nil
+local AUTO_SIZE_ENABLED_KEY = Schema.AutoSizeEnabled and Schema.AutoSizeEnabled.key or nil
 local AUTO_SELL_RARITIES_KEY = Schema.AutoSellRarities and Schema.AutoSellRarities.key or nil
 
 local ATTR_BY_KEY: { [string]: string } = {}
@@ -52,6 +65,9 @@ end
 if EQUIPPED_TITLE_ID_KEY then
 	ATTR_BY_KEY[EQUIPPED_TITLE_ID_KEY] = "EquippedTitleId"
 end
+if EQUIPPED_AURA_ID_KEY then
+	ATTR_BY_KEY[EQUIPPED_AURA_ID_KEY] = "EquippedAuraId"
+end
 
 local PROFILES: { [Player]: any } = {}
 local REPLICAS: { [Player]: any } = {}
@@ -61,15 +77,22 @@ local timePlayedLoopStarted = false
 
 local GlobalUpdateProcessed = Signal.new()
 local PlayerDataLoaded = Signal.new()
+local PlayerDataRemoving = Signal.new()
 local DataChanged = Signal.new()
 local MoneyChanged = Signal.new()
 local SuccessfulRollIncremented = Signal.new()
 local TimePlayedFlushed = Signal.new()
 local OwnedBodyPartAdded = Signal.new()
+local OwnedAuraAdded = Signal.new()
 local EquippedTitleChanged = Signal.new()
+local EquippedAuraChanged = Signal.new()
 
 local function toNonNegativeWhole(value: any): number
 	return math.max(0, math.floor(tonumber(value) or 0))
+end
+
+local function formatMoneyLeaderstat(value: any): string
+	return "$" .. NumberFormatter.Format(math.max(0, math.round(tonumber(value) or 0)))
 end
 
 local function deepCopy(value: any): any
@@ -143,6 +166,15 @@ local function normalizeOptionalString(value: any): string
 	return trimmed
 end
 
+local function normalizeOptionalAuraId(value: any): string
+	local normalized = normalizeOptionalString(value)
+	if normalized == "" then
+		return ""
+	end
+
+	return AuraConfig.NormalizeId(normalized) or ""
+end
+
 local function createLeaderstats(player: Player, profile: any)
 	if not MONEY_KEY and not SUCCESSFUL_ROLL_COUNT_KEY then
 		return
@@ -160,7 +192,7 @@ local function createLeaderstats(player: Player, profile: any)
 	if MONEY_KEY then
 		local value = Instance.new("StringValue")
 		value.Name = "money"
-		value.Value = Globals.formatNumber(tonumber(profile.Data[MONEY_KEY]) or 0, true)
+		value.Value = formatMoneyLeaderstat(profile.Data[MONEY_KEY])
 		value.Parent = folder
 	end
 
@@ -180,7 +212,7 @@ local function updateLeaderstatsMoney(player: Player, moneyValue: number)
 
 	local money = stats:FindFirstChild("money")
 	if money and money:IsA("StringValue") then
-		money.Value = Globals.formatNumber(tonumber(moneyValue) or 0, true)
+		money.Value = formatMoneyLeaderstat(moneyValue)
 	end
 end
 
@@ -246,6 +278,48 @@ local function getActiveReplica(player: Player)
 	return nil
 end
 
+local function getReplicaValue(player: Player, key: string)
+	local replica = getActiveReplica(player)
+	if replica and typeof(replica.Data) == "table" then
+		return replica.Data[key]
+	end
+
+	return nil
+end
+
+local function buildPathArray(key: string, path: { any }?): { any }
+	local pathArray = table.create(1 + if typeof(path) == "table" then #path else 0)
+	pathArray[1] = key
+
+	if typeof(path) == "table" then
+		for index, value in ipairs(path) do
+			pathArray[index + 1] = value
+		end
+	end
+
+	return pathArray
+end
+
+local function setReplicaPathValue(player: Player, key: string, path: { any }?, value: any): boolean
+	local replica = getActiveReplica(player)
+	if not replica then
+		return false
+	end
+
+	replica:SetValue(buildPathArray(key, path), value)
+	return true
+end
+
+local function setReplicaPathValues(player: Player, key: string, path: { any }?, values: { [any]: any }): boolean
+	local replica = getActiveReplica(player)
+	if not replica then
+		return false
+	end
+
+	replica:SetValues(buildPathArray(key, path), values)
+	return true
+end
+
 local function waitForActiveReplica(player: Player, timeoutSeconds: number?): any
 	local replica = getActiveReplica(player)
 	if replica then
@@ -272,9 +346,11 @@ end
 local function syncPlayerStateForKey(player: Player, key: string, value: any)
 	local attributeName = ATTR_BY_KEY[key]
 	if attributeName then
-		if key == EQUIPPED_TITLE_ID_KEY then
-			local normalizedEquippedTitleId = normalizeOptionalString(value)
-			player:SetAttribute(attributeName, if normalizedEquippedTitleId ~= "" then normalizedEquippedTitleId else nil)
+		if key == EQUIPPED_TITLE_ID_KEY or key == EQUIPPED_AURA_ID_KEY then
+			local normalizedId = if key == EQUIPPED_AURA_ID_KEY
+				then normalizeOptionalAuraId(value)
+				else normalizeOptionalString(value)
+			player:SetAttribute(attributeName, if normalizedId ~= "" then normalizedId else nil)
 		else
 			player:SetAttribute(attributeName, value)
 		end
@@ -290,12 +366,15 @@ end
 local DataService = {}
 DataService.GlobalUpdateProcessed = GlobalUpdateProcessed
 DataService.PlayerDataLoaded = PlayerDataLoaded
+DataService.PlayerDataRemoving = PlayerDataRemoving
 DataService.DataChanged = DataChanged
 DataService.MoneyChanged = MoneyChanged
 DataService.SuccessfulRollIncremented = SuccessfulRollIncremented
 DataService.TimePlayedFlushed = TimePlayedFlushed
 DataService.OwnedBodyPartAdded = OwnedBodyPartAdded
+DataService.OwnedAuraAdded = OwnedAuraAdded
 DataService.EquippedTitleChanged = EquippedTitleChanged
+DataService.EquippedAuraChanged = EquippedAuraChanged
 
 local function isPositiveFiniteNumber(value: any): boolean
 	return typeof(value) == "number" and value > 0 and value == value and value < math.huge and value > -math.huge
@@ -313,22 +392,23 @@ end
 local function normalizeMutationSnapshot(record: any): (string, string, number)
 	local mutationId = MutationConfig.NormalizeId(record and (record.mutationId or record.mutation))
 	local mutationDisplayName = MutationConfig.GetDisplayName(mutationId)
-	local mutationMultiplier = tonumber(record and record.mutationMultiplier)
-	if mutationMultiplier == nil or mutationMultiplier <= 0 then
-		mutationMultiplier = MutationConfig.GetMultiplier(mutationId)
-	end
+	local mutationMultiplier = MutationConfig.GetMultiplier(mutationId)
 
 	return mutationId, mutationDisplayName, mutationMultiplier
 end
 
-local function normalizeSizeSnapshot(record: any): (string, number)
-	local sizeId = SizeConfig.NormalizeId(record and record.sizeId)
-	local sizeMultiplier = tonumber(record and record.sizeMultiplier)
-	if sizeMultiplier == nil or sizeMultiplier <= 0 then
-		sizeMultiplier = SizeConfig.GetMultiplier(sizeId)
+local function normalizeSizeSnapshot(record: any): (string, number, number)
+	local scale = tonumber(record and record.sizeMultiplier)
+	if scale ~= nil and scale > 0 then
+		local normalizedScale = SizeConfig.NormalizeScale(scale, record and record.sizeId)
+		local entry = SizeConfig.GetByScale(normalizedScale) or SizeConfig.GetDefault()
+		return entry.id, normalizedScale, entry.moneyMultiplier
 	end
 
-	return sizeId, sizeMultiplier
+	local sizeId = SizeConfig.NormalizeId(record and record.sizeId)
+	local sizeScale = SizeConfig.GetRepresentativeScale(sizeId)
+	local sizeEntry = SizeConfig.Get(sizeId) or SizeConfig.GetDefault()
+	return sizeEntry.id, sizeScale, sizeEntry.moneyMultiplier
 end
 
 local function normalizeOwnedBodyPartRecord(record: any, fallbackOwnedId: string?): OwnedBodyParts.OwnedBodyPartRecord?
@@ -348,14 +428,14 @@ local function normalizeOwnedBodyPartRecord(record: any, fallbackOwnedId: string
 
 	local setConfig = BodyPartsCatalog.GetSetForPiece(pieceId)
 	local mutationId, mutationDisplayName, mutationMultiplier = normalizeMutationSnapshot(record)
-	local sizeId, sizeMultiplier = normalizeSizeSnapshot(record)
+	local sizeId, sizeMultiplier, sizeMoneyMultiplier = normalizeSizeSnapshot(record)
 	local displayOddsDenominator = math.max(
 		1,
 		clampWholeNumber(record.displayOddsDenominator or record.rarityDenominator or (setConfig and setConfig.rollDisplay.chance) or piece.rarity, 1)
 	)
 	local variantMultiplier = tonumber(record.variantMultiplier)
 	if variantMultiplier == nil or variantMultiplier <= 0 then
-		variantMultiplier = mutationMultiplier + sizeMultiplier - 1
+		variantMultiplier = mutationMultiplier + sizeMoneyMultiplier - 1
 	end
 
 	local finalPassiveIncomePerSecond = tonumber(record.finalPassiveIncomePerSecond)
@@ -384,6 +464,24 @@ local function normalizeOwnedBodyPartRecord(record: any, fallbackOwnedId: string
 		sizeMultiplier = sizeMultiplier,
 		variantMultiplier = variantMultiplier,
 		finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
+		serialNumber = math.max(1, clampWholeNumber(record.serialNumber, 1)),
+		isFavorite = record.isFavorite == true,
+	}
+end
+
+local function normalizeOwnedAuraRecord(record: any, fallbackOwnedId: string?): OwnedAuras.OwnedAuraRecord?
+	if typeof(record) ~= "table" then
+		return nil
+	end
+
+	local auraId = AuraConfig.NormalizeId(record.auraId)
+	if not auraId then
+		return nil
+	end
+
+	return {
+		ownedId = if typeof(record.ownedId) == "string" and record.ownedId ~= "" then record.ownedId else (fallbackOwnedId or ""),
+		auraId = auraId,
 		serialNumber = math.max(1, clampWholeNumber(record.serialNumber, 1)),
 		isFavorite = record.isFavorite == true,
 	}
@@ -425,6 +523,87 @@ local function cloneOwnedBodyPartsState(state: OwnedBodyParts.OwnedBodyPartsStat
 	}
 end
 
+local function cloneOwnedAurasState(state: OwnedAuras.OwnedAurasState?): OwnedAuras.OwnedAurasState
+	local ownedById = {}
+	local ownedAuraIdByAuraId = {}
+	local nextOwnedId = 1
+
+	if typeof(state) == "table" then
+		if typeof(state.ownedById) == "table" then
+			for ownedId, record in pairs(state.ownedById) do
+				local normalizedRecord = normalizeOwnedAuraRecord(record, ownedId)
+				if normalizedRecord and ownedAuraIdByAuraId[normalizedRecord.auraId] == nil then
+					ownedById[normalizedRecord.ownedId] = normalizedRecord
+					ownedAuraIdByAuraId[normalizedRecord.auraId] = normalizedRecord.ownedId
+				end
+			end
+		end
+
+		if typeof(state.nextOwnedId) == "number" then
+			nextOwnedId = math.max(1, math.floor(state.nextOwnedId))
+		end
+	end
+
+	return {
+		ownedById = ownedById,
+		ownedAuraIdByAuraId = ownedAuraIdByAuraId,
+		nextOwnedId = nextOwnedId,
+	}
+end
+
+local function normalizeOwnedPotionRecord(record: any, fallbackPotionId: string?): OwnedPotions.OwnedPotionRecord?
+	if typeof(record) ~= "table" then
+		return nil
+	end
+
+	local potionId = PotionConfig.NormalizeId(record.potionId or fallbackPotionId)
+	if not potionId then
+		return nil
+	end
+
+	local amount = math.max(0, clampWholeNumber(record.amount, 0))
+	if amount <= 0 then
+		return nil
+	end
+
+	return {
+		potionId = potionId,
+		amount = amount,
+		isFavorite = record.isFavorite == true,
+	}
+end
+
+local function cloneOwnedPotionsState(state: OwnedPotions.OwnedPotionsState?): OwnedPotions.OwnedPotionsState
+	local ownedByPotionId = {}
+	local activeByPotionId = {}
+
+	if typeof(state) == "table" then
+		if typeof(state.ownedByPotionId) == "table" then
+			for potionId, record in pairs(state.ownedByPotionId) do
+				local normalizedRecord = normalizeOwnedPotionRecord(record, potionId)
+				if normalizedRecord then
+					ownedByPotionId[normalizedRecord.potionId] = normalizedRecord
+				end
+			end
+		end
+
+		if typeof(state.activeByPotionId) == "table" then
+			for potionId, remainingSeconds in pairs(state.activeByPotionId) do
+				local normalizedPotionId = PotionConfig.NormalizeId(potionId)
+				local resolvedRemainingSeconds = math.max(0, clampWholeNumber(remainingSeconds, 0))
+				if normalizedPotionId and resolvedRemainingSeconds > 0 then
+					activeByPotionId[normalizedPotionId] = resolvedRemainingSeconds
+				end
+			end
+		end
+	end
+
+	return {
+		ownedByPotionId = ownedByPotionId,
+		activeByPotionId = activeByPotionId,
+	}
+end
+
 local function normalizeProfileData(profile: any)
 	if not profile or typeof(profile.Data) ~= "table" then
 		return
@@ -455,6 +634,9 @@ local function normalizeProfileData(profile: any)
 	if EQUIPPED_TITLE_ID_KEY then
 		data[EQUIPPED_TITLE_ID_KEY] = normalizeOptionalString(data[EQUIPPED_TITLE_ID_KEY])
 	end
+	if EQUIPPED_AURA_ID_KEY then
+		data[EQUIPPED_AURA_ID_KEY] = normalizeOptionalAuraId(data[EQUIPPED_AURA_ID_KEY])
+	end
 	if ACHIEVEMENTS_KEY then
 		data[ACHIEVEMENTS_KEY] = AchievementState.Normalize(data[ACHIEVEMENTS_KEY])
 	end
@@ -470,8 +652,23 @@ local function normalizeProfileData(profile: any)
 	if BODY_PARTS_KEY then
 		data[BODY_PARTS_KEY] = cloneOwnedBodyPartsState(data[BODY_PARTS_KEY])
 	end
+	if AURAS_KEY then
+		data[AURAS_KEY] = cloneOwnedAurasState(data[AURAS_KEY])
+	end
+	if POTIONS_KEY then
+		data[POTIONS_KEY] = cloneOwnedPotionsState(data[POTIONS_KEY])
+	end
 	if EQUIPPED_LOADOUT_KEY then
 		data[EQUIPPED_LOADOUT_KEY] = BodyPartLoadout.NormalizeEquippedState(data[EQUIPPED_LOADOUT_KEY])
+	end
+	if STATS_KEY then
+		data[STATS_KEY] = PlayerStats.Normalize(data[STATS_KEY], {
+			bodyPartsState = if BODY_PARTS_KEY then data[BODY_PARTS_KEY] else nil,
+			aurasState = if AURAS_KEY then data[AURAS_KEY] else nil,
+			currentMoney = if MONEY_KEY then data[MONEY_KEY] else nil,
+			diagnostics = if DIAGNOSTICS_KEY then data[DIAGNOSTICS_KEY] else nil,
+			successfulRollCount = if SUCCESSFUL_ROLL_COUNT_KEY then data[SUCCESSFUL_ROLL_COUNT_KEY] else nil,
+		})
 	end
 end
 
@@ -599,6 +796,7 @@ end
 function DataService:OnPlayerRemoving(player: Player)
 	flushTimePlayedForPlayer(player, true)
 	Leaderboards.flushPlayer(self, player)
+	PlayerDataRemoving:Fire(player)
 
 	local profile = PROFILES[player]
 	if profile then
@@ -632,7 +830,22 @@ function DataService:Set(player: Player, key: string, mutator: any)
 			if normalizeOptionalString(newValue) ~= "" then normalizeOptionalString(newValue) else nil
 		)
 	end
+	if EQUIPPED_AURA_ID_KEY and key == EQUIPPED_AURA_ID_KEY then
+		EquippedAuraChanged:Fire(
+			player,
+			if normalizeOptionalAuraId(currentValue) ~= "" then normalizeOptionalAuraId(currentValue) else nil,
+			if normalizeOptionalAuraId(newValue) ~= "" then normalizeOptionalAuraId(newValue) else nil
+		)
+	end
 	return deepCopy(newValue), deepCopy(currentValue)
+end
+
+function DataService:SetNestedValue(player: Player, key: string, path: { any }, value: any): boolean
+	return setReplicaPathValue(player, key, path, value)
+end
+
+function DataService:SetNestedValues(player: Player, key: string, path: { any }, values: { [any]: any }): boolean
+	return setReplicaPathValues(player, key, path, values)
 end
 
 function DataService:GetOwnedBodyParts(player: Player): { [string]: OwnedBodyParts.OwnedBodyPartRecord }
@@ -652,12 +865,96 @@ function DataService:GetBodyPartsState(player: Player): OwnedBodyParts.OwnedBody
 	return cloneOwnedBodyPartsState(self:Get(player, BODY_PARTS_KEY))
 end
 
+function DataService:HasDiscoveredBodyPartPiece(player: Player, pieceId: string): boolean
+	if not BODY_PARTS_KEY then
+		return false
+	end
+	if typeof(pieceId) ~= "string" or pieceId == "" then
+		return false
+	end
+
+	local bodyPartsState = getReplicaValue(player, BODY_PARTS_KEY)
+	local discoveredPieceIds = if typeof(bodyPartsState) == "table" then bodyPartsState.discoveredPieceIds else nil
+	return typeof(discoveredPieceIds) == "table" and discoveredPieceIds[pieceId] == true
+end
+
+function DataService:GetOwnedAuras(player: Player): { [string]: OwnedAuras.OwnedAuraRecord }
+	if not AURAS_KEY then
+		return {}
+	end
+
+	local aurasState = cloneOwnedAurasState(self:Get(player, AURAS_KEY))
+	return aurasState.ownedById
+end
+
+function DataService:GetAurasState(player: Player): OwnedAuras.OwnedAurasState
+	if not AURAS_KEY then
+		return OwnedAuras.CreateEmptyState()
+	end
+
+	return cloneOwnedAurasState(self:Get(player, AURAS_KEY))
+end
+
+function DataService:GetOwnedPotions(player: Player): { [string]: OwnedPotions.OwnedPotionRecord }
+	if not POTIONS_KEY then
+		return {}
+	end
+
+	local potionsState = cloneOwnedPotionsState(self:Get(player, POTIONS_KEY))
+	return potionsState.ownedByPotionId
+end
+
+function DataService:GetPotionsState(player: Player): OwnedPotions.OwnedPotionsState
+	if not POTIONS_KEY then
+		return OwnedPotions.CreateEmptyState()
+	end
+
+	return cloneOwnedPotionsState(self:Get(player, POTIONS_KEY))
+end
+
+function DataService:GetOwnedAuraByAuraId(player: Player, auraId: string): OwnedAuras.OwnedAuraRecord?
+	local normalizedAuraId = AuraConfig.NormalizeId(auraId)
+	if not normalizedAuraId then
+		return nil
+	end
+
+	local aurasState = self:GetAurasState(player)
+	local ownedId = aurasState.ownedAuraIdByAuraId[normalizedAuraId]
+	if not ownedId then
+		return nil
+	end
+
+	return aurasState.ownedById[ownedId]
+end
+
 function DataService:GetEquippedLoadout(player: Player): BodyPartLoadout.EquippedState
 	if not EQUIPPED_LOADOUT_KEY then
 		return BodyPartLoadout.CreateEmptyEquippedState()
 	end
 
 	return BodyPartLoadout.NormalizeEquippedState(self:Get(player, EQUIPPED_LOADOUT_KEY))
+end
+
+function DataService:GetStats(player: Player): any
+	if not STATS_KEY then
+		return PlayerStats.CreateEmpty()
+	end
+
+	return PlayerStats.Normalize(self:Get(player, STATS_KEY), {
+		bodyPartsState = self:GetBodyPartsState(player),
+		aurasState = self:GetAurasState(player),
+		currentMoney = self:GetMoney(player),
+		diagnostics = if DIAGNOSTICS_KEY then self:Get(player, DIAGNOSTICS_KEY) else nil,
+		successfulRollCount = self:GetSuccessfulRollCount(player),
+	})
+end
+
+function DataService:GetTimePlayed(player: Player): number
+	if not TIME_PLAYED_KEY then
+		return 0
+	end
+
+	return math.max(0, clampWholeNumber(self:Get(player, TIME_PLAYED_KEY), 0))
 end
 
 function DataService:GetMoney(player: Player): number
@@ -668,7 +965,7 @@ function DataService:GetMoney(player: Player): number
 	return math.max(0, tonumber(self:Get(player, MONEY_KEY)) or 0)
 end
 
-function DataService:AdjustMoney(player: Player, delta: number): number
+function DataService:AdjustMoney(player: Player, delta: number, source: string?): number
 	if not MONEY_KEY then
 		return 0
 	end
@@ -677,18 +974,16 @@ function DataService:AdjustMoney(player: Player, delta: number): number
 	end
 
 	local previousValue = self:GetMoney(player)
-	local updatedValue = previousValue
-	self:Set(player, MONEY_KEY, function(currentValue)
-		updatedValue = math.max(0, (tonumber(currentValue) or 0) + (tonumber(delta) or 0))
-		return updatedValue
-	end)
-	MoneyChanged:Fire(player, previousValue, updatedValue, tonumber(delta) or 0)
+	local updatedValue = math.max(0, previousValue + (tonumber(delta) or 0))
+	setReplicaPathValue(player, MONEY_KEY, nil, updatedValue)
+	syncPlayerStateForKey(player, MONEY_KEY, updatedValue)
+	MoneyChanged:Fire(player, previousValue, updatedValue, tonumber(delta) or 0, source)
 
 	return updatedValue
 end
 
-function DataService:AddMoney(player: Player, amount: number): number
-	return self:AdjustMoney(player, amount)
+function DataService:AddMoney(player: Player, amount: number, source: string?): number
+	return self:AdjustMoney(player, amount, source)
 end
 
 function DataService:GetSuccessfulRollCount(player: Player): number
@@ -712,6 +1007,19 @@ function DataService:GetEquippedTitleId(player: Player): string?
 	return normalizedEquippedTitleId
 end
 
+function DataService:GetEquippedAuraId(player: Player): string?
+	if not EQUIPPED_AURA_ID_KEY then
+		return nil
+	end
+
+	local normalizedEquippedAuraId = normalizeOptionalAuraId(self:Get(player, EQUIPPED_AURA_ID_KEY))
+	if normalizedEquippedAuraId == "" then
+		return nil
+	end
+
+	return normalizedEquippedAuraId
+end
+
 function DataService:SetEquippedTitleId(player: Player, equippedTitleId: string?): (boolean, string?)
 	if not EQUIPPED_TITLE_ID_KEY then
 		return false, "Equipped title persistence is not configured."
@@ -722,6 +1030,18 @@ function DataService:SetEquippedTitleId(player: Player, equippedTitleId: string?
 
 	self:Set(player, EQUIPPED_TITLE_ID_KEY, normalizeOptionalString(equippedTitleId))
 	return true, "Equipped title updated."
+end
+
+function DataService:SetEquippedAuraId(player: Player, equippedAuraId: string?): (boolean, string?)
+	if not EQUIPPED_AURA_ID_KEY then
+		return false, "Equipped aura persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return false, "Player data is not loaded."
+	end
+
+	self:Set(player, EQUIPPED_AURA_ID_KEY, normalizeOptionalAuraId(equippedAuraId))
+	return true, "Equipped aura updated."
 end
 
 function DataService:GetAchievementsState(player: Player): AchievementState.AchievementsState
@@ -738,11 +1058,9 @@ function DataService:IncrementSuccessfulRollCount(player: Player): number
 	end
 
 	local previousValue = self:GetSuccessfulRollCount(player)
-	local updatedValue = 0
-	self:Set(player, SUCCESSFUL_ROLL_COUNT_KEY, function(currentValue)
-		updatedValue = math.max(0, clampWholeNumber(currentValue, 0)) + 1
-		return updatedValue
-	end)
+	local updatedValue = math.max(0, previousValue) + 1
+	setReplicaPathValue(player, SUCCESSFUL_ROLL_COUNT_KEY, nil, updatedValue)
+	syncPlayerStateForKey(player, SUCCESSFUL_ROLL_COUNT_KEY, updatedValue)
 	SuccessfulRollIncremented:Fire(player, previousValue, updatedValue)
 
 	return updatedValue
@@ -840,6 +1158,26 @@ function DataService:SetQuickRollEnabled(player: Player, enabled: boolean): (boo
 	return true, "Quick roll updated."
 end
 
+function DataService:GetAutoSizeEnabled(player: Player): boolean
+	if not AUTO_SIZE_ENABLED_KEY then
+		return false
+	end
+
+	return self:Get(player, AUTO_SIZE_ENABLED_KEY) == true
+end
+
+function DataService:SetAutoSizeEnabled(player: Player, enabled: boolean): (boolean, string?)
+	if not AUTO_SIZE_ENABLED_KEY then
+		return false, "Auto size persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return false, "Player data is not loaded."
+	end
+
+	self:Set(player, AUTO_SIZE_ENABLED_KEY, enabled == true)
+	return true, "Auto size updated."
+end
+
 function DataService:GetAutoSellRarities(player: Player): { [string]: boolean }
 	if not AUTO_SELL_RARITIES_KEY then
 		return RollingConfig.CreateDefaultAutoSellState()
@@ -899,11 +1237,20 @@ function DataService:GetTotalInExistenceForPiece(pieceId: string): (number?, str
 	return BodyPartSerialStore:GetTotalInExistenceForPiece(pieceId)
 end
 
+function DataService:GetNextSerialForAura(auraId: string): (number?, string?)
+	return AuraSerialStore:GetNextSerialForAura(auraId)
+end
+
+function DataService:GetTotalInExistenceForAura(auraId: string): (number?, string?)
+	return AuraSerialStore:GetTotalInExistenceForAura(auraId)
+end
+
 function DataService:AddOwnedBodyPart(player: Player, payload: OwnedBodyParts.OwnedBodyPartGrantPayload): (OwnedBodyParts.OwnedBodyPartRecord?, string?)
 	if not BODY_PARTS_KEY then
 		return nil, "Body parts persistence is not configured."
 	end
-	if not getActiveReplica(player) then
+	local replica = getActiveReplica(player)
+	if not replica then
 		return nil, "Player data is not loaded."
 	end
 
@@ -938,9 +1285,11 @@ function DataService:AddOwnedBodyPart(player: Player, payload: OwnedBodyParts.Ow
 
 	local sizeMultiplier = payload.sizeMultiplier
 	if sizeMultiplier == nil then
-		sizeMultiplier = SizeConfig.GetMultiplier(payload.sizeId)
+		sizeMultiplier = SizeConfig.GetRepresentativeScale(payload.sizeId)
 	elseif not isPositiveFiniteNumber(sizeMultiplier) then
 		return nil, "sizeMultiplier must be a positive number when provided."
+	else
+		sizeMultiplier = SizeConfig.NormalizeScale(sizeMultiplier, payload.sizeId)
 	end
 
 	local mutationMultiplier = payload.mutationMultiplier
@@ -963,58 +1312,204 @@ function DataService:AddOwnedBodyPart(player: Player, payload: OwnedBodyParts.Ow
 		return nil, serialError or "Failed to allocate body part serial number."
 	end
 
-	local createdRecord: OwnedBodyParts.OwnedBodyPartRecord? = nil
-	local updatedBodyPartsState: OwnedBodyParts.OwnedBodyPartsState? = nil
-
-	self:Set(player, BODY_PARTS_KEY, function(currentBodyPartsState)
-		local bodyPartsState = cloneOwnedBodyPartsState(currentBodyPartsState)
-		local ownedId = OwnedBodyParts.CreateOwnedId(bodyPartsState.nextOwnedId)
-
-		local normalizedRecord = normalizeOwnedBodyPartRecord({
-			ownedId = ownedId,
-			pieceId = pieceId,
-			rarityDenominator = rarityDenominator,
-			rolledSetId = payload.rolledSetId,
-			rolledSetDisplayName = payload.rolledSetDisplayName,
-			displayOddsDenominator = payload.displayOddsDenominator,
-			displayRarity = payload.displayRarity,
-			mutationId = mutationId,
-			mutation = mutation,
-			mutationMultiplier = mutationMultiplier,
-			sizeId = payload.sizeId,
-			sizeMultiplier = sizeMultiplier,
-			variantMultiplier = variantMultiplier,
-			finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
-			serialNumber = serialNumber,
-		}, ownedId)
-		if not normalizedRecord then
-			return bodyPartsState
-		end
-
-		createdRecord = normalizedRecord
-
-		bodyPartsState.ownedById[ownedId] = createdRecord
-		bodyPartsState.discoveredPieceIds[pieceId] = true
-		bodyPartsState.nextOwnedId += 1
-		updatedBodyPartsState = cloneOwnedBodyPartsState(bodyPartsState)
-		return bodyPartsState
-	end)
+	local currentBodyPartsState = if typeof(replica.Data[BODY_PARTS_KEY]) == "table"
+		then replica.Data[BODY_PARTS_KEY]
+		else OwnedBodyParts.CreateEmptyState()
+	local nextOwnedId = math.max(1, math.floor(tonumber(currentBodyPartsState.nextOwnedId) or 1))
+	local ownedId = OwnedBodyParts.CreateOwnedId(nextOwnedId)
+	local createdRecord = normalizeOwnedBodyPartRecord({
+		ownedId = ownedId,
+		pieceId = pieceId,
+		rarityDenominator = rarityDenominator,
+		rolledSetId = payload.rolledSetId,
+		rolledSetDisplayName = payload.rolledSetDisplayName,
+		displayOddsDenominator = payload.displayOddsDenominator,
+		displayRarity = payload.displayRarity,
+		mutationId = mutationId,
+		mutation = mutation,
+		mutationMultiplier = mutationMultiplier,
+		sizeId = payload.sizeId,
+		sizeMultiplier = sizeMultiplier,
+		variantMultiplier = variantMultiplier,
+		finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
+		serialNumber = serialNumber,
+	}, ownedId)
 
 	if not createdRecord then
 		return nil, "Failed to store owned body part."
 	end
 
-	if updatedBodyPartsState then
-		OwnedBodyPartAdded:Fire(player, deepCopy(createdRecord), cloneOwnedBodyPartsState(updatedBodyPartsState))
+	setReplicaPathValue(player, BODY_PARTS_KEY, { "ownedById", ownedId }, createdRecord)
+	if not (typeof(currentBodyPartsState.discoveredPieceIds) == "table" and currentBodyPartsState.discoveredPieceIds[pieceId] == true) then
+		setReplicaPathValue(player, BODY_PARTS_KEY, { "discoveredPieceIds", pieceId }, true)
+	end
+	setReplicaPathValue(player, BODY_PARTS_KEY, { "nextOwnedId" }, nextOwnedId + 1)
+
+	local updatedBodyPartsState = self:GetBodyPartsState(player)
+
+	OwnedBodyPartAdded:Fire(player, deepCopy(createdRecord), cloneOwnedBodyPartsState(updatedBodyPartsState))
+
+	return deepCopy(createdRecord), nil
+end
+
+function DataService:AddOwnedAura(player: Player, payload: OwnedAuras.OwnedAuraGrantPayload): (OwnedAuras.OwnedAuraRecord?, string?)
+	if not AURAS_KEY then
+		return nil, "Aura persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return nil, "Player data is not loaded."
+	end
+	if typeof(payload) ~= "table" then
+		return nil, "Owned aura payload must be a table."
+	end
+
+	local auraId = AuraConfig.NormalizeId(payload.auraId)
+	if not auraId then
+		return nil, "auraId is required."
+	end
+
+	local existingRecord = self:GetOwnedAuraByAuraId(player, auraId)
+	if existingRecord then
+		return deepCopy(existingRecord), nil
+	end
+
+	local serialNumber, serialError = self:GetNextSerialForAura(auraId)
+	if not serialNumber then
+		return nil, serialError or "Failed to allocate aura serial number."
+	end
+
+	local createdRecord: OwnedAuras.OwnedAuraRecord? = nil
+	local updatedAurasState: OwnedAuras.OwnedAurasState? = nil
+
+	self:Set(player, AURAS_KEY, function(currentAurasState)
+		local aurasState = cloneOwnedAurasState(currentAurasState)
+		local ownedAuraId = aurasState.ownedAuraIdByAuraId[auraId]
+		if ownedAuraId and aurasState.ownedById[ownedAuraId] then
+			createdRecord = aurasState.ownedById[ownedAuraId]
+			return aurasState
+		end
+
+		local ownedId = OwnedAuras.CreateOwnedId(aurasState.nextOwnedId)
+		createdRecord = {
+			ownedId = ownedId,
+			auraId = auraId,
+			serialNumber = math.max(1, clampWholeNumber(serialNumber, 1)),
+			isFavorite = false,
+		}
+
+		aurasState.ownedById[ownedId] = createdRecord
+		aurasState.ownedAuraIdByAuraId[auraId] = ownedId
+		aurasState.nextOwnedId += 1
+		updatedAurasState = cloneOwnedAurasState(aurasState)
+		return aurasState
+	end)
+
+	if not createdRecord then
+		return nil, "Failed to store owned aura."
+	end
+
+	if updatedAurasState and existingRecord == nil then
+		OwnedAuraAdded:Fire(player, deepCopy(createdRecord), cloneOwnedAurasState(updatedAurasState))
 	end
 
 	return deepCopy(createdRecord), nil
+end
+
+function DataService:AddOwnedPotionUses(player: Player, potionId: string, amount: number): (OwnedPotions.OwnedPotionRecord?, string?)
+	if not POTIONS_KEY then
+		return nil, "Potion persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return nil, "Player data is not loaded."
+	end
+
+	local normalizedPotionId = PotionConfig.NormalizeId(potionId)
+	if not normalizedPotionId then
+		return nil, "potionId is required."
+	end
+
+	local resolvedAmount = math.max(1, math.floor(tonumber(amount) or 0))
+	local updatedRecord: OwnedPotions.OwnedPotionRecord? = nil
+
+	self:Set(player, POTIONS_KEY, function(currentPotionsState)
+		local potionsState = cloneOwnedPotionsState(currentPotionsState)
+		local existingRecord = potionsState.ownedByPotionId[normalizedPotionId]
+		local nextAmount = resolvedAmount
+		local isFavorite = false
+		if existingRecord then
+			nextAmount += existingRecord.amount
+			isFavorite = existingRecord.isFavorite == true
+		end
+
+		updatedRecord = {
+			potionId = normalizedPotionId,
+			amount = nextAmount,
+			isFavorite = isFavorite,
+		}
+		potionsState.ownedByPotionId[normalizedPotionId] = updatedRecord
+		return potionsState
+	end)
+
+	if not updatedRecord then
+		return nil, "Failed to store owned potion."
+	end
+
+	return deepCopy(updatedRecord), nil
+end
+
+function DataService:ConsumeOwnedPotionUses(player: Player, potionId: string, amount: number): (OwnedPotions.OwnedPotionRecord?, string?)
+	if not POTIONS_KEY then
+		return nil, "Potion persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return nil, "Player data is not loaded."
+	end
+
+	local normalizedPotionId = PotionConfig.NormalizeId(potionId)
+	if not normalizedPotionId then
+		return nil, "potionId is required."
+	end
+
+	local resolvedAmount = math.max(1, math.floor(tonumber(amount) or 0))
+	local updatedRecord: OwnedPotions.OwnedPotionRecord? = nil
+	local failureMessage = nil
+
+	self:Set(player, POTIONS_KEY, function(currentPotionsState)
+		local potionsState = cloneOwnedPotionsState(currentPotionsState)
+		local existingRecord = potionsState.ownedByPotionId[normalizedPotionId]
+		if not existingRecord then
+			failureMessage = "You do not own that potion."
+			return potionsState
+		end
+		if existingRecord.amount < resolvedAmount then
+			failureMessage = "You do not own that many potion uses."
+			return potionsState
+		end
+
+		local remainingAmount = existingRecord.amount - resolvedAmount
+		if remainingAmount > 0 then
+			existingRecord.amount = remainingAmount
+			updatedRecord = existingRecord
+			potionsState.ownedByPotionId[normalizedPotionId] = existingRecord
+		else
+			potionsState.ownedByPotionId[normalizedPotionId] = nil
+			updatedRecord = nil
+		end
+		return potionsState
+	end)
+
+	if failureMessage then
+		return nil, failureMessage
+	end
+
+	return deepCopy(updatedRecord), nil
 end
 
 function DataService:RemoveOwnedBodyPart(player: Player, ownedId: string): (OwnedBodyParts.OwnedBodyPartRecord?, string?)
 	if not BODY_PARTS_KEY then
 		return nil, "Body parts persistence is not configured."
 	end
+	local bodyPartsState = getReplicaValue(player, BODY_PARTS_KEY)
 	if not getActiveReplica(player) then
 		return nil, "Player data is not loaded."
 	end
@@ -1023,55 +1518,214 @@ function DataService:RemoveOwnedBodyPart(player: Player, ownedId: string): (Owne
 		return nil, "ownedId is required."
 	end
 
-	local removedRecord: OwnedBodyParts.OwnedBodyPartRecord? = nil
-
-	self:Set(player, BODY_PARTS_KEY, function(currentBodyPartsState)
-		local bodyPartsState = cloneOwnedBodyPartsState(currentBodyPartsState)
-		removedRecord = bodyPartsState.ownedById[ownedId]
-		if removedRecord then
-			bodyPartsState.ownedById[ownedId] = nil
-		end
-		return bodyPartsState
-	end)
+	local ownedById = if typeof(bodyPartsState) == "table" then bodyPartsState.ownedById else nil
+	local removedRecord = normalizeOwnedBodyPartRecord(
+		typeof(ownedById) == "table" and ownedById[ownedId] or nil,
+		ownedId
+	)
 
 	if not removedRecord then
 		return nil, string.format("Owned body part '%s' was not found.", ownedId)
 	end
 
+	setReplicaPathValue(player, BODY_PARTS_KEY, { "ownedById", ownedId }, nil)
+
 	return deepCopy(removedRecord), nil
 end
 
-function DataService:SetOwnedBodyPartFavorite(player: Player, ownedId: string, isFavorite: boolean): (OwnedBodyParts.OwnedBodyPartRecord?, string?)
+function DataService:RemoveOwnedBodyParts(player: Player, ownedIds: { string }): ({ OwnedBodyParts.OwnedBodyPartRecord }?, string?)
 	if not BODY_PARTS_KEY then
 		return nil, "Body parts persistence is not configured."
 	end
 	if not getActiveReplica(player) then
 		return nil, "Player data is not loaded."
 	end
+	if typeof(ownedIds) ~= "table" then
+		return nil, "ownedIds must be a table."
+	end
+
+	local bodyPartsState = cloneOwnedBodyPartsState(getReplicaValue(player, BODY_PARTS_KEY))
+	local uniqueOwnedIds = {}
+	local seenOwnedIds = {}
+	for _, ownedId in ipairs(ownedIds) do
+		if typeof(ownedId) ~= "string" or ownedId == "" then
+			return nil, "ownedId is required."
+		end
+		if seenOwnedIds[ownedId] ~= true then
+			seenOwnedIds[ownedId] = true
+			table.insert(uniqueOwnedIds, ownedId)
+		end
+	end
+
+	table.sort(uniqueOwnedIds)
+
+	local removedRecords = table.create(#uniqueOwnedIds)
+	for _, ownedId in ipairs(uniqueOwnedIds) do
+		local removedRecord = normalizeOwnedBodyPartRecord(bodyPartsState.ownedById[ownedId], ownedId)
+		if not removedRecord then
+			return nil, string.format("Owned body part '%s' was not found.", ownedId)
+		end
+
+		table.insert(removedRecords, removedRecord)
+		bodyPartsState.ownedById[ownedId] = nil
+	end
+
+	if #removedRecords > 0 then
+		setReplicaPathValue(player, BODY_PARTS_KEY, nil, bodyPartsState)
+	end
+
+	return deepCopy(removedRecords), nil
+end
+
+function DataService:SetOwnedBodyPartFavorite(player: Player, ownedId: string, isFavorite: boolean): (OwnedBodyParts.OwnedBodyPartRecord?, string?)
+	if not BODY_PARTS_KEY then
+		return nil, "Body parts persistence is not configured."
+	end
+	local bodyPartsState = getReplicaValue(player, BODY_PARTS_KEY)
+	if not getActiveReplica(player) then
+		return nil, "Player data is not loaded."
+	end
 	if typeof(ownedId) ~= "string" or ownedId == "" then
 		return nil, "ownedId is required."
 	end
 
-	local updatedRecord: OwnedBodyParts.OwnedBodyPartRecord? = nil
-
-	self:Set(player, BODY_PARTS_KEY, function(currentBodyPartsState)
-		local bodyPartsState = cloneOwnedBodyPartsState(currentBodyPartsState)
-		local existingRecord = bodyPartsState.ownedById[ownedId]
-		if not existingRecord then
-			return bodyPartsState
-		end
-
-		existingRecord.isFavorite = isFavorite == true
-		updatedRecord = existingRecord
-		bodyPartsState.ownedById[ownedId] = existingRecord
-		return bodyPartsState
-	end)
+	local ownedById = if typeof(bodyPartsState) == "table" then bodyPartsState.ownedById else nil
+	local updatedRecord = normalizeOwnedBodyPartRecord(
+		typeof(ownedById) == "table" and ownedById[ownedId] or nil,
+		ownedId
+	)
 
 	if not updatedRecord then
 		return nil, string.format("Owned body part '%s' was not found.", ownedId)
 	end
 
+	updatedRecord.isFavorite = isFavorite == true
+	setReplicaPathValue(player, BODY_PARTS_KEY, { "ownedById", ownedId, "isFavorite" }, updatedRecord.isFavorite)
+
 	return deepCopy(updatedRecord), nil
+end
+
+function DataService:SetOwnedAuraFavorite(player: Player, ownedId: string, isFavorite: boolean): (OwnedAuras.OwnedAuraRecord?, string?)
+	if not AURAS_KEY then
+		return nil, "Aura persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return nil, "Player data is not loaded."
+	end
+	if typeof(ownedId) ~= "string" or ownedId == "" then
+		return nil, "ownedId is required."
+	end
+
+	local updatedRecord: OwnedAuras.OwnedAuraRecord? = nil
+
+	self:Set(player, AURAS_KEY, function(currentAurasState)
+		local aurasState = cloneOwnedAurasState(currentAurasState)
+		local existingRecord = aurasState.ownedById[ownedId]
+		if not existingRecord then
+			return aurasState
+		end
+
+		existingRecord.isFavorite = isFavorite == true
+		updatedRecord = existingRecord
+		aurasState.ownedById[ownedId] = existingRecord
+		if existingRecord.auraId ~= "" then
+			aurasState.ownedAuraIdByAuraId[existingRecord.auraId] = existingRecord.ownedId
+		end
+		return aurasState
+	end)
+
+	if not updatedRecord then
+		return nil, string.format("Owned aura '%s' was not found.", ownedId)
+	end
+
+	return deepCopy(updatedRecord), nil
+end
+
+function DataService:SetOwnedPotionFavorite(player: Player, potionId: string, isFavorite: boolean): (OwnedPotions.OwnedPotionRecord?, string?)
+	if not POTIONS_KEY then
+		return nil, "Potion persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return nil, "Player data is not loaded."
+	end
+
+	local normalizedPotionId = PotionConfig.NormalizeId(potionId)
+	if not normalizedPotionId then
+		return nil, "potionId is required."
+	end
+
+	local updatedRecord: OwnedPotions.OwnedPotionRecord? = nil
+	self:Set(player, POTIONS_KEY, function(currentPotionsState)
+		local potionsState = cloneOwnedPotionsState(currentPotionsState)
+		local existingRecord = potionsState.ownedByPotionId[normalizedPotionId]
+		if not existingRecord then
+			return potionsState
+		end
+
+		existingRecord.isFavorite = isFavorite == true
+		updatedRecord = existingRecord
+		potionsState.ownedByPotionId[normalizedPotionId] = existingRecord
+		return potionsState
+	end)
+
+	if not updatedRecord then
+		return nil, string.format("Owned potion '%s' was not found.", normalizedPotionId)
+	end
+
+	return deepCopy(updatedRecord), nil
+end
+
+function DataService:SetPotionActiveRemaining(player: Player, potionId: string, remainingSeconds: number?): (boolean, string?)
+	if not POTIONS_KEY then
+		return false, "Potion persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return false, "Player data is not loaded."
+	end
+
+	local normalizedPotionId = PotionConfig.NormalizeId(potionId)
+	if not normalizedPotionId then
+		return false, "potionId is required."
+	end
+
+	self:Set(player, POTIONS_KEY, function(currentPotionsState)
+		local potionsState = cloneOwnedPotionsState(currentPotionsState)
+		local resolvedRemainingSeconds = math.max(0, math.floor(tonumber(remainingSeconds) or 0))
+		if resolvedRemainingSeconds > 0 then
+			potionsState.activeByPotionId[normalizedPotionId] = resolvedRemainingSeconds
+		else
+			potionsState.activeByPotionId[normalizedPotionId] = nil
+		end
+		return potionsState
+	end)
+
+	return true, "Potion active state updated."
+end
+
+function DataService:SetPotionActiveRemainingMap(player: Player, activeByPotionId: { [string]: number }): (boolean, string?)
+	if not POTIONS_KEY then
+		return false, "Potion persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return false, "Player data is not loaded."
+	end
+
+	self:Set(player, POTIONS_KEY, function(currentPotionsState)
+		local potionsState = cloneOwnedPotionsState(currentPotionsState)
+		potionsState.activeByPotionId = {}
+		if typeof(activeByPotionId) == "table" then
+			for potionId, remainingSeconds in pairs(activeByPotionId) do
+				local normalizedPotionId = PotionConfig.NormalizeId(potionId)
+				local resolvedRemainingSeconds = math.max(0, math.floor(tonumber(remainingSeconds) or 0))
+				if normalizedPotionId and resolvedRemainingSeconds > 0 then
+					potionsState.activeByPotionId[normalizedPotionId] = resolvedRemainingSeconds
+				end
+			end
+		end
+		return potionsState
+	end)
+
+	return true, "Potion active state updated."
 end
 
 function DataService:Get(player: Player, key: string?)

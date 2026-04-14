@@ -1,0 +1,1149 @@
+local GUIControls = {}
+
+GUIControls.AutoRoll = false
+GUIControls.CurrentlyRolling = false
+GUIControls.RollDebounce = false
+GUIControls.RollingState = nil
+GUIControls.SuppressRollClickUntil = 0
+GUIControls.IsDropdownOpen = false
+GUIControls.LastSelectRequestId = 0
+GUIControls.DropdownInteractionId = 0
+GUIControls.DropdownAnimationId = 0
+GUIControls.AutoRollLoopId = 0
+GUIControls.CurrentRollResult = nil
+GUIControls.CurrentRollResultEquipped = false
+GUIControls.EquipDebounce = false
+GUIControls.EquipStatusToken = 0
+GUIControls.RollingStateRefreshPending = false
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local GroupService = game:GetService("GroupService")
+
+local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
+local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
+local RollTargetRegions = require(ReplicatedStorage.Shared.Character.RollTargetRegions)
+local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
+
+local LocalPlayer = Players.LocalPlayer
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local RollingRemotes = Remotes:WaitForChild("Rolling")
+local GetRollingStateRemote = RollingRemotes:WaitForChild("GetRollingState")
+local SelectRollTypeRemote = RollingRemotes:WaitForChild("SelectRollType")
+local SelectRollRegionRemote = RollingRemotes:WaitForChild("SelectRollRegion")
+local PerformRollRemote = RollingRemotes:WaitForChild("PerformRoll")
+local ToggleQuickRollRemote = RollingRemotes:WaitForChild("ToggleQuickRoll")
+local PromptQuickRollPurchaseRemote = RollingRemotes:WaitForChild("PromptQuickRollPurchase")
+local RollingUpdatedRemote = RollingRemotes:WaitForChild("RollingUpdated")
+local BODY_PARTS_FOLDER_NAME = "BodyParts"
+local EQUIP_REMOTE_NAME = "EquipOwnedBodyPart"
+
+local Main = script.Parent
+local Black2 = Main.Parent.Black2
+local DisplayFrame = Main:WaitForChild("DisplayFrame")
+local RollWarningControls = require(Main.Parent.RollWarning.GUIControls)
+local MainButtons = Main.Parent.Main
+local RollButton = MainButtons.RollButton
+local QuickRollButton = MainButtons.QuickRoll
+local AutoRollButton = MainButtons.AutoRoll
+local RollDropdown = RollButton.RollDropdown
+local RollDropdownInner = RollDropdown.Inner
+local RollDropdownScrollingFrame = RollDropdownInner.ScrollingFrame
+local RollDropdownTemplate = RollDropdownScrollingFrame.Template
+local RollIcon = RollButton.Icon
+local RollShadowIcon = RollButton.ShadowIcon
+local DropdownButton = RollButton.DropdownButton
+local LeftButton = RollButton.Left
+local RightButton = RollButton.Right
+
+local Blur = Instance.new("BlurEffect")
+Blur.Parent = game.Lighting
+Blur.Name = "RollBlur"
+Blur.Size = 0
+
+local GROUP_ID = 384839595
+local BASE_ROLL_COOLDOWN = 1
+local BASE_SEQUENCE_DURATION = 2.5
+local BASE_AUTO_RESULT_HOLD = 0.8
+local PREVIEW_SEQUENCE_LENGTH = 10
+local BasePosition = UDim2.fromScale(0.5, 0.358)
+local OffsetPosition = BasePosition + UDim2.fromScale(0, 0.1)
+local DropdownTweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+local DropdownClosedPosition = UDim2.fromScale(0.5, 2)
+local DropdownOpenPosition = UDim2.fromScale(0.5, 0.5)
+
+local CooldownFrameTween = TweenService:Create(
+	RollButton.CooldownFrame,
+	TweenInfo.new(1, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+	{ BackgroundTransparency = 0.3 }
+)
+
+local ShowBlackTween = TweenService:Create(Black2, TweenInfo.new(0.3, Enum.EasingStyle.Quad), { BackgroundTransparency = 0.8 })
+local HideBlackTween = TweenService:Create(Black2, TweenInfo.new(0.3, Enum.EasingStyle.Quad), { BackgroundTransparency = 1 })
+local BlurTween = TweenService:Create(Blur, TweenInfo.new(0.3, Enum.EasingStyle.Quad), { Size = 10 })
+local UnblurTween = TweenService:Create(Blur, TweenInfo.new(0.3, Enum.EasingStyle.Quad), { Size = 0 })
+local DisplayTween = TweenService:Create(Main.DisplayFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quad), { Position = UDim2.fromScale(0.5, 0.63) })
+local DisplayViewportTween = TweenService:Create(Main.DisplayFrame.ViewportFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quad), { Position = UDim2.fromScale(0.5, -0.5) })
+local SubInfoTween = TweenService:Create(Main.SubInfo, TweenInfo.new(0.5, Enum.EasingStyle.Back), { Size = UDim2.fromScale(1, 1), Position = UDim2.fromScale(0.5, 0.5) })
+
+local function formatMoney(value)
+	return "$" .. NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0)))
+end
+
+local function formatWholeNumber(value)
+	return NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0)))
+end
+
+local function formatLuck(value)
+	local numericValue = tonumber(value) or 1
+	local roundedValue = math.floor((numericValue * 10) + 0.5) / 10
+	return string.format("%.1fx", roundedValue)
+end
+
+local function formatSizeMultiplier(value)
+	local numericValue = math.max(0, tonumber(value) or 1)
+	local roundedHundredths = math.floor((numericValue * 100) + 0.5) / 100
+	local roundedTenths = math.floor((roundedHundredths * 10) + 0.5) / 10
+	if math.abs(roundedHundredths - roundedTenths) < 0.005 then
+		return string.format("%.1fx", roundedTenths)
+	end
+	return string.format("%.2fx", roundedHundredths)
+end
+
+local function formatSizeLabel(sizeName, scale)
+	local resolvedName = if typeof(sizeName) == "string" and sizeName ~= "" then sizeName else "Normal"
+	return string.format("Size: %s (%s)", resolvedName, formatSizeMultiplier(scale))
+end
+
+local function getSelectedRollType(state)
+	if typeof(state) ~= "table" then
+		return nil
+	end
+
+	if typeof(state.selectedRollType) == "table" then
+		return state.selectedRollType
+	end
+
+	local selectedRollTypeId = state.selectedRollTypeId
+	for _, rollType in ipairs(state.rollTypes or {}) do
+		if rollType.selected or (selectedRollTypeId ~= nil and rollType.id == selectedRollTypeId) then
+			return rollType
+		end
+	end
+
+	return nil
+end
+
+local function getRollTypes(state)
+	return (state and state.rollTypes) or {}
+end
+
+local function getRollRegions(state)
+	return (state and state.rollRegions) or {}
+end
+
+local function hasCoreRollCollections(state)
+	return #getRollTypes(state) > 0 and #getRollRegions(state) > 0
+end
+
+local function getSelectedRollRegion(state)
+	if typeof(state) ~= "table" then
+		return nil
+	end
+
+	local selectedRollRegion = state.selectedRollRegion
+	for _, rollRegion in ipairs(state.rollRegions or {}) do
+		if rollRegion.selected or (selectedRollRegion ~= nil and rollRegion.id == selectedRollRegion) then
+			return rollRegion
+		end
+	end
+
+	return nil
+end
+
+local function getQuickRollState(state)
+	if typeof(state) ~= "table" or typeof(state.quickRoll) ~= "table" then
+		return {
+			owned = false,
+			enabled = false,
+		}
+	end
+
+	return state.quickRoll
+end
+
+local function isPlayerInAutoRollGroup()
+	local ok, inGroup = pcall(function()
+		return LocalPlayer:IsInGroup(GROUP_ID)
+	end)
+	return ok and inGroup == true
+end
+
+local function invokeRemote(remote, payload)
+	local ok, result = pcall(function()
+		if payload ~= nil then
+			return remote:InvokeServer(payload)
+		end
+		return remote:InvokeServer()
+	end)
+	if not ok then
+		warn(string.format("[RollGUI] Remote %s failed: %s", remote.Name, tostring(result)))
+		return nil
+	end
+	return result
+end
+
+local function mergeRollingState(previousState, incomingState)
+	if typeof(incomingState) ~= "table" then
+		return previousState
+	end
+
+	if incomingState._isDelta ~= true or typeof(previousState) ~= "table" then
+		return incomingState
+	end
+
+	local mergedState = table.clone(previousState)
+	for key, value in pairs(incomingState) do
+		if key ~= "_isDelta" then
+			mergedState[key] = value
+		end
+	end
+
+	return mergedState
+end
+
+local function getEquipOwnedBodyPartRemote()
+	local bodyPartsFolder = Remotes:FindFirstChild(BODY_PARTS_FOLDER_NAME)
+	if not (bodyPartsFolder and bodyPartsFolder:IsA("Folder")) then
+		return nil
+	end
+
+	local equipRemote = bodyPartsFolder:FindFirstChild(EQUIP_REMOTE_NAME)
+	if equipRemote and equipRemote:IsA("RemoteFunction") then
+		return equipRemote
+	end
+
+	return nil
+end
+
+local function isInsufficientFundsMessage(message)
+	return typeof(message) == "string"
+		and string.find(string.lower(message), "need", 1, true) ~= nil
+		and string.find(string.lower(message), "money", 1, true) ~= nil
+end
+
+local function clearViewport()
+	DisplayFrame.ViewportFrame:ClearAllChildren()
+end
+
+local previewPiecesByRegion = {}
+
+local function getEligiblePreviewPieces(rollRegion)
+	local normalizedRegion = RollTargetRegions.Normalize(rollRegion)
+	local cached = previewPiecesByRegion[normalizedRegion]
+	if cached then
+		return cached
+	end
+
+	local eligiblePieces = {}
+	for _, piece in ipairs(BodyPartsCatalog.GetAllPieces()) do
+		if normalizedRegion == RollTargetRegions.FullBody or piece.region == normalizedRegion then
+			table.insert(eligiblePieces, piece)
+		end
+	end
+
+	previewPiecesByRegion[normalizedRegion] = eligiblePieces
+	return eligiblePieces
+end
+
+local function buildClientRollInfoFromPiece(piece, overrides)
+	if not piece then
+		return nil
+	end
+
+	local setConfig = BodyPartsCatalog.GetSetForPiece(piece.id)
+	if not setConfig then
+		return nil
+	end
+
+	local mutationId = if typeof(overrides) == "table" and typeof(overrides.MutationId) == "string"
+		then overrides.MutationId
+		else MutationConfig.GetDefault().id
+	local mutationData = MutationConfig.Get(mutationId) or MutationConfig.GetDefault()
+	local sizeId = if typeof(overrides) == "table" and typeof(overrides.SizeId) == "string"
+		then overrides.SizeId
+		else SizeConfig.GetDefault().id
+	local sizeScale = if typeof(overrides) == "table" and tonumber(overrides.SizeMultiplier) ~= nil
+		then tonumber(overrides.SizeMultiplier)
+		else SizeConfig.GetRepresentativeScale(sizeId)
+	local sizeData = SizeConfig.Get(SizeConfig.NormalizeId(sizeId)) or SizeConfig.GetDefault()
+	local finalCashPerSec = if typeof(overrides) == "table" and tonumber(overrides.CashPerSec) ~= nil
+		then tonumber(overrides.CashPerSec)
+		else tonumber(piece.passiveIncomePerSecond) or 0
+
+	return {
+		Name = setConfig.rollDisplay.displayName,
+		BodyPart = piece.displayName,
+		Region = piece.region,
+		Chance = setConfig.rollDisplay.chance,
+		CashPerSec = finalCashPerSec,
+		FinalCashPerSec = finalCashPerSec,
+		Color = setConfig.rollDisplay.color,
+		Font = setConfig.rollDisplay.fontFace,
+		Weight = setConfig.rollDisplay.fontWeight,
+		Rarity = setConfig.rollDisplay.rarity,
+		PieceId = piece.id,
+		PieceDisplayName = piece.displayName,
+		SetId = setConfig.id,
+		SetDisplayName = setConfig.displayName,
+		DisplayOddsDenominator = setConfig.rollDisplay.chance,
+		SetBonusPassiveIncomePerSecond = setConfig.fullSetBonus.passiveIncomePerSecond,
+		Mutation = mutationData.displayName,
+		MutationId = mutationData.id,
+		Size = sizeData.displayName,
+		SizeId = sizeData.id,
+		SizeMultiplier = sizeScale,
+	}
+end
+
+local function buildClientPreviewSequence(rollResult)
+	local finalResult = buildClientRollInfoFromPiece(
+		rollResult and rollResult.finalResult and BodyPartsCatalog.GetPiece(rollResult.finalResult.PieceId),
+		rollResult and rollResult.finalResult
+	)
+	if not finalResult then
+		return nil
+	end
+
+	local eligiblePieces = getEligiblePreviewPieces(rollResult and rollResult.rollRegion)
+	if #eligiblePieces == 0 then
+		return { finalResult }
+	end
+
+	local randomSource = Random.new()
+	local previewSequence = table.create(PREVIEW_SEQUENCE_LENGTH)
+	for index = 1, PREVIEW_SEQUENCE_LENGTH - 1 do
+		local previewPiece = eligiblePieces[randomSource:NextInteger(1, #eligiblePieces)]
+		previewSequence[index] = buildClientRollInfoFromPiece(previewPiece)
+	end
+	previewSequence[PREVIEW_SEQUENCE_LENGTH] = finalResult
+	return previewSequence
+end
+
+local function renderRollInfo(rollInfo, shouldRenderModel)
+	clearViewport()
+
+	DisplayFrame.BundleName.Text = rollInfo.Name
+	DisplayFrame.Chance.Text = "1 in " .. formatWholeNumber(rollInfo.Chance)
+	if typeof(rollInfo.Color) == "Color3" then
+		DisplayFrame.BundleName.TextColor3 = rollInfo.Color
+	end
+	if typeof(rollInfo.Font) == "Font" then
+		DisplayFrame.BundleName.FontFace = rollInfo.Font
+	end
+
+	if shouldRenderModel ~= true then
+		return
+	end
+
+	local sourceModel = nil
+	if typeof(rollInfo.Model) == "Instance" then
+		sourceModel = rollInfo.Model
+	elseif typeof(rollInfo.PieceId) == "string" and rollInfo.PieceId ~= "" then
+		sourceModel = BodyPartsCatalog.ResolveBundleModel(rollInfo.PieceId)
+	end
+
+	if typeof(sourceModel) ~= "Instance" then
+		return
+	end
+
+	local model = sourceModel:Clone()
+	local size = model:GetExtentsSize()
+	model.Parent = DisplayFrame.ViewportFrame
+	model:PivotTo(CFrame.new(0, 0, -size.Z * 2.5) * CFrame.Angles(0, math.rad(180), 0))
+end
+
+local function restoreIdleRollUi()
+	HideBlackTween:Play()
+	UnblurTween:Play()
+	Main.Visible = false
+	Main.SkipButton.Visible = false
+	Main.SubInfo.Visible = false
+	Main.EquipButton.Visible = false
+	MainButtons.RollButton.Visible = true
+	MainButtons.QuickRoll.Visible = true
+	MainButtons.AutoRoll.Visible = true
+end
+
+function GUIControls:GetQuickRollEnabled()
+	return getQuickRollState(GUIControls.RollingState).enabled == true
+end
+
+function GUIControls:GetRollCooldownDuration()
+	local rollingState = GUIControls.RollingState
+	if typeof(rollingState) == "table" then
+		local effectiveCooldown = tonumber(rollingState.effectiveRollCooldown)
+		if effectiveCooldown and effectiveCooldown > 0 then
+			return effectiveCooldown
+		end
+	end
+
+	return BASE_ROLL_COOLDOWN
+end
+
+function GUIControls:GetRollSequenceDuration()
+	return BASE_SEQUENCE_DURATION
+end
+
+function GUIControls:GetAutoResultHoldDuration()
+	return BASE_AUTO_RESULT_HOLD
+end
+
+function GUIControls:SetButtonVisualState(button, isActive, isEligible)
+	local coverTransparency = if isActive then 0 else 0.07
+	local strokeTransparency = if isActive then 0.15 else 0.52
+	local textTransparency = if isEligible then 0 else 0.15
+
+	if button:FindFirstChild("Cover") then
+		button.Cover.ImageTransparency = coverTransparency
+	end
+	if button:FindFirstChild("Cover2") then
+		button.Cover2.ImageTransparency = coverTransparency
+	end
+	if button:FindFirstChild("UIStroke") then
+		button.UIStroke.Transparency = strokeTransparency
+		button.UIStroke.Color = if isActive then Color3.fromRGB(96, 226, 98) else Color3.new(1, 1, 1)
+	end
+	if button:FindFirstChild("Content") then
+		button.Content.TextTransparency = textTransparency
+	end
+	if button:FindFirstChild("Desc") then
+		button.Desc.TextTransparency = textTransparency
+	end
+end
+
+function GUIControls:RefreshQuickRollButton()
+	local quickRollState = getQuickRollState(GUIControls.RollingState)
+	QuickRollButton.Desc.Text = quickRollState.owned and (quickRollState.enabled and "On" or "Off") or "Gamepass Required"
+	GUIControls:SetButtonVisualState(QuickRollButton, quickRollState.enabled == true, quickRollState.owned == true)
+end
+
+function GUIControls:RefreshAutoRollButton()
+	local isEligible = isPlayerInAutoRollGroup()
+	if not isEligible and GUIControls.AutoRoll then
+		GUIControls.AutoRoll = false
+		GUIControls.AutoRollLoopId += 1
+	end
+
+	AutoRollButton.Desc.Text = isEligible and (GUIControls.AutoRoll and "On" or "Off") or "Group Join Required"
+	GUIControls:SetButtonVisualState(AutoRollButton, GUIControls.AutoRoll == true, isEligible)
+end
+
+function GUIControls:SetAutoRollEnabled(enabled)
+	local shouldEnable = enabled == true and isPlayerInAutoRollGroup()
+	if GUIControls.AutoRoll == shouldEnable then
+		GUIControls:RefreshAutoRollButton()
+		return
+	end
+
+	GUIControls.AutoRoll = shouldEnable
+	GUIControls.AutoRollLoopId += 1
+	GUIControls:RefreshAutoRollButton()
+
+	if shouldEnable and not GUIControls.CurrentlyRolling and not Main.Visible then
+		local loopId = GUIControls.AutoRollLoopId
+		task.delay(0.05, function()
+			if GUIControls.AutoRoll and loopId == GUIControls.AutoRollLoopId then
+				GUIControls:Roll()
+			end
+		end)
+	end
+end
+
+function GUIControls:ScheduleNextAutoRoll(delayTime)
+	if not GUIControls.AutoRoll then
+		return
+	end
+
+	local loopId = GUIControls.AutoRollLoopId
+	task.delay(math.max(0, tonumber(delayTime) or 0), function()
+		if GUIControls.AutoRoll and loopId == GUIControls.AutoRollLoopId then
+			GUIControls:Roll()
+		end
+	end)
+end
+
+function GUIControls:PromptAutoRollGroupJoin()
+	local promptOpened, promptError = pcall(function()
+		GroupService:PromptJoinAsync(GROUP_ID)
+	end)
+	if not promptOpened then
+		GUIControls:SetTemporaryStatus(promptError or "Failed to open the group join prompt.")
+		return
+	end
+
+	task.spawn(function()
+		for _ = 1, 10 do
+			task.wait(1)
+			if isPlayerInAutoRollGroup() then
+				GUIControls:SetAutoRollEnabled(true)
+				return
+			end
+		end
+		GUIControls:RefreshAutoRollButton()
+	end)
+end
+
+function GUIControls:SetTemporaryStatus(message)
+	if typeof(message) ~= "string" or message == "" then
+		return
+	end
+
+	RollButton.Desc.Text = message
+	task.delay(2, function()
+		if GUIControls.RollingState then
+			GUIControls:RefreshRollButton()
+		end
+	end)
+end
+
+function GUIControls:SetEquipButtonText(text)
+	local content = Main.EquipButton:FindFirstChild("Content")
+	if content and content:IsA("TextLabel") then
+		content.Text = tostring(text)
+	end
+end
+
+function GUIControls:RefreshEquipButton()
+	local ownedRecord = GUIControls.CurrentRollResult and GUIControls.CurrentRollResult.ownedRecord
+	local hasOwnedResult = typeof(ownedRecord) == "table" and typeof(ownedRecord.ownedId) == "string" and ownedRecord.ownedId ~= ""
+	local shouldShow = Main.Visible and Main.SkipButton.Visible and Main.SubInfo.Visible and hasOwnedResult
+	local isEnabled = shouldShow and (not GUIControls.EquipDebounce) and (not GUIControls.CurrentRollResultEquipped)
+
+	Main.EquipButton.Visible = shouldShow
+	Main.EquipButton.Active = isEnabled
+	Main.EquipButton.AutoButtonColor = isEnabled
+
+	if GUIControls.EquipDebounce then
+		GUIControls:SetEquipButtonText("Equipping...")
+		GUIControls:SetButtonVisualState(Main.EquipButton, false, false)
+		return
+	end
+
+	if GUIControls.CurrentRollResultEquipped then
+		GUIControls:SetEquipButtonText("Equipped")
+		GUIControls:SetButtonVisualState(Main.EquipButton, true, true)
+		return
+	end
+
+	GUIControls:SetEquipButtonText("Equip")
+	GUIControls:SetButtonVisualState(Main.EquipButton, false, isEnabled)
+	if shouldShow and not isEnabled then
+		GUIControls:SetButtonVisualState(Main.EquipButton, false, false)
+	end
+end
+
+function GUIControls:ShowEquipStatus(message, duration)
+	if typeof(message) ~= "string" or message == "" then
+		return
+	end
+
+	GUIControls.EquipStatusToken += 1
+	local token = GUIControls.EquipStatusToken
+	GUIControls:SetEquipButtonText(message)
+
+	if tonumber(duration) and duration > 0 then
+		task.delay(duration, function()
+			if token == GUIControls.EquipStatusToken then
+				GUIControls:RefreshEquipButton()
+			end
+		end)
+	end
+end
+
+function GUIControls:EquipCurrentRollResult()
+	if GUIControls.EquipDebounce or GUIControls.CurrentRollResultEquipped then
+		return
+	end
+
+	local rollResult = GUIControls.CurrentRollResult
+	local ownedRecord = rollResult and rollResult.ownedRecord
+	if typeof(ownedRecord) ~= "table" or typeof(ownedRecord.ownedId) ~= "string" or ownedRecord.ownedId == "" then
+		GUIControls:ShowEquipStatus("Equip unavailable", 1.5)
+		return
+	end
+
+	local equipRemote = getEquipOwnedBodyPartRemote()
+	if not equipRemote then
+		GUIControls:ShowEquipStatus("Equip unavailable", 1.5)
+		return
+	end
+
+	local scale = tonumber(ownedRecord.sizeMultiplier)
+		or tonumber(rollResult and rollResult.finalResult and rollResult.finalResult.SizeMultiplier)
+		or tonumber(rollResult and rollResult.sizeResult and rollResult.sizeResult.scale)
+		or 1
+
+	GUIControls.EquipDebounce = true
+	GUIControls:RefreshEquipButton()
+
+	local result = invokeRemote(equipRemote, {
+		ownedId = ownedRecord.ownedId,
+		scale = scale,
+		applyVisuals = true,
+	})
+
+	GUIControls.EquipDebounce = false
+	if not result then
+		GUIControls:RefreshEquipButton()
+		GUIControls:ShowEquipStatus("Equip failed", 1.5)
+		return
+	end
+
+	if result.ok ~= true then
+		GUIControls:RefreshEquipButton()
+		GUIControls:ShowEquipStatus(result.message or "Equip failed", 1.5)
+		return
+	end
+
+	GUIControls.CurrentRollResultEquipped = true
+	GUIControls:RefreshEquipButton()
+	GUIControls:ShowEquipStatus(result.message or "Equipped", 1.5)
+end
+
+function GUIControls:SuppressRollClickForInputFrame()
+	-- RollButton is the clickable parent container, so nested controls need to suppress
+	-- the parent click briefly to avoid opening the dropdown and immediately rolling.
+	GUIControls.SuppressRollClickUntil = os.clock() + 0.15
+end
+
+function GUIControls:SetButtonCooldown()
+	local cooldownDuration = GUIControls:GetRollCooldownDuration()
+	GUIControls.RollDebounce = true
+	RollButton.CooldownFrame.BackgroundTransparency = 1
+	CooldownFrameTween:Play()
+	RollButton.CooldownFrame.UIGradient.Offset = Vector2.new(0.5, 0)
+	TweenService:Create(
+		RollButton.CooldownFrame.UIGradient,
+		TweenInfo.new(cooldownDuration, Enum.EasingStyle.Linear),
+		{ Offset = Vector2.new(-0.5, 0) }
+	):Play()
+	task.delay(cooldownDuration, function()
+		GUIControls.RollDebounce = false
+	end)
+end
+
+function GUIControls:SetDropdownOpen(isOpen)
+	GUIControls.IsDropdownOpen = isOpen == true
+	GUIControls.DropdownAnimationId += 1
+	local animationId = GUIControls.DropdownAnimationId
+
+	if GUIControls.IsDropdownOpen then
+		RollDropdown.Visible = true
+		RollDropdownInner.Position = DropdownClosedPosition
+		TweenService:Create(RollDropdownInner, DropdownTweenInfo, { Position = DropdownOpenPosition }):Play()
+		TweenService:Create(DropdownButton, DropdownTweenInfo, { Rotation = 270 }):Play()
+		return
+	end
+
+	local hideTween = TweenService:Create(RollDropdownInner, DropdownTweenInfo, { Position = DropdownClosedPosition })
+	TweenService:Create(DropdownButton, DropdownTweenInfo, { Rotation = 90 }):Play()
+	hideTween:Play()
+	task.spawn(function()
+		hideTween.Completed:Wait()
+		if (not GUIControls.IsDropdownOpen) and animationId == GUIControls.DropdownAnimationId then
+			RollDropdown.Visible = false
+		end
+	end)
+end
+
+function GUIControls:RefreshRollButton()
+	local state = GUIControls.RollingState
+	if not state then
+		return
+	end
+
+	local selectedRollType = getSelectedRollType(state)
+	local selectedRollRegion = getSelectedRollRegion(state)
+	if not selectedRollType then
+		return
+	end
+
+	local rollRegions = getRollRegions(state)
+	local rollsSinceLuckyRoll = math.max(0, math.floor(tonumber(state.rollsSinceLuckyRoll) or 0))
+	local luckyRollGoal = math.max(1, math.floor(tonumber(state.luckyRollGoal) or 10))
+	local luckBoostReady = state.luckBoostReady == true
+	local pityText = if luckBoostReady
+		then "Lucky Roll Ready"
+		else string.format("%s/%s", formatWholeNumber(rollsSinceLuckyRoll), formatWholeNumber(luckyRollGoal))
+	RollButton.TextLabel.Text = string.format('Roll <font color="rgb(96,226,98)">(%s)</font>', formatLuck(selectedRollType.luckMultiplier))
+	RollButton.Cost.Text = formatMoney(selectedRollType.moneyCost)
+	RollButton.Desc.Text = pityText
+	if selectedRollRegion and typeof(selectedRollRegion.image) == "string" then
+		RollIcon.Image = selectedRollRegion.image
+		RollShadowIcon.Image = selectedRollRegion.image
+	elseif typeof(state.selectedRollRegionIcon) == "string" and state.selectedRollRegionIcon ~= "" then
+		RollIcon.Image = state.selectedRollRegionIcon
+		RollShadowIcon.Image = state.selectedRollRegionIcon
+	end
+	if #rollRegions > 0 then
+		LeftButton.Visible = #rollRegions > 1
+		RightButton.Visible = #rollRegions > 1
+	end
+	GUIControls:RefreshQuickRollButton()
+	GUIControls:RefreshAutoRollButton()
+end
+
+function GUIControls:PromptLockedRollType(rollType)
+	warn(string.format("[RollGUI] Purchase flow not implemented for locked roll type %s.", tostring(rollType.id)))
+	GUIControls:SetTemporaryStatus(string.format("%s is locked.", tostring(rollType.displayName or rollType.id)))
+end
+
+function GUIControls:ApplyRollingState(state)
+	if typeof(state) ~= "table" then
+		return
+	end
+
+	local previousState = GUIControls.RollingState
+	local mergedState = mergeRollingState(previousState, state)
+	local shouldRebuildRollDropdown = state._isDelta ~= true or typeof(state.rollTypes) == "table"
+	if state._isDelta == true and not hasCoreRollCollections(mergedState) then
+		if typeof(previousState) == "table" then
+			GUIControls.RollingState = previousState
+		else
+			GUIControls.RollingState = mergedState
+		end
+
+		if not GUIControls.RollingStateRefreshPending then
+			GUIControls.RollingStateRefreshPending = true
+			task.spawn(function()
+				GUIControls:LoadRollingState()
+			end)
+		end
+		return
+	end
+
+	GUIControls.RollingState = mergedState
+	GUIControls.RollingStateRefreshPending = false
+	if shouldRebuildRollDropdown then
+		GUIControls:RebuildRollDropdown()
+	end
+	GUIControls:RefreshRollButton()
+	GUIControls:SetDropdownOpen(GUIControls.IsDropdownOpen)
+end
+
+function GUIControls:SelectRollType(rollTypeId)
+	GUIControls:SuppressRollClickForInputFrame()
+	GUIControls.LastSelectRequestId += 1
+	local requestId = GUIControls.LastSelectRequestId
+	local interactionIdAtRequest = GUIControls.DropdownInteractionId
+	local result = invokeRemote(SelectRollTypeRemote, { rollTypeId = rollTypeId })
+	if requestId ~= GUIControls.LastSelectRequestId then
+		return
+	end
+	if not result then
+		GUIControls:SetTemporaryStatus("Failed to reach the server.")
+		return
+	end
+
+	if not result.ok then
+		GUIControls:SetTemporaryStatus(result.message or "Failed to select the roll type.")
+		return
+	end
+
+	GUIControls:ApplyRollingState(result.state)
+	if interactionIdAtRequest == GUIControls.DropdownInteractionId then
+		GUIControls:SetDropdownOpen(false)
+	end
+end
+
+function GUIControls:SelectRollRegion(rollRegion)
+	GUIControls:SuppressRollClickForInputFrame()
+	local result = invokeRemote(SelectRollRegionRemote, { rollRegion = rollRegion })
+	if not result then
+		GUIControls:SetTemporaryStatus("Failed to reach the server.")
+		return
+	end
+
+	if not result.ok then
+		GUIControls:SetTemporaryStatus(result.message or "Failed to select the roll region.")
+		return
+	end
+
+	GUIControls:ApplyRollingState(result.state)
+end
+
+function GUIControls:CycleRollRegion(direction)
+	GUIControls:SuppressRollClickForInputFrame()
+	local state = GUIControls.RollingState
+	local rollRegions = getRollRegions(state)
+	if #rollRegions <= 1 then
+		return
+	end
+
+	local selectedRollRegion = getSelectedRollRegion(state)
+	if not selectedRollRegion then
+		return
+	end
+
+	local currentIndex = 1
+	for index, rollRegion in ipairs(rollRegions) do
+		if rollRegion.id == selectedRollRegion.id then
+			currentIndex = index
+			break
+		end
+	end
+
+	local nextIndex = ((currentIndex - 1 + direction) % #rollRegions) + 1
+	GUIControls:SelectRollRegion(rollRegions[nextIndex].id)
+end
+
+function GUIControls:ToggleQuickRoll()
+	local quickRollState = getQuickRollState(GUIControls.RollingState)
+	if not quickRollState.owned then
+		local result = invokeRemote(PromptQuickRollPurchaseRemote)
+		if not result then
+			GUIControls:SetTemporaryStatus("Failed to open the purchase prompt.")
+			return
+		end
+		if typeof(result.state) == "table" then
+			GUIControls:ApplyRollingState(result.state)
+		end
+		if not result.ok then
+			GUIControls:SetTemporaryStatus(result.message or "Failed to open the purchase prompt.")
+		end
+		return
+	end
+
+	local result = invokeRemote(ToggleQuickRollRemote, { enabled = not quickRollState.enabled })
+	if not result then
+		GUIControls:SetTemporaryStatus("Failed to update Quick Roll.")
+		return
+	end
+	if typeof(result.state) == "table" then
+		GUIControls:ApplyRollingState(result.state)
+	end
+	if not result.ok then
+		GUIControls:SetTemporaryStatus(result.message or "Failed to update Quick Roll.")
+	end
+end
+
+function GUIControls:ToggleAutoRoll()
+	if not isPlayerInAutoRollGroup() then
+		GUIControls:PromptAutoRollGroupJoin()
+		return
+	end
+
+	GUIControls:SetAutoRollEnabled(not GUIControls.AutoRoll)
+end
+
+function GUIControls:RebuildRollDropdown()
+	local state = GUIControls.RollingState
+	for _, child in ipairs(RollDropdownScrollingFrame:GetChildren()) do
+		if child:IsA("Frame") and child ~= RollDropdownTemplate then
+			child:Destroy()
+		end
+	end
+
+	RollDropdownTemplate.Visible = false
+
+	for _, rollType in ipairs(getRollTypes(state)) do
+		local entry = RollDropdownTemplate:Clone()
+		entry.Name = rollType.id
+		entry.LayoutOrder = rollType.uiOrder or 0
+		entry.Visible = true
+		entry.Parent = RollDropdownScrollingFrame
+
+		local button = entry.Button
+		button.TextLabel.Text = rollType.displayName
+		button.Cost.Text = formatMoney(rollType.moneyCost)
+		button.Luck.Text = formatLuck(rollType.luckMultiplier)
+		button.SelectedCover.Visible = rollType.selected == true
+		button.ImageTransparency = 0
+		button.AutoButtonColor = true
+		button.TextLabel.TextTransparency = 0
+		button.Cost.TextTransparency = 0
+		button.Luck.TextTransparency = 0
+		if button.TextLabel:FindFirstChild("UIStroke") then
+			button.TextLabel.UIStroke.Transparency = 0
+		end
+		if button.Cost:FindFirstChild("UIStroke") then
+			button.Cost.UIStroke.Transparency = 0
+		end
+		if button.Luck:FindFirstChild("UIStroke") then
+			button.Luck.UIStroke.Transparency = 0
+		end
+
+		button.MouseButton1Down:Connect(function()
+			GUIControls:SuppressRollClickForInputFrame()
+			GUIControls:SelectRollType(rollType.id)
+		end)
+	end
+end
+
+function GUIControls:RollSequence(previewSequence)
+	Main.SubInfo.Visible = false
+	Main.DisplayFrame.Position = BasePosition
+	Main.DisplayFrame.ViewportFrame.Position = UDim2.fromScale(0.5, 0.5)
+	Main.EquipButton.Visible = false
+	Main.SkipButton.Visible = false
+	GUIControls:RefreshEquipButton()
+	MainButtons.RollButton.Visible = false
+	MainButtons.QuickRoll.Visible = false
+	MainButtons.AutoRoll.Visible = false
+	ShowBlackTween:Play()
+	BlurTween:Play()
+
+	local rolls = #previewSequence
+	local totalTime = GUIControls:GetRollSequenceDuration()
+	local offset = 2
+	local power = 1.8
+	local weights = {}
+	local weightSum = 0
+
+	for index = 1, rolls do
+		local weight = (index + offset) ^ power
+		weights[index] = weight
+		weightSum += weight
+	end
+
+	for index, rollInfo in ipairs(previewSequence) do
+		local duration = (weights[index] / weightSum) * totalTime
+		local tween = TweenService:Create(
+			DisplayFrame,
+			TweenInfo.new(duration, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+			{ Position = OffsetPosition }
+		)
+		DisplayFrame.Position = BasePosition
+		renderRollInfo(rollInfo, index == rolls)
+		tween:Play()
+		tween.Completed:Wait()
+		if index == rolls then
+			return rollInfo
+		end
+	end
+end
+
+function GUIControls:ShowRollResults(rollInfo)
+	ShowBlackTween:Play()
+	BlurTween:Play()
+
+	for _, textObject in Main.SubInfo:GetChildren() do
+		if textObject:IsA("TextLabel") then
+			textObject.TextTransparency = 1
+			if textObject:FindFirstChild("UIStroke") then
+				textObject.UIStroke.Transparency = 1
+				TweenService:Create(textObject.UIStroke, TweenInfo.new(0.5, Enum.EasingStyle.Back), { Transparency = 0 }):Play()
+			end
+			TweenService:Create(textObject, TweenInfo.new(0.5, Enum.EasingStyle.Back), { TextTransparency = 0 }):Play()
+		end
+	end
+
+	Main.SkipButton.Visible = true
+	Main.SubInfo.Visible = true
+	Main.SubInfo.Size = UDim2.fromScale(0.9, 0.9)
+	Main.SubInfo.Position = UDim2.fromScale(0.5, 0.7)
+
+	SubInfoTween:Play()
+	Main.DisplayFrame.ViewportFrame.Position = UDim2.fromScale(0.5, 0.5)
+	DisplayTween:Play()
+	DisplayViewportTween:Play()
+
+	local sizeLabel = Main.SubInfo:FindFirstChild("Size")
+	local mutationLabel = Main.SubInfo:FindFirstChild("Mutation")
+
+	local flooredIncome = math.max(0, math.floor(tonumber(rollInfo.CashPerSec) or 0))
+	Main.SubInfo.Income.Text = "$" .. NumberFormatter.Format(flooredIncome) .. "/S"
+	Main.SubInfo.BodyPart.Text = rollInfo.BodyPart
+	if sizeLabel and sizeLabel:IsA("TextLabel") then
+		local sizeMultiplier = tonumber(rollInfo.SizeMultiplier)
+			or tonumber(GUIControls.CurrentRollResult and GUIControls.CurrentRollResult.sizeResult and GUIControls.CurrentRollResult.sizeResult.scale)
+			or tonumber(GUIControls.CurrentRollResult and GUIControls.CurrentRollResult.ownedRecord and GUIControls.CurrentRollResult.ownedRecord.sizeMultiplier)
+			or 1
+		local sizeName = rollInfo.Size
+			or (GUIControls.CurrentRollResult and GUIControls.CurrentRollResult.sizeResult and GUIControls.CurrentRollResult.sizeResult.displayName)
+			or "Normal"
+		sizeLabel.Text = formatSizeLabel(sizeName, sizeMultiplier)
+		sizeLabel.Visible = true
+	end
+	if mutationLabel and mutationLabel:IsA("TextLabel") then
+		mutationLabel.Text = rollInfo.Rarity or "-"
+		mutationLabel.Visible = true
+	end
+
+	renderRollInfo(rollInfo, true)
+	GUIControls:RefreshEquipButton()
+
+	if GUIControls.AutoRoll then
+		local loopId = GUIControls.AutoRollLoopId
+		task.delay(GUIControls:GetAutoResultHoldDuration(), function()
+			if GUIControls.AutoRoll and loopId == GUIControls.AutoRollLoopId then
+				GUIControls:HideRollResults()
+			end
+		end)
+	end
+end
+
+function GUIControls:HideRollResults()
+	if not Main.Visible then
+		return
+	end
+
+	GUIControls.CurrentRollResult = nil
+	GUIControls.CurrentRollResultEquipped = false
+	GUIControls.EquipDebounce = false
+	GUIControls.EquipStatusToken += 1
+	restoreIdleRollUi()
+	GUIControls:RefreshEquipButton()
+	GUIControls:SetButtonCooldown()
+	if GUIControls.AutoRoll then
+		GUIControls:ScheduleNextAutoRoll(GUIControls:GetRollCooldownDuration())
+	end
+end
+
+function GUIControls:Roll()
+	task.spawn(function()
+		if os.clock() < GUIControls.SuppressRollClickUntil then
+			return
+		end
+		if GUIControls.RollDebounce or GUIControls.CurrentlyRolling then
+			return
+		end
+
+		GUIControls.CurrentRollResult = nil
+		GUIControls.CurrentRollResultEquipped = false
+		GUIControls.EquipDebounce = false
+		GUIControls.EquipStatusToken += 1
+		GUIControls:SetDropdownOpen(false)
+		local rollResponse = invokeRemote(PerformRollRemote)
+		if not rollResponse then
+			GUIControls:SetTemporaryStatus("Failed to reach the server.")
+			return
+		end
+
+		if not rollResponse.ok or typeof(rollResponse.rollResult) ~= "table" then
+			local failureMessage = rollResponse.message or "Roll failed."
+			if isInsufficientFundsMessage(failureMessage) then
+				if GUIControls.AutoRoll then
+					GUIControls:SetAutoRollEnabled(false)
+				end
+				RollWarningControls.ShowInsufficientFundsWarning()
+			else
+				GUIControls:SetTemporaryStatus(failureMessage)
+			end
+			if typeof(rollResponse.state) == "table" then
+				GUIControls:ApplyRollingState(rollResponse.state)
+			end
+			return
+		end
+
+		GUIControls:ApplyRollingState(rollResponse.state)
+		local rollResult = rollResponse.rollResult
+		if rollResult.skipPresentation == true then
+			GUIControls.CurrentRollResult = nil
+			GUIControls.CurrentRollResultEquipped = false
+			GUIControls.EquipDebounce = false
+			GUIControls.CurrentlyRolling = false
+			restoreIdleRollUi()
+			GUIControls:RefreshEquipButton()
+			GUIControls:SetButtonCooldown()
+			if GUIControls.AutoRoll then
+				GUIControls:ScheduleNextAutoRoll(GUIControls:GetRollCooldownDuration())
+			end
+			GUIControls:SetTemporaryStatus(rollResponse.message or "Roll complete.")
+			return
+		end
+
+		GUIControls.CurrentlyRolling = true
+		Main.Visible = true
+		MainButtons.RollButton.Visible = false
+		MainButtons.QuickRoll.Visible = false
+		MainButtons.AutoRoll.Visible = false
+
+		GUIControls.CurrentRollResult = rollResult
+		GUIControls.CurrentRollResultEquipped = false
+		GUIControls.EquipDebounce = false
+
+		local previewSequence = rollResult.previewSequence
+		if typeof(previewSequence) ~= "table" or #previewSequence == 0 then
+			previewSequence = buildClientPreviewSequence(rollResult) or { rollResult.finalResult }
+		end
+		local finalResult = GUIControls:RollSequence(previewSequence)
+		GUIControls.CurrentlyRolling = false
+		GUIControls:ShowRollResults(finalResult)
+	end)
+end
+
+function GUIControls:ToggleDropdown()
+	GUIControls:SuppressRollClickForInputFrame()
+	GUIControls.DropdownInteractionId += 1
+	GUIControls:SetDropdownOpen(not GUIControls.IsDropdownOpen)
+end
+
+function GUIControls:LoadRollingState()
+	GUIControls.RollingStateRefreshPending = false
+	local result = invokeRemote(GetRollingStateRemote)
+	if not result then
+		GUIControls:SetTemporaryStatus("Waiting for rolling state...")
+		return false
+	end
+	if not result.ok then
+		GUIControls:SetTemporaryStatus(result.message or "Failed to load rolling state.")
+		return false
+	end
+
+	GUIControls:SetDropdownOpen(false)
+	GUIControls:ApplyRollingState(result.state)
+	return true
+end
+
+RollButton.MouseButton1Down:Connect(function()
+	GUIControls:Roll()
+end)
+
+Main.SkipButton.MouseButton1Down:Connect(function()
+	GUIControls:HideRollResults()
+end)
+
+Main.EquipButton.MouseButton1Down:Connect(function()
+	GUIControls:EquipCurrentRollResult()
+end)
+
+DropdownButton.MouseButton1Down:Connect(function()
+	GUIControls:SuppressRollClickForInputFrame()
+	GUIControls:ToggleDropdown()
+end)
+
+LeftButton.MouseButton1Down:Connect(function()
+	GUIControls:SuppressRollClickForInputFrame()
+	GUIControls:CycleRollRegion(-1)
+end)
+
+RightButton.MouseButton1Down:Connect(function()
+	GUIControls:SuppressRollClickForInputFrame()
+	GUIControls:CycleRollRegion(1)
+end)
+
+QuickRollButton.MouseButton1Down:Connect(function()
+	GUIControls:ToggleQuickRoll()
+end)
+
+AutoRollButton.MouseButton1Down:Connect(function()
+	GUIControls:ToggleAutoRoll()
+end)
+
+RollingUpdatedRemote.OnClientEvent:Connect(function(state)
+	GUIControls:ApplyRollingState(state)
+end)
+
+RollDropdownInner.Position = DropdownClosedPosition
+GUIControls:SetDropdownOpen(false)
+RollDropdownTemplate.Visible = false
+GUIControls:RefreshQuickRollButton()
+GUIControls:RefreshAutoRollButton()
+GUIControls:LoadRollingState()
+
+return GUIControls

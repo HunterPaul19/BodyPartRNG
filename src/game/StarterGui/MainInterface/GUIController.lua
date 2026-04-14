@@ -24,8 +24,6 @@ local Panels = {
 	["Appraisal"] = Main:WaitForChild("AppraisalUI"),
 	["Dialogue"] = Main:WaitForChild("DialogueUI"),
 	["Leaderboard"] = Main:WaitForChild("Leaderboard"),
-	["PlayerInfo"] = Main:WaitForChild("PlayerInfo"),
-	["RobuxStore"] = Main:WaitForChild("RobuxStore"),
 	["Roll"] = Main:WaitForChild("Roll"),
 } :: { Frame }
 
@@ -42,6 +40,46 @@ local function GetPanel(panelName: string)
 		return
 	end
 	return found
+end
+
+function GUIController:GetPanelVisibilitySnapshot(): { panels: { [string]: boolean }, blackTransparency: number, blurSize: number }
+	local snapshot = {
+		panels = {},
+		blackTransparency = Black.BackgroundTransparency,
+		blurSize = Blur.Size,
+	}
+
+	for key, panel in PanelInfo do
+		snapshot.panels[key] = panel.Frame.Visible
+	end
+
+	return snapshot
+end
+
+function GUIController:RestorePanelVisibility(
+	snapshot: { panels: { [string]: boolean }, blackTransparency: number, blurSize: number }?,
+	excludedPanels: { [string]: boolean }?
+)
+	if typeof(snapshot) ~= "table" then
+		return
+	end
+
+	for key, isVisible in snapshot.panels do
+		if excludedPanels and excludedPanels[key] then
+			continue
+		end
+
+		local panel = PanelInfo[key]
+		if panel then
+			panel.currentlyTransitioning = false
+			panel.Frame.Visible = isVisible
+			panel.Frame.Position = panel.Position
+			panel.Frame.Size = panel.Size
+		end
+	end
+
+	Black.BackgroundTransparency = snapshot.blackTransparency
+	Blur.Size = snapshot.blurSize
 end
 
 function GUIController:OpenPanel(panelName: string, forceOpen: boolean?)
@@ -179,17 +217,12 @@ function GUIController:GetPanelModule(panelName: string): ModuleScript
 end
 
 for key in PanelInfo do
-	require(GUIController:GetPanelModule(key))
-end
-
-local PlayerInfoMod = require(GUIController:GetPanelModule("PlayerInfo"))
-PlayerInfoMod.Opened.Changed:Connect(function()
-	if PlayerInfoMod.Opened.Value == true then
-		GUIController:OpenPanel("PlayerInfo", true)
-	else
-		GUIController:ClosePanel("PlayerInfo", true)
+	-- Leaderboard behavior is owned by the Rojo-synced LeaderboardController.
+	-- Skipping the Studio panel module prevents the legacy leaderboard row renderer from running.
+	if key ~= "Leaderboard" then
+		require(GUIController:GetPanelModule(key))
 	end
-end)
+end
 
 UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
 	if gameProcessedEvent then

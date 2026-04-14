@@ -1,11 +1,15 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local DialogueDefinitions = require(ReplicatedStorage.Shared.Config.DialogueDefinitions)
+local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local Schema = require(ReplicatedStorage.Lists.Schema)
+local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
 local DataController = require(script.Parent.DataController)
 local FrameController = require(script.Parent.FrameController)
+local MerchantPresentationController = require(script.Parent.MerchantPresentationController)
 local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
@@ -13,6 +17,7 @@ local DIALOGUE_PANEL_NAME = "Dialogue"
 local DEFAULT_SHOP_FRAME_NAME = "ShopUI"
 local FRAME_CLOSE_DELAY = FrameController.CloseTween.Time
 local PANEL_CLOSE_DELAY = 0.12
+local TYPEWRITER_GRAPHEMES_PER_SECOND = 45
 
 type DialogueDefinition = DialogueDefinitions.DialogueDefinition
 type DialogueNode = DialogueDefinitions.DialogueNode
@@ -32,8 +37,14 @@ type DialogueUiRefs = {
 	scrollingFrame: ScrollingFrame,
 	buttonTemplate: ImageButton,
 	layout: UIListLayout,
-	viewportFrame: GuiObject?,
+	viewportFrame: ViewportFrame?,
 	messageUi: GuiObject?,
+}
+
+type PanelVisibilitySnapshot = {
+	panels: { [string]: boolean },
+	blackTransparency: number,
+	blurSize: number,
 }
 
 local MONEY_KEY = Schema.Money and Schema.Money.key or nil
@@ -46,9 +57,13 @@ local DialogueController = {
 	_activeDialogueId = nil :: string?,
 	_currentNodeId = nil :: string?,
 	_context = nil :: { [string]: any }?,
+	_isTyping = false,
+	_activeRevealToken = 0,
+	_savedPanelVisibility = nil :: PanelVisibilitySnapshot?,
 	_resolvedChoicesById = {} :: { [string]: ResolvedChoice },
 	_renderedButtons = {} :: { GuiButton },
 	_connections = {} :: { RBXScriptConnection },
+	_typingConnection = nil :: RBXScriptConnection?,
 }
 
 local function getPlayerGui(): PlayerGui
@@ -74,6 +89,15 @@ local function deepCopyContext(context: { [string]: any }?): { [string]: any }
 	end
 
 	return copy
+end
+
+local function getGraphemeCount(text: string): number
+	local length = utf8.len(text)
+	if length then
+		return length
+	end
+
+	return string.len(text)
 end
 
 local ConditionPredicates: { [string]: (context: { [string]: any }?) -> boolean } = {
@@ -104,6 +128,25 @@ function DialogueController:_getGuiController()
 	return self._guiController
 end
 
+function DialogueController:_capturePanelVisibility()
+	local guiController = self:_getGuiController()
+	self._savedPanelVisibility = guiController:GetPanelVisibilitySnapshot()
+end
+
+function DialogueController:_restorePanelVisibility()
+	local snapshot = self._savedPanelVisibility
+	self._savedPanelVisibility = nil
+
+	if not snapshot then
+		return
+	end
+
+	local guiController = self:_getGuiController()
+	guiController:RestorePanelVisibility(snapshot, {
+		[DIALOGUE_PANEL_NAME] = true,
+	})
+end
+
 function DialogueController:_updateCanvasSize()
 	local ui = self:_ensureUi()
 	ui.scrollingFrame.CanvasSize = UDim2.new(0, 0, 0, ui.layout.AbsoluteContentSize.Y)
@@ -120,6 +163,7 @@ function DialogueController:_ensureUi(): DialogueUiRefs
 
 	local dialogueRoot = mainInterface:WaitForChild("DialogueUI", 30)
 	assert(dialogueRoot and dialogueRoot:IsA("Frame"), "PlayerGui.MainInterface.DialogueUI is missing.")
+	dialogueRoot.Active = true
 
 	local itemName = dialogueRoot:WaitForChild("ItemName", 30)
 	assert(itemName and itemName:IsA("TextLabel"), "DialogueUI.ItemName is missing.")
@@ -129,6 +173,7 @@ function DialogueController:_ensureUi(): DialogueUiRefs
 
 	local itemDescLabel = itemDesc:WaitForChild("TextLabel", 30)
 	assert(itemDescLabel and itemDescLabel:IsA("TextLabel"), "DialogueUI.ItemDesc.TextLabel is missing.")
+	itemDescLabel.MaxVisibleGraphemes = -1
 
 	local selection = dialogueRoot:WaitForChild("Selection", 30)
 	assert(selection and selection:IsA("Frame"), "DialogueUI.Selection is missing.")
@@ -154,8 +199,8 @@ function DialogueController:_ensureUi(): DialogueUiRefs
 	assert(buttonTemplate, "DialogueUI.Selection.ScrollingFrame needs at least one Button template.")
 
 	local viewportFrame = dialogueRoot:FindFirstChild("ViewportFrame")
-	if viewportFrame and viewportFrame:IsA("GuiObject") then
-		viewportFrame.Visible = false
+	if viewportFrame and not viewportFrame:IsA("ViewportFrame") then
+		viewportFrame = nil
 	end
 
 	local messageUi = dialogueRoot:FindFirstChild("MessageUI")
@@ -179,6 +224,44 @@ function DialogueController:_ensureUi(): DialogueUiRefs
 	self:_updateCanvasSize()
 
 	return self._ui
+end
+
+function DialogueController:_clearPortrait()
+	local ui = self:_ensureUi()
+	local viewportFrame = ui.viewportFrame
+	if not viewportFrame then
+		return
+	end
+
+	ViewportModelRenderer.Clear(viewportFrame)
+	viewportFrame.Visible = false
+end
+
+function DialogueController:_resolvePortraitModel(): Model?
+	local context = self._context
+	if context then
+		local speakerModel = context.speakerModel
+		if typeof(speakerModel) == "Instance" and speakerModel:IsA("Model") then
+			return speakerModel
+		end
+	end
+
+	return BodyPartsCatalog.GetDefaultBaseRig()
+end
+
+function DialogueController:_renderPortrait()
+	local ui = self:_ensureUi()
+	local viewportFrame = ui.viewportFrame
+	if not viewportFrame then
+		return
+	end
+
+	local portraitModel = self:_resolvePortraitModel()
+	local rendered = ViewportModelRenderer.RenderDialoguePortrait(viewportFrame, portraitModel)
+	viewportFrame.Visible = rendered
+	if not rendered then
+		ViewportModelRenderer.Clear(viewportFrame)
+	end
 end
 
 function DialogueController:_getDialogueDefinition(dialogueId: string): DialogueDefinition?
@@ -237,6 +320,105 @@ function DialogueController:_destroyRenderedButtons()
 	table.clear(self._resolvedChoicesById)
 end
 
+function DialogueController:_nextRevealToken(): number
+	self._activeRevealToken += 1
+	return self._activeRevealToken
+end
+
+function DialogueController:_stopTyping()
+	self._isTyping = false
+	self._activeRevealToken += 1
+
+	if self._ui and self._ui.itemDescLabel.Parent then
+		self._ui.itemDescLabel.MaxVisibleGraphemes = -1
+	end
+end
+
+function DialogueController:_renderChoices(node: DialogueNode)
+	local layoutOrder = 1
+	for _, choice in ipairs(node.choices) do
+		local conditionsMet = self:_evaluateConditions(choice.conditionIds)
+		local behavior = choice.conditionBehavior or "hide"
+
+		if conditionsMet then
+			self:_createChoiceButton(choice, false, layoutOrder)
+			layoutOrder += 1
+		elseif behavior == "disable" then
+			self:_createChoiceButton(choice, true, layoutOrder)
+			layoutOrder += 1
+		end
+	end
+
+	if layoutOrder == 1 then
+		self:_renderFallbackChoice()
+	end
+
+	self:_updateCanvasSize()
+end
+
+function DialogueController:_completeReveal(node: DialogueNode, revealToken: number): boolean
+	if self._activeRevealToken ~= revealToken then
+		return false
+	end
+
+	local ui = self:_ensureUi()
+	self._isTyping = false
+	self._activeRevealToken += 1
+	ui.itemDescLabel.MaxVisibleGraphemes = -1
+
+	if self._currentNodeId ~= node.id then
+		return false
+	end
+
+	self:_renderChoices(node)
+	return true
+end
+
+function DialogueController:_startReveal(node: DialogueNode)
+	local ui = self:_ensureUi()
+	local totalGraphemes = getGraphemeCount(node.text)
+	local revealToken = self:_nextRevealToken()
+
+	self._isTyping = totalGraphemes > 0
+	ui.itemDescLabel.MaxVisibleGraphemes = if totalGraphemes > 0 then 0 else -1
+
+	if totalGraphemes <= 0 then
+		self:_completeReveal(node, revealToken)
+		return
+	end
+
+	task.spawn(function()
+		local startTime = os.clock()
+
+		while self._activeRevealToken == revealToken do
+			local elapsed = os.clock() - startTime
+			local visibleCount = math.clamp(math.floor(elapsed * TYPEWRITER_GRAPHEMES_PER_SECOND), 0, totalGraphemes)
+			ui.itemDescLabel.MaxVisibleGraphemes = visibleCount
+
+			if visibleCount >= totalGraphemes then
+				break
+			end
+
+			RunService.RenderStepped:Wait()
+		end
+
+		self:_completeReveal(node, revealToken)
+	end)
+end
+
+function DialogueController:_skipTyping(): boolean
+	if not self._isTyping then
+		return false
+	end
+
+	local currentNode = self:_getCurrentNode()
+	if not currentNode then
+		return false
+	end
+
+	return self:_completeReveal(currentNode, self._activeRevealToken)
+end
+
 function DialogueController:_styleDisabledButton(button: ImageButton, textLabel: TextLabel, choice: DialogueChoice)
 	button.Active = false
 	button.AutoButtonColor = false
@@ -292,31 +474,14 @@ end
 
 function DialogueController:_renderNode(node: DialogueNode)
 	local ui = self:_ensureUi()
+	self:_stopTyping()
 	ui.itemName.Text = node.speakerName
 	ui.itemName.Visible = node.speakerName ~= ""
 	ui.itemDescLabel.Text = node.text
-
 	self:_destroyRenderedButtons()
-
-	local layoutOrder = 1
-	for _, choice in ipairs(node.choices) do
-		local conditionsMet = self:_evaluateConditions(choice.conditionIds)
-		local behavior = choice.conditionBehavior or "hide"
-
-		if conditionsMet then
-			self:_createChoiceButton(choice, false, layoutOrder)
-			layoutOrder += 1
-		elseif behavior == "disable" then
-			self:_createChoiceButton(choice, true, layoutOrder)
-			layoutOrder += 1
-		end
-	end
-
-	if layoutOrder == 1 then
-		self:_renderFallbackChoice()
-	end
-
+	ui.itemDescLabel.MaxVisibleGraphemes = 0
 	self:_updateCanvasSize()
+	self:_startReveal(node)
 end
 
 function DialogueController:_setCurrentNode(nodeId: string): boolean
@@ -343,16 +508,27 @@ end
 
 function DialogueController:_closeDialogue(afterClose: (() -> ())?)
 	local guiController = self:_getGuiController()
+	self:_stopTyping()
 	self._activeDialogueId = nil
 	self._currentNodeId = nil
 	self._context = nil
 	self:_destroyRenderedButtons()
+	self:_clearPortrait()
 
 	guiController:ClosePanel(DIALOGUE_PANEL_NAME, true)
 
+	local afterCloseCallback = afterClose
 	if afterClose then
-		task.delay(PANEL_CLOSE_DELAY, afterClose)
+		task.delay(PANEL_CLOSE_DELAY, function()
+			self:_restorePanelVisibility()
+			afterCloseCallback()
+		end)
+		return
 	end
+
+	task.delay(PANEL_CLOSE_DELAY, function()
+		self:_restorePanelVisibility()
+	end)
 end
 
 function DialogueController:_openDialoguePanel()
@@ -365,6 +541,7 @@ function DialogueController:_beginDialogue(dialogueId: string)
 		return false
 	end
 
+	self:_renderPortrait()
 	self:_openDialoguePanel()
 	return true
 end
@@ -396,11 +573,29 @@ function DialogueController:_performAction(choice: DialogueChoice)
 	end
 
 	if action.type == "openShopFrame" then
+		local context = self._context
 		local frameName = action.frameName
-			or (self._context and self._context.shopFrameName)
+			or (context and context.shopFrameName)
 			or DEFAULT_SHOP_FRAME_NAME
 
 		self:_closeDialogue(function()
+			local shouldUseMerchantPresentation = context ~= nil and typeof(context.shopFrameName) == "string" and context.shopFrameName ~= ""
+			if shouldUseMerchantPresentation then
+				local opened = MerchantPresentationController:Open(frameName, {
+					cameraPart = if context and context.shopCameraPart and context.shopCameraPart:IsA("BasePart")
+						then context.shopCameraPart
+						else nil,
+					sourceInstance = if context and typeof(context.sourceInstance) == "Instance" then context.sourceInstance else nil,
+					interactionType = if context and typeof(context.interactionType) == "string" then context.interactionType else nil,
+					speakerModel = if context and typeof(context.speakerModel) == "Instance" and context.speakerModel:IsA("Model")
+						then context.speakerModel
+						else nil,
+				})
+				if opened then
+					return
+				end
+			end
+
 			FrameController:OpenFrame(frameName)
 		end)
 		return true
@@ -417,16 +612,29 @@ function DialogueController:OnStart()
 
 	self._started = true
 	self:_ensureUi()
+	self:_clearPortrait()
 
 	table.insert(self._connections, self._ui.layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
 		self:_updateCanvasSize()
 	end))
 
+	self._typingConnection = self._ui.dialogueRoot.InputBegan:Connect(function(input: InputObject)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			self:_skipTyping()
+		end
+	end)
+	table.insert(self._connections, self._typingConnection)
+
 	local function rerenderIfOpen()
 		if self:IsOpen() then
 			local currentNode = self:_getCurrentNode()
 			if currentNode then
-				self:_renderNode(currentNode)
+				if self._isTyping then
+					return
+				end
+
+				self:_destroyRenderedButtons()
+				self:_renderChoices(currentNode)
 			end
 		end
 	end
@@ -446,6 +654,7 @@ function DialogueController.StartDialogue(dialogueId: string, context: { [string
 
 	DialogueController._activeDialogueId = dialogueId
 	DialogueController._context = deepCopyContext(context)
+	DialogueController:_capturePanelVisibility()
 
 	local openFrameName = FrameController:GetOpenFrame()
 	if openFrameName then

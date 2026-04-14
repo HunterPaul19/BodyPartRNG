@@ -6,6 +6,7 @@ local Workspace = game:GetService("Workspace")
 
 local Globals = require(ReplicatedStorage.Lists.Globals)
 local Schema = require(ReplicatedStorage.Lists.Schema)
+local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 
 local REFRESH_TIME = 30
 local MAX_FETCH_ENTRIES = 1000
@@ -14,6 +15,12 @@ local DEFAULT_VISIBLE_ENTRY_COUNT = 10
 local ENTRY_NAME_PREFIX = "Entry_"
 local SPACER_NAME_PREFIX = "Spacer_"
 local SCOPE = Globals.SCOPE
+local USE_GLOBAL_LEADERBOARDS_IN_STUDIO = true
+local STUDIO_ORDERED_STORE_READ_RETRY_COUNT = 3
+local STUDIO_ORDERED_STORE_READ_RETRY_DELAY = 1
+-- Studio leaderboard validation stays isolated in a tester-seeded namespace.
+-- Only players who join Studio sessions after this is enabled will populate these stores.
+local STUDIO_ORDERED_STORE_SUFFIX = "_Studio"
 
 local MONEY_KEY = Schema.Money and Schema.Money.key or "money"
 local ROLLS_KEY = Schema.SuccessfulRollCount and Schema.SuccessfulRollCount.key or "successfulRollCount"
@@ -40,15 +47,57 @@ local BOARD_CONFIGS = {
 local usernameCache = {}
 local thumbnailCache = {}
 local orderedStores = {}
+local orderedStoreNames = {}
 local lastSyncedValues = {}
 local started = false
 
+local TEMPLATE_SIZE_X_SCALE_ATTR = "LeaderboardTemplateSizeXScale"
+local TEMPLATE_SIZE_X_OFFSET_ATTR = "LeaderboardTemplateSizeXOffset"
+local TEMPLATE_SIZE_Y_SCALE_ATTR = "LeaderboardTemplateSizeYScale"
+local TEMPLATE_SIZE_Y_OFFSET_ATTR = "LeaderboardTemplateSizeYOffset"
+
+local function shouldUseOrderedStores(): boolean
+	return not RunService:IsStudio() or USE_GLOBAL_LEADERBOARDS_IN_STUDIO
+end
+
+local function getOrderedStoreName(config): string
+	local scopeSuffix = if RunService:IsStudio() then SCOPE .. STUDIO_ORDERED_STORE_SUFFIX else SCOPE
+	return config.key .. scopeSuffix
+end
+
+local function isStudioRollsBoard(config): boolean
+	return RunService:IsStudio() and config.key == ROLLS_KEY
+end
+
+local function readStoredTemplateSize(template)
+	local xScale = template:GetAttribute(TEMPLATE_SIZE_X_SCALE_ATTR)
+	local xOffset = template:GetAttribute(TEMPLATE_SIZE_X_OFFSET_ATTR)
+	local yScale = template:GetAttribute(TEMPLATE_SIZE_Y_SCALE_ATTR)
+	local yOffset = template:GetAttribute(TEMPLATE_SIZE_Y_OFFSET_ATTR)
+	if typeof(xScale) ~= "number"
+		or typeof(xOffset) ~= "number"
+		or typeof(yScale) ~= "number"
+		or typeof(yOffset) ~= "number"
+	then
+		return nil
+	end
+
+	return UDim2.new(xScale, xOffset, yScale, yOffset)
+end
+
+local function storeTemplateSize(template, templateSize)
+	template:SetAttribute(TEMPLATE_SIZE_X_SCALE_ATTR, templateSize.X.Scale)
+	template:SetAttribute(TEMPLATE_SIZE_X_OFFSET_ATTR, templateSize.X.Offset)
+	template:SetAttribute(TEMPLATE_SIZE_Y_SCALE_ATTR, templateSize.Y.Scale)
+	template:SetAttribute(TEMPLATE_SIZE_Y_OFFSET_ATTR, templateSize.Y.Offset)
+end
+
 local function formatMoney(value)
-	return Globals.formatNumber(math.max(0, math.floor((tonumber(value) or 0) + 0.5)), false, true)
+	return "$" .. NumberFormatter.Format(math.max(0, math.round(tonumber(value) or 0)))
 end
 
 local function formatRolls(value)
-	return tostring(math.max(0, math.floor(tonumber(value) or 0)))
+	return NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0)))
 end
 
 local FORMATTERS = {
@@ -176,13 +225,24 @@ local function getBoardWidgets(boardModel, config)
 
 	local rollInfo = playerInfo:FindFirstChild("RollInfo")
 	local playerIcon = playerInfo:FindFirstChild("PlayerIcon")
+	local templateSize = template.Size
+	if templateSize.Y.Scale > 0 or templateSize.Y.Offset > 0 then
+		storeTemplateSize(template, templateSize)
+	else
+		local storedTemplateSize = readStoredTemplateSize(template)
+		if storedTemplateSize then
+			templateSize = storedTemplateSize
+		else
+			templateSize = UDim2.new(1, 0, 0.1, 0)
+		end
+	end
 
 	return {
 		surfaceGui = surfaceGui,
 		scrollingFrame = scrollingFrame,
 		template = template,
 		templateAbsoluteHeight = template.AbsoluteSize.Y,
-		templateSize = template.Size,
+		templateSize = templateSize,
 		listLayout = scrollingFrame:FindFirstChildWhichIsA("UIListLayout"),
 		headerPlayerName = topFrame:FindFirstChild("PlayerName"),
 		headerValue = findFirstChildByNames(topFrame, config.headerValueLabelNames or { "Value" }),
@@ -380,7 +440,7 @@ local function renderBoard(boardModel, config, entries)
 	clearRenderedEntries(widgets)
 
 	widgets.template.Visible = false
-	widgets.template.Size = UDim2.new(widgets.templateSize.X.Scale, widgets.templateSize.X.Offset, 0, 0)
+	widgets.template.Size = widgets.templateSize
 	widgets.template.LayoutOrder = MAX_FETCH_ENTRIES + 2
 	setGuiText(widgets.headerPlayerName, "Player")
 	setGuiText(widgets.headerValue, config.infoTitle or config.format)
@@ -434,7 +494,26 @@ local function getCurrentPlayerEntries(dataService, key)
 	return entries
 end
 
-local function syncPlayerValueToStore(dataService, boardName, config, store, player)
+local function getMissingVisibleEntries(localEntries, orderedEntries)
+	local missingEntries = {}
+	local orderedEntriesByUserId = {}
+	for _, entry in ipairs(orderedEntries) do
+		orderedEntriesByUserId[entry.userId] = true
+	end
+
+	local pageSize = math.min(ORDERED_STORE_PAGE_SIZE, MAX_FETCH_ENTRIES)
+	local cutoffValue = if #orderedEntries > 0 then orderedEntries[#orderedEntries].value else nil
+	for _, entry in ipairs(localEntries) do
+		local shouldBeVisible = #orderedEntries < pageSize or cutoffValue == nil or entry.value > cutoffValue
+		if entry.value > 0 and shouldBeVisible and not orderedEntriesByUserId[entry.userId] then
+			missingEntries[#missingEntries + 1] = entry
+		end
+	end
+
+	return missingEntries
+end
+
+local function syncPlayerValueToStore(dataService, boardName, config, storeName, store, player)
 	local userId = player.UserId
 	local boardValues = lastSyncedValues[boardName]
 	if not boardValues then
@@ -447,26 +526,42 @@ local function syncPlayerValueToStore(dataService, boardName, config, store, pla
 		return
 	end
 
-	local success = pcall(function()
+	local success, errorMessage = pcall(function()
 		store:SetAsync(userId, value)
 	end)
-	if success then
-		boardValues[userId] = value
+	if not success then
+		warn(string.format(
+			"[Leaderboards] Failed to write board=%s store=%s userId=%d value=%d: %s",
+			boardName,
+			storeName,
+			userId,
+			value,
+			tostring(errorMessage)
+		))
+		return
 	end
+
+	boardValues[userId] = value
 end
 
-local function pushChangedPlayerData(dataService, boardName, config, store)
+local function pushChangedPlayerData(dataService, boardName, config, storeName, store)
 	for _, player in ipairs(Players:GetPlayers()) do
-		syncPlayerValueToStore(dataService, boardName, config, store, player)
+		syncPlayerValueToStore(dataService, boardName, config, storeName, store, player)
 	end
 end
 
-local function getOrderedStoreEntries(store)
+local function getOrderedStoreEntries(boardName, storeName, store)
 	local pageSize = math.min(ORDERED_STORE_PAGE_SIZE, MAX_FETCH_ENTRIES)
 	local success, pages = pcall(function()
 		return store:GetSortedAsync(false, pageSize)
 	end)
 	if not success or not pages then
+		warn(string.format(
+			"[Leaderboards] Failed to read board=%s store=%s via GetSortedAsync: %s",
+			boardName,
+			storeName,
+			tostring(pages)
+		))
 		return {}
 	end
 
@@ -501,12 +596,51 @@ local function getOrderedStoreEntries(store)
 			break
 		end
 
-		local advanced = pcall(function()
+		local advanced, advanceError = pcall(function()
 			pages:AdvanceToNextPageAsync()
 		end)
 		if not advanced then
+			warn(string.format(
+				"[Leaderboards] Failed to advance page for board=%s store=%s: %s",
+				boardName,
+				storeName,
+				tostring(advanceError)
+			))
 			break
 		end
+	end
+
+	return entries
+end
+
+local function retryStudioRollEntries(dataService, boardName, config, storeName, store, entries)
+	if not isStudioRollsBoard(config) then
+		return entries
+	end
+
+	local localEntries = getCurrentPlayerEntries(dataService, config.key)
+	local missingEntries = getMissingVisibleEntries(localEntries, entries)
+	if #missingEntries == 0 then
+		return entries
+	end
+
+	for _ = 1, STUDIO_ORDERED_STORE_READ_RETRY_COUNT do
+		task.wait(STUDIO_ORDERED_STORE_READ_RETRY_DELAY)
+		entries = getOrderedStoreEntries(boardName, storeName, store)
+		missingEntries = getMissingVisibleEntries(localEntries, entries)
+		if #missingEntries == 0 then
+			return entries
+		end
+	end
+
+	for _, entry in ipairs(missingEntries) do
+		warn(string.format(
+			"[Leaderboards] Studio rolls entry missing after retry board=%s store=%s userId=%d value=%d",
+			boardName,
+			storeName,
+			entry.userId,
+			entry.value
+		))
 	end
 
 	return entries
@@ -515,14 +649,15 @@ end
 local Leaderboards = {}
 
 function Leaderboards.flushPlayer(dataService, player)
-	if RunService:IsStudio() then
+	if not shouldUseOrderedStores() then
 		return
 	end
 
 	for boardName, config in pairs(BOARD_CONFIGS) do
 		local store = orderedStores[boardName]
+		local storeName = orderedStoreNames[boardName]
 		if store then
-			syncPlayerValueToStore(dataService, boardName, config, store, player)
+			syncPlayerValueToStore(dataService, boardName, config, storeName, store, player)
 		end
 	end
 end
@@ -532,16 +667,18 @@ function Leaderboards.refresh(dataService)
 		local boardModels = getBoardModels(config)
 		if #boardModels > 0 then
 			local entries = nil
-			if RunService:IsStudio() then
-				entries = getCurrentPlayerEntries(dataService, config.key)
-			else
+			if shouldUseOrderedStores() then
 				local store = orderedStores[boardName]
+				local storeName = orderedStoreNames[boardName]
 				if store then
-					pushChangedPlayerData(dataService, boardName, config, store)
-					entries = getOrderedStoreEntries(store)
+					pushChangedPlayerData(dataService, boardName, config, storeName, store)
+					entries = getOrderedStoreEntries(boardName, storeName, store)
+					entries = retryStudioRollEntries(dataService, boardName, config, storeName, store, entries)
 				else
 					entries = {}
 				end
+			else
+				entries = getCurrentPlayerEntries(dataService, config.key)
 			end
 
 			for _, boardModel in ipairs(boardModels) do
@@ -571,9 +708,11 @@ function Leaderboards.start(dataService)
 	end
 	started = true
 
-	if not RunService:IsStudio() then
+	if shouldUseOrderedStores() then
 		for boardName, config in pairs(BOARD_CONFIGS) do
-			orderedStores[boardName] = DataStoreService:GetOrderedDataStore(config.key .. SCOPE)
+			local storeName = getOrderedStoreName(config)
+			orderedStoreNames[boardName] = storeName
+			orderedStores[boardName] = DataStoreService:GetOrderedDataStore(storeName)
 		end
 	end
 

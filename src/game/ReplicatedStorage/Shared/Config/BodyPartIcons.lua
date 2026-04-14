@@ -6,7 +6,7 @@ export type BodyPartIconEntry = {
 local rawIcons: { [string]: BodyPartIconEntry } = {
 	Head = {
 		buttonName = "Heads",
-		image = "rbxassetid://121370555410150",
+		image = "rbxassetid://117781463769321",
 	},
 	Torso = {
 		buttonName = "Torsos",

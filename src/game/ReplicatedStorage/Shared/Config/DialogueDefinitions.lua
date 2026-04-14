@@ -46,14 +46,6 @@ local definitionsById: { [string]: DialogueDefinition } = {
 						},
 					},
 					{
-						id = "vip_deals",
-						text = "Any VIP offers today?",
-						nextNodeId = "vip_deals",
-						conditionIds = { "vipOwned" },
-						conditionBehavior = "disable",
-						disabledText = "Ask about VIP offers (VIP required)",
-					},
-					{
 						id = "secret_stock",
 						text = "What about the secret stock?",
 						nextNodeId = "secret_stock",
@@ -62,25 +54,6 @@ local definitionsById: { [string]: DialogueDefinition } = {
 					{
 						id = "leave",
 						text = "Maybe later.",
-						action = {
-							type = "closeDialogue",
-						},
-					},
-				},
-			},
-			vip_deals = {
-				id = "vip_deals",
-				speakerName = "Merchant",
-				text = "VIP customers get first look at the premium shelves. I'll bring those out once the proper stock is ready.",
-				choices = {
-					{
-						id = "vip_back",
-						text = "Back",
-						nextNodeId = "intro",
-					},
-					{
-						id = "vip_leave",
-						text = "That's all for now.",
 						action = {
 							type = "closeDialogue",
 						},

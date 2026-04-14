@@ -2,6 +2,22 @@ local RollingConfig = {
 	BonusInterval = 10,
 	BonusMultiplier = 2,
 	VipMultiplier = 1.25,
+	PreviewTeasersEnabled = true,
+	PreviewTeaserChancePerSlot = 0.25,
+	PreviewTeaserMultipliers = {
+		{
+			multiplier = 25,
+			weight = 70,
+		},
+		{
+			multiplier = 50,
+			weight = 25,
+		},
+		{
+			multiplier = 100,
+			weight = 5,
+		},
+	},
 	DisplayRarityOrder = {
 		"Basic",
 		"Clean",
@@ -18,15 +34,8 @@ local RollingConfig = {
 		Epic = "Prime",
 		Prime = "Prime",
 		Legendary = "Elite",
-		Elite = "Apex",
+		Elite = "Elite",
 		Apex = "Apex",
-	},
-	RarityEffectiveness = {
-		Basic = 1.0,
-		Clean = 0.70,
-		Prime = 0.40,
-		Elite = 0.15,
-		Apex = 0.05,
 	},
 }
 
@@ -77,11 +86,6 @@ function RollingConfig.NormalizeAutoSellState(value: any): { [string]: boolean }
 	end
 
 	return normalizedState
-end
-
-function RollingConfig.GetRarityEffectiveness(displayRarity: any): number
-	local normalized = RollingConfig.NormalizeDisplayRarity(displayRarity)
-	return RollingConfig.RarityEffectiveness[normalized] or RollingConfig.RarityEffectiveness.Basic
 end
 
 return table.freeze(RollingConfig)

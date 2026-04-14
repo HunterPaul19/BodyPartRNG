@@ -10,7 +10,6 @@ local PLAY_TIME_UPDATE_INTERVAL = 10
 local function updatePlayTime(player: Player)
 	DataService:Set(player, DIAGNOSTICS_FIELD, function(diagnostics)
 		diagnostics = diagnostics or {}
-		diagnostics.playTime = (diagnostics.playTime or 0) + PLAY_TIME_UPDATE_INTERVAL
 		diagnostics.leaveTime = os.time()
 		return diagnostics
 	end)

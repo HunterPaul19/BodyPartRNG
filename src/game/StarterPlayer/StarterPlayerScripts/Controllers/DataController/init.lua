@@ -29,16 +29,19 @@ local function bindReplica(replica)
 
 	replica:ListenToRaw(function(action, path, ...)
 		if action == "SetValue" then
-			local key = path[#path]
+			local key = path[1]
 			if key ~= nil then
-				DataUpdated:Fire(key, ...)
+				DataUpdated:Fire(key, action, path, ...)
 			end
 		elseif action == "SetValues" then
-			local values = ...
-			if typeof(values) == "table" then
-				for key, value in pairs(values) do
-					DataUpdated:Fire(key, value)
-				end
+			local key = path[1]
+			if key ~= nil then
+				DataUpdated:Fire(key, action, path, ...)
+			end
+		elseif action == "ArrayInsert" or action == "ArraySet" or action == "ArrayRemove" then
+			local key = path[1]
+			if key ~= nil then
+				DataUpdated:Fire(key, action, path, ...)
 			end
 		end
 	end)

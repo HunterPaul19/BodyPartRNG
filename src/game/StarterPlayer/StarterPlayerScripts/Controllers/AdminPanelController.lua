@@ -3,9 +3,12 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
+local AuraConfig = require(ReplicatedStorage.Shared.Config.AuraConfig)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
 local AdminPanelDefinitions = require(ReplicatedStorage.Shared.UI.AdminPanelDefinitions)
+local PlayerStatsPresentation = require(ReplicatedStorage.Shared.UI.PlayerStatsPresentation)
 local DialogueController = require(script.Parent.DialogueController)
 local HUDWindowController = require(script.Parent.HUDWindowController)
 local UIController = require(script.Parent.UIController)
@@ -13,6 +16,7 @@ local UIController = require(script.Parent.UIController)
 local LOCAL_PLAYER = Players.LocalPlayer
 local ACCESS_ATTRIBUTE = "CanUseAdminPanel"
 local OVERVIEW_TAB_ID = "overview"
+local PLAYERS_TAB_ID = "players"
 local BODY_PARTS_TAB_ID = "bodyParts"
 local WINDOW_NAME = "AdminPanel"
 local TOGGLE_KEY = Enum.KeyCode.P
@@ -57,6 +61,12 @@ function AdminPanelController:_ensureState()
 	self._runtimeSelectedOwnedId = nil
 	self._runtimeSelectedRegion = BodyPartRegions.Order[1]
 	self._runtimeUi = {}
+	self._grantSelectedPieceId = nil :: string?
+	self._grantSelectedAuraId = nil :: string?
+	self._grantUi = {}
+	self._playerStatsSelectedUserId = nil
+	self._playerStatsSummary = nil
+	self._playerStatsUi = {}
 end
 
 local function setTextStroke(label: TextLabel, transparency: number)
@@ -93,6 +103,24 @@ local function formatNumberish(value: number): string
 		return NumberFormatter.Format(math.round(numericValue))
 	end
 	return string.format("%.2f", numericValue):gsub("0+$", ""):gsub("%.$", "")
+end
+
+local function formatPlayerDisplay(player: Player?): string
+	if not player then
+		return "No player selected"
+	end
+
+	return string.format("%s (@%s)", player.DisplayName, player.Name)
+end
+
+local function setSandboxButtonEnabled(button: GuiButton?, enabled: boolean)
+	if not (button and button:IsA("GuiButton")) then
+		return
+	end
+
+	button.Active = enabled
+	button.TextTransparency = if enabled then 0 else 0.35
+	button.BackgroundTransparency = if enabled then 0 else 0.35
 end
 
 function AdminPanelController:_invokeAdminRequest(tabId: string, actionId: string, actionTitle: string, payload: any?): (boolean, any)
@@ -206,6 +234,9 @@ function AdminPanelController:_setTab(tabId: string)
 	if tabId == BODY_PARTS_TAB_ID then
 		self:_loadRuntimeState(true)
 		self:_loadVisualSandboxOptions(true)
+	elseif tabId == PLAYERS_TAB_ID then
+		self:_syncPlayerStatsUi()
+		self:_loadSelectedPlayerStats(true)
 	end
 end
 
@@ -360,6 +391,177 @@ function AdminPanelController:_createSandboxField(parent: Instance, labelText: s
 	return field
 end
 
+function AdminPanelController:_createSandboxValueLabel(parent: Instance): TextLabel
+	local valueLabel = Instance.new("TextLabel")
+	valueLabel.Name = "ValueLabel"
+	valueLabel.BackgroundTransparency = 1
+	valueLabel.AutomaticSize = Enum.AutomaticSize.Y
+	valueLabel.Size = UDim2.new(1, 0, 0, 0)
+	valueLabel.Font = Enum.Font.GothamSemibold
+	valueLabel.Text = ""
+	valueLabel.TextColor3 = Color3.fromRGB(244, 247, 255)
+	valueLabel.TextSize = 14
+	valueLabel.TextWrapped = true
+	valueLabel.TextXAlignment = Enum.TextXAlignment.Left
+	valueLabel.TextYAlignment = Enum.TextYAlignment.Top
+	valueLabel.Parent = parent
+	setGenerated(valueLabel)
+
+	return valueLabel
+end
+
+function AdminPanelController:_getPlayerStatsTargets(): { Player }
+	local targets = Players:GetPlayers()
+	table.sort(targets, function(a, b)
+		local displayA = string.lower(a.DisplayName)
+		local displayB = string.lower(b.DisplayName)
+		if displayA ~= displayB then
+			return displayA < displayB
+		end
+
+		local nameA = string.lower(a.Name)
+		local nameB = string.lower(b.Name)
+		if nameA ~= nameB then
+			return nameA < nameB
+		end
+
+		return a.UserId < b.UserId
+	end)
+
+	return targets
+end
+
+function AdminPanelController:_getSelectedPlayerStatsTarget(): (Player?, { Player })
+	local targets = self:_getPlayerStatsTargets()
+	if #targets == 0 then
+		self._playerStatsSelectedUserId = nil
+		return nil, targets
+	end
+
+	for _, player in ipairs(targets) do
+		if player.UserId == self._playerStatsSelectedUserId then
+			return player, targets
+		end
+	end
+
+	local fallbackPlayer = Players:GetPlayerByUserId(LOCAL_PLAYER.UserId) or targets[1]
+	self._playerStatsSelectedUserId = fallbackPlayer.UserId
+	return fallbackPlayer, targets
+end
+
+function AdminPanelController:_cyclePlayerStatsTarget(direction: number)
+	local selectedPlayer, targets = self:_getSelectedPlayerStatsTarget()
+	if #targets == 0 then
+		self._playerStatsSummary = nil
+		self:_syncPlayerStatsUi()
+		self:_setStatus("No players are currently available to inspect.", ERROR_COLOR)
+		return
+	end
+
+	local currentIndex = 1
+	for index, player in ipairs(targets) do
+		if selectedPlayer and player.UserId == selectedPlayer.UserId then
+			currentIndex = index
+			break
+		end
+	end
+
+	local nextIndex = ((currentIndex - 1 + direction) % #targets) + 1
+	self._playerStatsSelectedUserId = targets[nextIndex].UserId
+	self._playerStatsSummary = nil
+	self:_syncPlayerStatsUi()
+	self:_loadSelectedPlayerStats(true)
+end
+
+function AdminPanelController:_syncPlayerStatsUi()
+	local ui = self._playerStatsUi
+	if not ui or next(ui) == nil then
+		return
+	end
+
+	local selectedPlayer, targets = self:_getSelectedPlayerStatsTarget()
+	local hasTargets = #targets > 0
+	local hasMultipleTargets = #targets > 1
+	local summary = self._playerStatsSummary
+	if summary and ((not selectedPlayer) or summary.userId ~= selectedPlayer.UserId) then
+		summary = nil
+	end
+
+	if ui.playerValue and ui.playerValue:IsA("TextLabel") then
+		ui.playerValue.Text = if selectedPlayer then formatPlayerDisplay(selectedPlayer) else "No players available"
+	end
+
+	local sections = if summary then PlayerStatsPresentation.BuildAdminSections(summary) else {
+		overview = if selectedPlayer
+			then string.format("%s is selected.\nPress refresh to load their persisted lifetime stats.", formatPlayerDisplay(selectedPlayer))
+			else "No players are currently available.",
+		economy = "Load a player to view earned and spent currency totals by source.",
+		rolls = "Load a player to view request volume, failures, rarity mix, and best-ever roll data.",
+		collection = "Load a player to view acquisition, sells, auras, and set completion history.",
+		monetization = "Load a player to view purchase prompts and successful purchase tracking.",
+		settings = "Load a player to view client setting toggle and selection counters.",
+	}
+
+	if ui.overviewValue and ui.overviewValue:IsA("TextLabel") then
+		ui.overviewValue.Text = sections.overview
+	end
+	if ui.economyValue and ui.economyValue:IsA("TextLabel") then
+		ui.economyValue.Text = sections.economy
+	end
+	if ui.rollsValue and ui.rollsValue:IsA("TextLabel") then
+		ui.rollsValue.Text = sections.rolls
+	end
+	if ui.collectionValue and ui.collectionValue:IsA("TextLabel") then
+		ui.collectionValue.Text = sections.collection
+	end
+	if ui.monetizationValue and ui.monetizationValue:IsA("TextLabel") then
+		ui.monetizationValue.Text = sections.monetization
+	end
+	if ui.settingsValue and ui.settingsValue:IsA("TextLabel") then
+		ui.settingsValue.Text = sections.settings
+	end
+
+	setSandboxButtonEnabled(ui.playerPrevButton, hasMultipleTargets)
+	setSandboxButtonEnabled(ui.playerNextButton, hasMultipleTargets)
+	setSandboxButtonEnabled(ui.refreshButton, hasTargets)
+end
+
+function AdminPanelController:_loadSelectedPlayerStats(forceRefresh: boolean?): boolean
+	local selectedPlayer = select(1, self:_getSelectedPlayerStatsTarget())
+	if not selectedPlayer then
+		self._playerStatsSummary = nil
+		self:_syncPlayerStatsUi()
+		self:_setStatus("No players are currently available to inspect.", ERROR_COLOR)
+		return false
+	end
+
+	if not forceRefresh and self._playerStatsSummary and self._playerStatsSummary.userId == selectedPlayer.UserId then
+		self:_syncPlayerStatsUi()
+		return true
+	end
+
+	local ok, result = self:_invokeAdminRequest(PLAYERS_TAB_ID, "inspect_player_profile", "Loading player stats", {
+		userId = selectedPlayer.UserId,
+	})
+	if not ok or not result then
+		self._playerStatsSummary = nil
+		self:_syncPlayerStatsUi()
+		return false
+	end
+
+	if result.ok ~= true or typeof(result.data) ~= "table" then
+		self._playerStatsSummary = nil
+		self:_syncPlayerStatsUi()
+		self:_setStatus(tostring(result.message or "Failed to load player stats."), ERROR_COLOR)
+		return false
+	end
+
+	self._playerStatsSummary = result.data
+	self:_syncPlayerStatsUi()
+	self:_setStatus(tostring(result.message or "Loaded player stats."), SUCCESS_COLOR)
+	return true
+end
+
 function AdminPanelController:_syncVisualSandboxUi()
 	local ui = self._visualSandboxUi
 	local region = self._visualSandboxRegion
@@ -423,6 +625,237 @@ function AdminPanelController:_syncVisualSandboxUi()
 			button.BackgroundTransparency = if enabled then 0 else 0.35
 		end
 	end
+end
+
+function AdminPanelController:_getGrantBodyPartOptions()
+	local pieces = {}
+
+	for _, piece in ipairs(BodyPartsCatalog.GetAllPieces()) do
+		table.insert(pieces, piece)
+	end
+
+	table.sort(pieces, function(a, b)
+		local setA = BodyPartsCatalog.GetSetForPiece(a.id)
+		local setB = BodyPartsCatalog.GetSetForPiece(b.id)
+		local chanceA = math.max(1, math.floor(tonumber(setA and setA.rollDisplay.chance) or math.huge))
+		local chanceB = math.max(1, math.floor(tonumber(setB and setB.rollDisplay.chance) or math.huge))
+		if chanceA ~= chanceB then
+			return chanceA < chanceB
+		end
+
+		local regionIndexA = table.find(BodyPartRegions.Order, a.region) or math.huge
+		local regionIndexB = table.find(BodyPartRegions.Order, b.region) or math.huge
+		if regionIndexA ~= regionIndexB then
+			return regionIndexA < regionIndexB
+		end
+
+		if a.displayName ~= b.displayName then
+			return a.displayName < b.displayName
+		end
+
+		return a.id < b.id
+	end)
+
+	return pieces
+end
+
+function AdminPanelController:_getSelectedGrantBodyPart()
+	local selectedPieceId = self._grantSelectedPieceId
+	for _, piece in ipairs(self:_getGrantBodyPartOptions()) do
+		if piece.id == selectedPieceId then
+			return piece
+		end
+	end
+
+	return nil
+end
+
+function AdminPanelController:_getGrantAuraOptions()
+	local auras = {}
+
+	for _, auraConfig in ipairs(AuraConfig.GetOrdered()) do
+		table.insert(auras, auraConfig)
+	end
+
+	return auras
+end
+
+function AdminPanelController:_getSelectedGrantAura()
+	local selectedAuraId = self._grantSelectedAuraId
+	for _, auraConfig in ipairs(self:_getGrantAuraOptions()) do
+		if auraConfig.id == selectedAuraId then
+			return auraConfig
+		end
+	end
+
+	return nil
+end
+
+function AdminPanelController:_formatGrantBodyPart(piece: any): string
+	if not piece then
+		return "No body parts are available."
+	end
+
+	local setConfig = BodyPartsCatalog.GetSetForPiece(piece.id)
+	local setName = if setConfig then setConfig.displayName else "Unknown Set"
+	local rarity = if setConfig then setConfig.rollDisplay.rarity else "Unknown"
+	local odds = if setConfig then math.max(1, math.floor(tonumber(setConfig.rollDisplay.chance) or 1)) else math.max(1, math.floor(tonumber(piece.rarity) or 1))
+
+	return table.concat({
+		piece.displayName,
+		string.format("Piece ID: %s", piece.id),
+		string.format("Set: %s", setName),
+		string.format("Region: %s", piece.region),
+		string.format("Rarity: %s", rarity),
+		string.format("Odds: 1/%s", formatNumberish(odds)),
+		string.format("Luck Bonus: %s", formatSignedPercent(tonumber(piece.luckBonus) or 0)),
+		string.format("Roll Speed Bonus: %s", formatSignedPercent(tonumber(piece.rollSpeedBonus) or 0)),
+		string.format("Income / s: %s", formatNumberish(tonumber(piece.passiveIncomePerSecond) or 0)),
+	}, "\n")
+end
+
+function AdminPanelController:_formatGrantAura(auraConfig: AuraConfig.AuraConfigEntry?): string
+	if not auraConfig then
+		return "No auras are available."
+	end
+
+	return table.concat({
+		auraConfig.label,
+		string.format("Aura ID: %s", auraConfig.id),
+		string.format("Set ID: %s", auraConfig.setId),
+		string.format("Tier: %s", auraConfig.tierLabel),
+		string.format("Luck Bonus: %s", formatSignedPercent(tonumber(auraConfig.bonuses.luckBonus) or 0)),
+		string.format("Roll Speed Bonus: %s", formatSignedPercent(tonumber(auraConfig.bonuses.rollSpeedBonus) or 0)),
+		string.format("Money Multiplier: x%s", formatNumberish(tonumber(auraConfig.bonuses.moneyMultiplier) or 1)),
+		string.format("Passive Bonus / s: %s", formatNumberish(tonumber(auraConfig.bonuses.passiveIncomePerSecondBonus) or 0)),
+	}, "\n")
+end
+
+function AdminPanelController:_syncGrantUi()
+	local ui = self._grantUi
+	if not ui or next(ui) == nil then
+		return
+	end
+
+	local bodyPartOptions = self:_getGrantBodyPartOptions()
+	local auraOptions = self:_getGrantAuraOptions()
+	local selectedPiece = self:_getSelectedGrantBodyPart()
+	local selectedAura = self:_getSelectedGrantAura()
+
+	if selectedPiece == nil and bodyPartOptions[1] then
+		self._grantSelectedPieceId = bodyPartOptions[1].id
+		selectedPiece = bodyPartOptions[1]
+	end
+
+	if selectedAura == nil and auraOptions[1] then
+		self._grantSelectedAuraId = auraOptions[1].id
+		selectedAura = auraOptions[1]
+	end
+
+	if ui.bodyPartValue and ui.bodyPartValue:IsA("TextLabel") then
+		ui.bodyPartValue.Text = self:_formatGrantBodyPart(selectedPiece)
+	end
+
+	if ui.auraValue and ui.auraValue:IsA("TextLabel") then
+		ui.auraValue.Text = self:_formatGrantAura(selectedAura)
+	end
+
+	local hasBodyPartOptions = #bodyPartOptions > 0
+	local hasAuraOptions = #auraOptions > 0
+
+	for _, button in ipairs({ ui.bodyPartPrevButton, ui.bodyPartNextButton, ui.grantBodyPartButton }) do
+		setSandboxButtonEnabled(button, hasBodyPartOptions)
+	end
+
+	for _, button in ipairs({ ui.auraPrevButton, ui.auraNextButton, ui.grantAuraButton }) do
+		setSandboxButtonEnabled(button, hasAuraOptions)
+	end
+end
+
+function AdminPanelController:_cycleGrantBodyPart(direction: number)
+	local options = self:_getGrantBodyPartOptions()
+	if #options == 0 then
+		self._grantSelectedPieceId = nil
+		self:_syncGrantUi()
+		self:_setStatus("No body parts are configured to grant.", ERROR_COLOR)
+		return
+	end
+
+	local currentIndex = 1
+	for index, piece in ipairs(options) do
+		if piece.id == self._grantSelectedPieceId then
+			currentIndex = index
+			break
+		end
+	end
+
+	local nextIndex = ((currentIndex - 1 + direction) % #options) + 1
+	self._grantSelectedPieceId = options[nextIndex].id
+	self:_syncGrantUi()
+end
+
+function AdminPanelController:_cycleGrantAura(direction: number)
+	local options = self:_getGrantAuraOptions()
+	if #options == 0 then
+		self._grantSelectedAuraId = nil
+		self:_syncGrantUi()
+		self:_setStatus("No auras are configured to grant.", ERROR_COLOR)
+		return
+	end
+
+	local currentIndex = 1
+	for index, auraConfig in ipairs(options) do
+		if auraConfig.id == self._grantSelectedAuraId then
+			currentIndex = index
+			break
+		end
+	end
+
+	local nextIndex = ((currentIndex - 1 + direction) % #options) + 1
+	self._grantSelectedAuraId = options[nextIndex].id
+	self:_syncGrantUi()
+end
+
+function AdminPanelController:_grantSelectedBodyPart()
+	local selectedPiece = self:_getSelectedGrantBodyPart()
+	if not selectedPiece then
+		self:_setStatus("Select a body part to grant first.", ERROR_COLOR)
+		return
+	end
+
+	local ok, result = self:_invokeAdminRequest(BODY_PARTS_TAB_ID, "grant_body_part", "Granting body part", {
+		pieceId = selectedPiece.id,
+	})
+	if not ok or not result then
+		return
+	end
+
+	if typeof(result.data) == "table" and typeof(result.data.grantedRecord) == "table" and typeof(result.data.grantedRecord.ownedId) == "string" then
+		self._runtimeSelectedOwnedId = result.data.grantedRecord.ownedId
+	end
+
+	if typeof(result.data) == "table" and typeof(result.data.runtimeState) == "table" then
+		self:_applyRuntimeState(result.data.runtimeState)
+	end
+
+	self:_setStatus(tostring(result.message or "No response message provided."), if result.ok then SUCCESS_COLOR else ERROR_COLOR)
+end
+
+function AdminPanelController:_grantSelectedAura()
+	local selectedAura = self:_getSelectedGrantAura()
+	if not selectedAura then
+		self:_setStatus("Select an aura to grant first.", ERROR_COLOR)
+		return
+	end
+
+	local ok, result = self:_invokeAdminRequest(BODY_PARTS_TAB_ID, "grant_aura", "Granting aura", {
+		auraId = selectedAura.id,
+	})
+	if not ok or not result then
+		return
+	end
+
+	self:_setStatus(tostring(result.message or "No response message provided."), if result.ok then SUCCESS_COLOR else ERROR_COLOR)
 end
 
 function AdminPanelController:_getOwnedRecords()
@@ -553,6 +986,11 @@ function AdminPanelController:_formatOwnedRecord(record: any): string
 		mutation = "None"
 	end
 
+	local sizeScale = tonumber(record and record.sizeMultiplier) or 1
+	local sizeEntry = SizeConfig.GetByScale(sizeScale)
+		or SizeConfig.Get(record and record.sizeId)
+		or SizeConfig.GetDefault()
+
 	return table.concat({
 		displayName,
 		string.format("Owned ID: %s", tostring(record and record.ownedId or "N/A")),
@@ -561,7 +999,7 @@ function AdminPanelController:_formatOwnedRecord(record: any): string
 		string.format("Odds: 1/%s", formatNumberish(tonumber(record and (record.displayOddsDenominator or record.rarityDenominator)) or 0)),
 		string.format("Display Rarity: %s", tostring(record and record.displayRarity or (record and record.rarity) or "Unknown")),
 		string.format("Mutation: %s", mutation),
-		string.format("Size Multiplier: %s", formatNumberish(tonumber(record and record.sizeMultiplier) or 1)),
+		string.format("Size: %s (%sx)", sizeEntry.displayName, formatNumberish(sizeScale)),
 		string.format("Income / s: %s", formatNumberish(tonumber(record and record.finalPassiveIncomePerSecond) or tonumber(piece and piece.passiveIncomePerSecond) or 0)),
 	}, "\n")
 end
@@ -1046,6 +1484,142 @@ function AdminPanelController:_createVisualSandboxSection(parent: ScrollingFrame
 	self:_syncVisualSandboxUi()
 end
 
+function AdminPanelController:_createGrantInventorySection(parent: ScrollingFrame)
+	self:_createSectionHeader(parent, "Grant Inventory", "Grant a selected body part or aura directly to your own account for testing without leaving the admin panel.")
+
+	local card = Instance.new("Frame")
+	card.Name = "GrantInventoryCard"
+	card.BackgroundColor3 = SANDBOX_CARD_COLOR
+	card.AutomaticSize = Enum.AutomaticSize.Y
+	card.Size = UDim2.new(1, -4, 0, 0)
+	card.Parent = parent
+	setGenerated(card)
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 14)
+	corner.Parent = card
+	setGenerated(corner)
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = SANDBOX_STROKE_COLOR
+	stroke.Transparency = 0.14
+	stroke.Parent = card
+	setGenerated(stroke)
+
+	local padding = Instance.new("UIPadding")
+	padding.PaddingTop = UDim.new(0, 14)
+	padding.PaddingBottom = UDim.new(0, 14)
+	padding.PaddingLeft = UDim.new(0, 14)
+	padding.PaddingRight = UDim.new(0, 14)
+	padding.Parent = card
+	setGenerated(padding)
+
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Vertical
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+	layout.Padding = UDim.new(0, 10)
+	layout.Parent = card
+	setGenerated(layout)
+
+	local description = Instance.new("TextLabel")
+	description.Name = "DescriptionLabel"
+	description.BackgroundTransparency = 1
+	description.Size = UDim2.new(1, 0, 0, 34)
+	description.AutomaticSize = Enum.AutomaticSize.Y
+	description.Font = Enum.Font.Gotham
+	description.Text = "These grants go straight to your live profile data. Body parts are stored with default None/Normal variants, and aura grants reuse the normal unlock path."
+	description.TextWrapped = true
+	description.TextSize = 14
+	description.TextXAlignment = Enum.TextXAlignment.Left
+	description.TextYAlignment = Enum.TextYAlignment.Top
+	description.TextColor3 = Color3.fromRGB(184, 196, 227)
+	description.Parent = card
+	setGenerated(description)
+
+	local bodyPartField = self:_createSandboxField(card, "Grant Body Part")
+	local bodyPartRow = Instance.new("Frame")
+	bodyPartRow.Name = "ValueRow"
+	bodyPartRow.BackgroundTransparency = 1
+	bodyPartRow.Size = UDim2.new(1, 0, 0, 126)
+	bodyPartRow.Parent = bodyPartField
+	setGenerated(bodyPartRow)
+
+	local bodyPartPrevButton = self:_createSandboxButton(bodyPartRow, "PrevButton", "<", UDim2.fromOffset(38, 36), function()
+		self:_cycleGrantBodyPart(-1)
+	end)
+
+	local bodyPartValue = Instance.new("TextLabel")
+	bodyPartValue.Name = "ValueLabel"
+	bodyPartValue.BackgroundTransparency = 1
+	bodyPartValue.Position = UDim2.fromOffset(48, 0)
+	bodyPartValue.Size = UDim2.new(1, -96, 1, 0)
+	bodyPartValue.Font = Enum.Font.GothamSemibold
+	bodyPartValue.TextColor3 = Color3.fromRGB(244, 247, 255)
+	bodyPartValue.TextSize = 14
+	bodyPartValue.TextWrapped = true
+	bodyPartValue.TextXAlignment = Enum.TextXAlignment.Left
+	bodyPartValue.TextYAlignment = Enum.TextYAlignment.Top
+	bodyPartValue.Parent = bodyPartRow
+	setGenerated(bodyPartValue)
+
+	local bodyPartNextButton = self:_createSandboxButton(bodyPartRow, "NextButton", ">", UDim2.fromOffset(38, 36), function()
+		self:_cycleGrantBodyPart(1)
+	end)
+	bodyPartNextButton.Position = UDim2.new(1, -38, 0, 0)
+
+	local grantBodyPartButton = self:_createSandboxButton(card, "GrantBodyPartButton", "Grant Selected Body Part", UDim2.new(1, 0, 0, 40), function()
+		self:_grantSelectedBodyPart()
+	end)
+
+	local auraField = self:_createSandboxField(card, "Grant Aura")
+	local auraRow = Instance.new("Frame")
+	auraRow.Name = "ValueRow"
+	auraRow.BackgroundTransparency = 1
+	auraRow.Size = UDim2.new(1, 0, 0, 118)
+	auraRow.Parent = auraField
+	setGenerated(auraRow)
+
+	local auraPrevButton = self:_createSandboxButton(auraRow, "PrevButton", "<", UDim2.fromOffset(38, 36), function()
+		self:_cycleGrantAura(-1)
+	end)
+
+	local auraValue = Instance.new("TextLabel")
+	auraValue.Name = "ValueLabel"
+	auraValue.BackgroundTransparency = 1
+	auraValue.Position = UDim2.fromOffset(48, 0)
+	auraValue.Size = UDim2.new(1, -96, 1, 0)
+	auraValue.Font = Enum.Font.GothamSemibold
+	auraValue.TextColor3 = Color3.fromRGB(244, 247, 255)
+	auraValue.TextSize = 14
+	auraValue.TextWrapped = true
+	auraValue.TextXAlignment = Enum.TextXAlignment.Left
+	auraValue.TextYAlignment = Enum.TextYAlignment.Top
+	auraValue.Parent = auraRow
+	setGenerated(auraValue)
+
+	local auraNextButton = self:_createSandboxButton(auraRow, "NextButton", ">", UDim2.fromOffset(38, 36), function()
+		self:_cycleGrantAura(1)
+	end)
+	auraNextButton.Position = UDim2.new(1, -38, 0, 0)
+
+	local grantAuraButton = self:_createSandboxButton(card, "GrantAuraButton", "Grant Selected Aura", UDim2.new(1, 0, 0, 40), function()
+		self:_grantSelectedAura()
+	end)
+
+	self._grantUi = {
+		bodyPartPrevButton = bodyPartPrevButton,
+		bodyPartNextButton = bodyPartNextButton,
+		bodyPartValue = bodyPartValue,
+		grantBodyPartButton = grantBodyPartButton,
+		auraPrevButton = auraPrevButton,
+		auraNextButton = auraNextButton,
+		auraValue = auraValue,
+		grantAuraButton = grantAuraButton,
+	}
+
+	self:_syncGrantUi()
+end
+
 function AdminPanelController:_createRuntimeInspectorSection(parent: ScrollingFrame)
 	self:_createSectionHeader(parent, "Runtime Loadout", "Inspect the live runtime state, equip owned body parts into the session loadout, validate computed bonuses, and clear or unequip regions without leaving the admin panel.")
 
@@ -1259,6 +1833,127 @@ function AdminPanelController:_createRuntimeInspectorSection(parent: ScrollingFr
 	self:_syncRuntimeUi()
 end
 
+function AdminPanelController:_createPlayerStatsInspectorSection(parent: ScrollingFrame)
+	self:_createSectionHeader(parent, "Player Stats", "Select any player in the current server and load their lifetime tracked stats, economy totals, roll history, and monetization counters.")
+
+	local card = Instance.new("Frame")
+	card.Name = "PlayerStatsCard"
+	card.BackgroundColor3 = SANDBOX_CARD_COLOR
+	card.AutomaticSize = Enum.AutomaticSize.Y
+	card.Size = UDim2.new(1, -4, 0, 0)
+	card.Parent = parent
+	setGenerated(card)
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 14)
+	corner.Parent = card
+	setGenerated(corner)
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = SANDBOX_STROKE_COLOR
+	stroke.Transparency = 0.14
+	stroke.Parent = card
+	setGenerated(stroke)
+
+	local padding = Instance.new("UIPadding")
+	padding.PaddingTop = UDim.new(0, 14)
+	padding.PaddingBottom = UDim.new(0, 14)
+	padding.PaddingLeft = UDim.new(0, 14)
+	padding.PaddingRight = UDim.new(0, 14)
+	padding.Parent = card
+	setGenerated(padding)
+
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Vertical
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+	layout.Padding = UDim.new(0, 10)
+	layout.Parent = card
+	setGenerated(layout)
+
+	local description = Instance.new("TextLabel")
+	description.Name = "DescriptionLabel"
+	description.BackgroundTransparency = 1
+	description.Size = UDim2.new(1, 0, 0, 34)
+	description.AutomaticSize = Enum.AutomaticSize.Y
+	description.Font = Enum.Font.Gotham
+	description.Text = "This reads the same inspect summary used by the in-world player inspect flow, so the admin panel and live inspect modal stay in sync."
+	description.TextWrapped = true
+	description.TextSize = 14
+	description.TextXAlignment = Enum.TextXAlignment.Left
+	description.TextYAlignment = Enum.TextYAlignment.Top
+	description.TextColor3 = Color3.fromRGB(184, 196, 227)
+	description.Parent = card
+	setGenerated(description)
+
+	local playerField = self:_createSandboxField(card, "Target Player")
+	local playerRow = Instance.new("Frame")
+	playerRow.Name = "ValueRow"
+	playerRow.BackgroundTransparency = 1
+	playerRow.Size = UDim2.new(1, 0, 0, 36)
+	playerRow.Parent = playerField
+	setGenerated(playerRow)
+
+	local playerPrevButton = self:_createSandboxButton(playerRow, "PrevButton", "<", UDim2.fromOffset(38, 36), function()
+		self:_cyclePlayerStatsTarget(-1)
+	end)
+
+	local playerValue = Instance.new("TextLabel")
+	playerValue.Name = "ValueLabel"
+	playerValue.BackgroundTransparency = 1
+	playerValue.Position = UDim2.fromOffset(48, 0)
+	playerValue.Size = UDim2.new(1, -96, 1, 0)
+	playerValue.Font = Enum.Font.GothamSemibold
+	playerValue.TextColor3 = Color3.fromRGB(244, 247, 255)
+	playerValue.TextSize = 16
+	playerValue.TextWrapped = true
+	playerValue.TextXAlignment = Enum.TextXAlignment.Center
+	playerValue.TextYAlignment = Enum.TextYAlignment.Center
+	playerValue.Parent = playerRow
+	setGenerated(playerValue)
+
+	local playerNextButton = self:_createSandboxButton(playerRow, "NextButton", ">", UDim2.fromOffset(38, 36), function()
+		self:_cyclePlayerStatsTarget(1)
+	end)
+	playerNextButton.Position = UDim2.new(1, -38, 0, 0)
+
+	local refreshButton = self:_createSandboxButton(card, "RefreshButton", "Load Selected Player Stats", UDim2.new(1, 0, 0, 40), function()
+		self:_loadSelectedPlayerStats(true)
+	end)
+
+	local overviewField = self:_createSandboxField(card, "Overview")
+	local overviewValue = self:_createSandboxValueLabel(overviewField)
+
+	local economyField = self:_createSandboxField(card, "Economy")
+	local economyValue = self:_createSandboxValueLabel(economyField)
+
+	local rollsField = self:_createSandboxField(card, "Rolls")
+	local rollsValue = self:_createSandboxValueLabel(rollsField)
+
+	local collectionField = self:_createSandboxField(card, "Collection")
+	local collectionValue = self:_createSandboxValueLabel(collectionField)
+
+	local monetizationField = self:_createSandboxField(card, "Monetization")
+	local monetizationValue = self:_createSandboxValueLabel(monetizationField)
+
+	local settingsField = self:_createSandboxField(card, "Settings")
+	local settingsValue = self:_createSandboxValueLabel(settingsField)
+
+	self._playerStatsUi = {
+		playerPrevButton = playerPrevButton,
+		playerNextButton = playerNextButton,
+		playerValue = playerValue,
+		refreshButton = refreshButton,
+		overviewValue = overviewValue,
+		economyValue = economyValue,
+		rollsValue = rollsValue,
+		collectionValue = collectionValue,
+		monetizationValue = monetizationValue,
+		settingsValue = settingsValue,
+	}
+
+	self:_syncPlayerStatsUi()
+end
+
 function AdminPanelController:_createActionCard(parent: Instance, tabId: string, action: any, template: GuiButton)
 	local card = template:Clone()
 	card.Name = string.format("%sCard", action.id)
@@ -1294,6 +1989,8 @@ function AdminPanelController:_buildPage(tabDefinition: any, page: ScrollingFram
 	end
 
 	if tabDefinition.id == BODY_PARTS_TAB_ID then
+		self:_createGrantInventorySection(page)
+		self:_createSpacer(page, 8)
 		self:_createRuntimeInspectorSection(page)
 		self:_createSpacer(page, 8)
 		self:_createVisualSandboxSection(page)
@@ -1302,11 +1999,18 @@ function AdminPanelController:_buildPage(tabDefinition: any, page: ScrollingFram
 		return
 	end
 
+	if tabDefinition.id == PLAYERS_TAB_ID then
+		self:_createPlayerStatsInspectorSection(page)
+		self:_createSpacer(page, 8)
+	end
+
 	for sectionIndex, section in ipairs(tabDefinition.sections) do
 		self:_createSectionHeader(page, section.title, section.description)
 
 		for _, action in ipairs(section.actions) do
-			self:_createActionCard(page, tabDefinition.id, action, actionTemplate)
+			if not (tabDefinition.id == PLAYERS_TAB_ID and action.id == "inspect_player_profile") then
+				self:_createActionCard(page, tabDefinition.id, action, actionTemplate)
+			end
 		end
 
 		if sectionIndex < #tabDefinition.sections then

@@ -32,33 +32,30 @@ end
 
 function RollMath.IsBonusRoll(successfulRollCount: number, interval: number): boolean
 	local safeInterval = math.max(1, math.floor(tonumber(interval) or 1))
-	local cycleLength = safeInterval + 1
 	local safeSuccessfulRollCount = math.max(0, math.floor(tonumber(successfulRollCount) or 0))
-	return safeSuccessfulRollCount % cycleLength == safeInterval
+	return safeSuccessfulRollCount % safeInterval == safeInterval - 1
 end
 
 function RollMath.GetBonusChargeProgress(successfulRollCount: number, interval: number): number
 	local safeInterval = math.max(1, math.floor(tonumber(interval) or 1))
-	local cycleLength = safeInterval + 1
 	local safeSuccessfulRollCount = math.max(0, math.floor(tonumber(successfulRollCount) or 0))
-	return safeSuccessfulRollCount % cycleLength
+	return safeSuccessfulRollCount % safeInterval
 end
 
 function RollMath.IsBonusReady(successfulRollCount: number, interval: number): boolean
 	local safeInterval = math.max(1, math.floor(tonumber(interval) or 1))
-	return RollMath.GetBonusChargeProgress(successfulRollCount, safeInterval) == safeInterval
+	return RollMath.GetBonusChargeProgress(successfulRollCount, safeInterval) == safeInterval - 1
 end
 
-function RollMath.GetEffectiveLuck(rawLuck: number, rarityEffectiveness: number): number
-	local safeRawLuck = math.max(0, tonumber(rawLuck) or 0)
-	local safeEffectiveness = math.clamp(tonumber(rarityEffectiveness) or 0, 0, 1)
-	return 1 + (safeRawLuck - 1) * safeEffectiveness
+function RollMath.GetAdjustedDenominator(displayedDenominator: number, totalLuckCoefficient: number): number
+	local safeDisplayedDenominator = math.max(1, tonumber(displayedDenominator) or 1)
+	local safeTotalLuckCoefficient = math.max(0.01, tonumber(totalLuckCoefficient) or 1)
+	return math.max(1, math.ceil(safeDisplayedDenominator / safeTotalLuckCoefficient))
 end
 
-function RollMath.GetAdjustedWeight(baseChance: number, effectiveLuck: number): number
-	local safeBaseChance = math.max(0, tonumber(baseChance) or 0)
-	local safeEffectiveLuck = math.max(0, tonumber(effectiveLuck) or 0)
-	return safeBaseChance * safeEffectiveLuck
+function RollMath.RollDenominator(randomSource: Random, denominator: number): boolean
+	local safeDenominator = math.max(1, math.floor(tonumber(denominator) or 1))
+	return randomSource:NextInteger(1, safeDenominator) == 1
 end
 
 function RollMath.NormalizeWeights<T>(weightedEntries: { T }, getWeight: (T) -> number): ({ T & { probability: number } }, number)
