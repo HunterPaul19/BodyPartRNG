@@ -21,7 +21,6 @@ Blur.Size = 0
 
 local Panels = {
 	["Main"] = Main:WaitForChild("Main"),
-	["Appraisal"] = Main:WaitForChild("AppraisalUI"),
 	["Dialogue"] = Main:WaitForChild("DialogueUI"),
 	["Leaderboard"] = Main:WaitForChild("Leaderboard"),
 	["Roll"] = Main:WaitForChild("Roll"),
@@ -225,16 +224,16 @@ for key in PanelInfo do
 end
 
 UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
-	if gameProcessedEvent then
-		return
-	end
-	if input.KeyCode == Enum.KeyCode.T then
-		GUIController:TogglePanel("Main")
-	elseif input.KeyCode == Enum.KeyCode.E then
-		GUIController:TogglePanel("Appraisal")
-	elseif input.KeyCode == Enum.KeyCode.G then
-		FrameController:ToggleFrame("Inventory")
-	end
+	-- if gameProcessedEvent then
+	-- 	return
+	-- end
+	-- if input.KeyCode == Enum.KeyCode.T then
+	-- 	GUIController:TogglePanel("Main")
+	-- elseif input.KeyCode == Enum.KeyCode.E then
+	-- 	GUIController:TogglePanel("Appraisal")
+	-- elseif input.KeyCode == Enum.KeyCode.G then
+	-- 	FrameController:ToggleFrame("Inventory")
+	-- end
 end)
 
 return GUIController

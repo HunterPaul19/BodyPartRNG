@@ -572,18 +572,25 @@ function DialogueController:_performAction(choice: DialogueChoice)
 		return true
 	end
 
-	if action.type == "openShopFrame" then
+	if action.type == "openFrame" or action.type == "openShopFrame" then
 		local context = self._context
 		local frameName = action.frameName
-			or (context and context.shopFrameName)
-			or DEFAULT_SHOP_FRAME_NAME
+			or (context and context.dialogueFrameName)
+			or (if action.type == "openShopFrame" then DEFAULT_SHOP_FRAME_NAME else nil)
+
+		if not frameName then
+			warn(string.format("[DialogueController] Choice '%s' is missing a frameName.", choice.id))
+			return false
+		end
 
 		self:_closeDialogue(function()
-			local shouldUseMerchantPresentation = context ~= nil and typeof(context.shopFrameName) == "string" and context.shopFrameName ~= ""
+			local shouldUseMerchantPresentation = context ~= nil
+				and typeof(context.dialogueFrameName) == "string"
+				and context.dialogueFrameName ~= ""
 			if shouldUseMerchantPresentation then
 				local opened = MerchantPresentationController:Open(frameName, {
-					cameraPart = if context and context.shopCameraPart and context.shopCameraPart:IsA("BasePart")
-						then context.shopCameraPart
+					cameraPart = if context and context.dialogueCameraPart and context.dialogueCameraPart:IsA("BasePart")
+						then context.dialogueCameraPart
 						else nil,
 					sourceInstance = if context and typeof(context.sourceInstance) == "Instance" then context.sourceInstance else nil,
 					interactionType = if context and typeof(context.interactionType) == "string" then context.interactionType else nil,

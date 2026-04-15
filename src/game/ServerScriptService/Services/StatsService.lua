@@ -295,7 +295,7 @@ function StatsService:RecordPurchasePrompt(player: Player, key: string)
 	end
 
 	mutateStats(player, nil, function(stats)
-		incrementCounter(stats.monetization.passPromptShownByKey, key, 1)
+		incrementCounter(stats.monetization.promptShownByKey, key, 1)
 	end)
 end
 
@@ -316,11 +316,43 @@ function StatsService:RecordPurchaseProcessed(player: Player, context: any)
 			stats.monetization.firstPurchaseKey = key
 		end
 
-		if context.kind == "pass" then
-			incrementCounter(stats.monetization.passPurchasedByKey, key, 1)
-		elseif context.kind == "product" then
-			incrementCounter(stats.monetization.productPurchasedByKey, key, 1)
+		incrementCounter(stats.monetization.purchaseGrantedByKey, key, 1)
+		if context.purchaseKind == "gift" then
+			incrementCounter(stats.monetization.giftPurchaseByKey, key, 1)
+		else
+			incrementCounter(stats.monetization.selfPurchaseByKey, key, 1)
 		end
+	end)
+end
+
+function StatsService:RecordGiftSent(player: Player, key: string)
+	if typeof(key) ~= "string" or key == "" then
+		return
+	end
+
+	mutateStats(player, nil, function(stats)
+		incrementCounter(stats.monetization.giftsSentByKey, key, 1)
+	end)
+end
+
+function StatsService:RecordGiftDelivered(player: Player, key: string)
+	if typeof(key) ~= "string" or key == "" then
+		return
+	end
+
+	mutateStats(player, nil, function(stats)
+		incrementCounter(stats.monetization.giftsDeliveredByKey, key, 1)
+		incrementCounter(stats.monetization.giftsReceivedByKey, key, 1)
+	end)
+end
+
+function StatsService:RecordDuplicateGiftBlocked(player: Player, key: string)
+	if typeof(key) ~= "string" or key == "" then
+		return
+	end
+
+	mutateStats(player, nil, function(stats)
+		incrementCounter(stats.monetization.duplicateGiftBlockedByKey, key, 1)
 	end)
 end
 

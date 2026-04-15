@@ -1,5 +1,5 @@
 export type DialogueAction = {
-	type: "gotoNode" | "closeDialogue" | "openShopFrame",
+	type: "gotoNode" | "closeDialogue" | "openShopFrame" | "openFrame",
 	nextNodeId: string?,
 	frameName: string?,
 }
@@ -69,6 +69,34 @@ local definitionsById: { [string]: DialogueDefinition } = {
 						id = "secret_back",
 						text = "Back",
 						nextNodeId = "intro",
+					},
+				},
+			},
+		},
+	},
+	appraiser_default = {
+		id = "appraiser_default",
+		rootNodeId = "intro",
+		nodesById = {
+			intro = {
+				id = "intro",
+				speakerName = "Appraiser",
+				text = "Bring me something worth judging and I'll take a proper look. Want to open the appraisal table?",
+				choices = {
+					{
+						id = "appraise",
+						text = "Open the appraisal table.",
+						action = {
+							type = "openFrame",
+							frameName = "AppraisalUI",
+						},
+					},
+					{
+						id = "leave",
+						text = "Maybe later.",
+						action = {
+							type = "closeDialogue",
+						},
 					},
 				},
 			},

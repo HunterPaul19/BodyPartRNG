@@ -15,6 +15,8 @@ GUIControls.CurrentRollResultEquipped = false
 GUIControls.EquipDebounce = false
 GUIControls.EquipStatusToken = 0
 GUIControls.RollingStateRefreshPending = false
+GUIControls.RollPreviewSessionId = 0
+GUIControls.ActiveRollPreviewSessionId = nil
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -26,6 +28,7 @@ local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local RollTargetRegions = require(ReplicatedStorage.Shared.Character.RollTargetRegions)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
+local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -236,7 +239,7 @@ local function isInsufficientFundsMessage(message)
 end
 
 local function clearViewport()
-	DisplayFrame.ViewportFrame:ClearAllChildren()
+	ViewportModelRenderer.ClearRollPreview(DisplayFrame.ViewportFrame)
 end
 
 local previewPiecesByRegion = {}
@@ -333,9 +336,22 @@ local function buildClientPreviewSequence(rollResult)
 	return previewSequence
 end
 
-local function renderRollInfo(rollInfo, shouldRenderModel)
-	clearViewport()
+local function resolveRollInfoModel(rollInfo)
+	if typeof(rollInfo) ~= "table" then
+		return nil
+	end
 
+	if typeof(rollInfo.Model) == "Instance" then
+		return rollInfo.Model
+	end
+	if typeof(rollInfo.PieceId) == "string" and rollInfo.PieceId ~= "" then
+		return BodyPartsCatalog.ResolveBundleModel(rollInfo.PieceId)
+	end
+
+	return nil
+end
+
+local function renderRollInfo(rollInfo, sessionId)
 	DisplayFrame.BundleName.Text = rollInfo.Name
 	DisplayFrame.Chance.Text = "1 in " .. formatWholeNumber(rollInfo.Chance)
 	if typeof(rollInfo.Color) == "Color3" then
@@ -345,30 +361,17 @@ local function renderRollInfo(rollInfo, shouldRenderModel)
 		DisplayFrame.BundleName.FontFace = rollInfo.Font
 	end
 
-	if shouldRenderModel ~= true then
-		return
-	end
-
-	local sourceModel = nil
-	if typeof(rollInfo.Model) == "Instance" then
-		sourceModel = rollInfo.Model
-	elseif typeof(rollInfo.PieceId) == "string" and rollInfo.PieceId ~= "" then
-		sourceModel = BodyPartsCatalog.ResolveBundleModel(rollInfo.PieceId)
-	end
-
-	if typeof(sourceModel) ~= "Instance" then
-		return
-	end
-
-	local model = sourceModel:Clone()
-	local size = model:GetExtentsSize()
-	model.Parent = DisplayFrame.ViewportFrame
-	model:PivotTo(CFrame.new(0, 0, -size.Z * 2.5) * CFrame.Angles(0, math.rad(180), 0))
+	ViewportModelRenderer.RenderRollPreview(
+		DisplayFrame.ViewportFrame,
+		resolveRollInfoModel(rollInfo),
+		sessionId
+	)
 end
 
 local function restoreIdleRollUi()
 	HideBlackTween:Play()
 	UnblurTween:Play()
+	clearViewport()
 	Main.Visible = false
 	Main.SkipButton.Visible = false
 	Main.SubInfo.Visible = false
@@ -376,6 +379,14 @@ local function restoreIdleRollUi()
 	MainButtons.RollButton.Visible = true
 	MainButtons.QuickRoll.Visible = true
 	MainButtons.AutoRoll.Visible = true
+	GUIControls.ActiveRollPreviewSessionId = nil
+end
+
+function GUIControls:BeginRollPreviewSession(): number
+	GUIControls.RollPreviewSessionId += 1
+	GUIControls.ActiveRollPreviewSessionId = GUIControls.RollPreviewSessionId
+
+	return GUIControls.ActiveRollPreviewSessionId
 end
 
 function GUIControls:GetQuickRollEnabled()
@@ -918,7 +929,7 @@ function GUIControls:RollSequence(previewSequence)
 			{ Position = OffsetPosition }
 		)
 		DisplayFrame.Position = BasePosition
-		renderRollInfo(rollInfo, index == rolls)
+		renderRollInfo(rollInfo, GUIControls.ActiveRollPreviewSessionId)
 		tween:Play()
 		tween.Completed:Wait()
 		if index == rolls then
@@ -974,7 +985,7 @@ function GUIControls:ShowRollResults(rollInfo)
 		mutationLabel.Visible = true
 	end
 
-	renderRollInfo(rollInfo, true)
+	renderRollInfo(rollInfo, GUIControls.ActiveRollPreviewSessionId)
 	GUIControls:RefreshEquipButton()
 
 	if GUIControls.AutoRoll then
@@ -1017,6 +1028,8 @@ function GUIControls:Roll()
 		GUIControls.CurrentRollResultEquipped = false
 		GUIControls.EquipDebounce = false
 		GUIControls.EquipStatusToken += 1
+		clearViewport()
+		GUIControls.ActiveRollPreviewSessionId = nil
 		GUIControls:SetDropdownOpen(false)
 		local rollResponse = invokeRemote(PerformRollRemote)
 		if not rollResponse then
@@ -1067,6 +1080,7 @@ function GUIControls:Roll()
 		GUIControls.CurrentRollResultEquipped = false
 		GUIControls.EquipDebounce = false
 
+		GUIControls:BeginRollPreviewSession()
 		local previewSequence = rollResult.previewSequence
 		if typeof(previewSequence) ~= "table" or #previewSequence == 0 then
 			previewSequence = buildClientPreviewSequence(rollResult) or { rollResult.finalResult }

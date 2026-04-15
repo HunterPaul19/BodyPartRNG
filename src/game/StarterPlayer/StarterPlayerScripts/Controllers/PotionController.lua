@@ -59,16 +59,76 @@ local function cloneOwnedPotions(source: any): { [string]: any }
 		if typeof(record) == "table" then
 			local normalizedId = PotionConfig.NormalizeId(record.potionId or potionId)
 			if normalizedId ~= nil then
-				ownedPotions[normalizedId] = {
-					potionId = normalizedId,
-					amount = math.max(0, math.floor(tonumber(record.amount) or 0)),
-					isFavorite = record.isFavorite == true,
-				}
+				local existingRecord = ownedPotions[normalizedId]
+				local amount = math.max(0, math.floor(tonumber(record.amount) or 0))
+				if existingRecord then
+					existingRecord.amount += amount
+					existingRecord.isFavorite = existingRecord.isFavorite or (record.isFavorite == true)
+				else
+					ownedPotions[normalizedId] = {
+						potionId = normalizedId,
+						amount = amount,
+						isFavorite = record.isFavorite == true,
+					}
+				end
 			end
 		end
 	end
 
 	return ownedPotions
+end
+
+local function choosePreferredActiveEntry(currentEntry: ActivePotionEntry?, nextEntry: ActivePotionEntry): ActivePotionEntry
+	if not currentEntry then
+		return nextEntry
+	end
+
+	if nextEntry.expiresAt ~= currentEntry.expiresAt then
+		return if nextEntry.expiresAt > currentEntry.expiresAt then nextEntry else currentEntry
+	end
+
+	local currentConfig = PotionConfig.Get(currentEntry.potionId)
+	local nextConfig = PotionConfig.Get(nextEntry.potionId)
+	if (tonumber(nextConfig and nextConfig.tier) or 0) > (tonumber(currentConfig and currentConfig.tier) or 0) then
+		return nextEntry
+	end
+
+	return currentEntry
+end
+
+local function normalizeActivePotionsByFamily(activePotions: { [string]: ActivePotionEntry }): { [string]: ActivePotionEntry }
+	local normalized = {}
+	local selectedPotionIdByFamilyId = {}
+
+	for potionId, entry in pairs(activePotions) do
+		if typeof(entry) ~= "table" then
+			continue
+		end
+
+		local config = PotionConfig.Get(entry.potionId or potionId)
+		local expiresAt = tonumber(entry.expiresAt)
+		if not config or not expiresAt or expiresAt <= Workspace:GetServerTimeNow() then
+			continue
+		end
+
+		local nextEntry = {
+			potionId = config.id,
+			expiresAt = expiresAt,
+		}
+
+		local selectedPotionId = selectedPotionIdByFamilyId[config.familyId]
+		local currentEntry = if selectedPotionId then normalized[selectedPotionId] else nil
+		local preferredEntry = choosePreferredActiveEntry(currentEntry, nextEntry)
+		if preferredEntry == nextEntry then
+			if selectedPotionId ~= nil then
+				normalized[selectedPotionId] = nil
+			end
+			selectedPotionIdByFamilyId[config.familyId] = nextEntry.potionId
+			normalized[nextEntry.potionId] = nextEntry
+		end
+	end
+
+	return normalized
 end
 
 local function cloneActivePotionsFromPayload(source: any): { [string]: ActivePotionEntry }
@@ -90,7 +150,7 @@ local function cloneActivePotionsFromPayload(source: any): { [string]: ActivePot
 		end
 	end
 
-	return activePotions
+	return normalizeActivePotionsByFamily(activePotions)
 end
 
 local function cloneActivePotionsFromRemaining(source: any): { [string]: ActivePotionEntry }
@@ -111,7 +171,7 @@ local function cloneActivePotionsFromRemaining(source: any): { [string]: ActiveP
 		end
 	end
 
-	return activePotions
+	return normalizeActivePotionsByFamily(activePotions)
 end
 
 function PotionController:_ensureState()
@@ -223,10 +283,10 @@ function PotionController:_cacheUi()
 	self._ui.root = hud
 	self._ui.slots = {}
 
-	for _, config in ipairs(PotionConfig.GetAll()) do
-		local slot = hud:FindFirstChild(config.id)
+	for _, familyId in ipairs(PotionConfig.GetFamilyIds()) do
+		local slot = hud:FindFirstChild(familyId)
 		if slot and slot:IsA("GuiObject") then
-			self._ui.slots[config.id] = {
+			self._ui.slots[familyId] = {
 				root = slot,
 				timer = slot:FindFirstChild("Timer"),
 				nameLabel = slot:FindFirstChild("Label"),
@@ -235,81 +295,33 @@ function PotionController:_cacheUi()
 			}
 		end
 	end
-
-	self:_renderHudAssets()
-end
-
-function PotionController:_renderHudAssets()
-	for _, config in ipairs(PotionConfig.GetAll()) do
-		local slot = self._ui.slots[config.id]
-		if not slot then
-			continue
-		end
-
-		if slot.nameLabel and slot.nameLabel:IsA("TextLabel") then
-			slot.nameLabel.Text = config.label
-		end
-
-		local preview = PotionPresentation.BuildPreviewPresentation({
-			potionId = config.id,
-		})
-		local bundleModel = preview and preview.bundleModel or nil
-		local renderKey = config.id
-
-		if slot.viewport and slot.viewport:IsA("ViewportFrame") and self._hudRenderKeys[config.id] ~= renderKey then
-			ViewportModelRenderer.RenderBundle(slot.viewport, bundleModel)
-			self._hudRenderKeys[config.id] = renderKey
-		end
-	end
 end
 
 function PotionController:_emitStateUpdated()
 	self.StateUpdated:Fire(self._state)
 end
 
-function PotionController:_refreshHud()
-	self:_cacheUi()
-
-	local root = self._ui.root
-	if not root then
-		return
-	end
-
-	local anyVisible = false
-
-	for _, config in ipairs(PotionConfig.GetAll()) do
-		local slot = self._ui.slots[config.id]
-		if not slot then
-			continue
-		end
-
-		local remainingSeconds = self:GetRemainingSeconds(config.id)
-		local isActive = remainingSeconds > 0
-		slot.root.Visible = isActive
-		anyVisible = anyVisible or isActive
-
-		if slot.timer and slot.timer:IsA("TextLabel") then
-			slot.timer.Text = if isActive
-				then PotionPresentation.FormatDuration(remainingSeconds)
-				else "00:00"
-		end
-	end
-
-	root.Visible = anyVisible
-end
-
 function PotionController:_pruneExpiredActives(): boolean
-	local activePotions = self._state.activePotions
-	local now = Workspace:GetServerTimeNow()
+	local normalizedActives = normalizeActivePotionsByFamily(self._state.activePotions)
 	local didChange = false
 
-	for potionId, entry in pairs(activePotions) do
-		if typeof(entry) ~= "table" or (tonumber(entry.expiresAt) or 0) <= now then
-			activePotions[potionId] = nil
+	for potionId in pairs(self._state.activePotions) do
+		if normalizedActives[potionId] == nil then
 			didChange = true
+			break
 		end
 	end
 
+	if not didChange then
+		for potionId in pairs(normalizedActives) do
+			if self._state.activePotions[potionId] == nil then
+				didChange = true
+				break
+			end
+		end
+	end
+
+	self._state.activePotions = normalizedActives
 	return didChange
 end
 
@@ -365,6 +377,90 @@ function PotionController:_invokeRemote(remote: RemoteFunction, payload: any?): 
 	end
 
 	return result
+end
+
+function PotionController:_getActiveEntryByFamilyId(familyId: string): ActivePotionEntry?
+	local normalizedFamilyId = PotionConfig.NormalizeFamilyId(familyId)
+	if normalizedFamilyId == nil then
+		return nil
+	end
+
+	local selectedEntry = nil :: ActivePotionEntry?
+	local selectedConfig = nil
+	for potionId, entry in pairs(self:GetActivePotions()) do
+		local config = PotionConfig.Get(potionId)
+		local expiresAt = tonumber(entry and entry.expiresAt)
+		if config and config.familyId == normalizedFamilyId and expiresAt and expiresAt > Workspace:GetServerTimeNow() then
+			if selectedEntry == nil then
+				selectedEntry = entry
+				selectedConfig = config
+			elseif expiresAt > selectedEntry.expiresAt then
+				selectedEntry = entry
+				selectedConfig = config
+			elseif expiresAt == selectedEntry.expiresAt and (tonumber(config.tier) or 0) > (tonumber(selectedConfig and selectedConfig.tier) or 0) then
+				selectedEntry = entry
+				selectedConfig = config
+			end
+		end
+	end
+
+	return selectedEntry
+end
+
+function PotionController:_refreshHud()
+	self:_cacheUi()
+
+	local root = self._ui.root
+	if not root then
+		return
+	end
+
+	local anyVisible = false
+
+	for _, familyId in ipairs(PotionConfig.GetFamilyIds()) do
+		local slot = self._ui.slots[familyId]
+		if not slot then
+			continue
+		end
+
+		local activeEntry = self:_getActiveEntryByFamilyId(familyId)
+		local activeConfig = PotionConfig.Get(activeEntry and activeEntry.potionId or nil)
+		local isActive = activeEntry ~= nil and activeConfig ~= nil
+		local remainingSeconds = if activeEntry then math.max(0, math.ceil(activeEntry.expiresAt - Workspace:GetServerTimeNow())) else 0
+
+		slot.root.Visible = isActive
+		anyVisible = anyVisible or isActive
+
+		if slot.nameLabel and slot.nameLabel:IsA("TextLabel") then
+			slot.nameLabel.Text = if activeConfig then activeConfig.label else tostring(PotionConfig.GetFamilyLabel(familyId) or "Potion")
+		end
+
+		if slot.timer and slot.timer:IsA("TextLabel") then
+			slot.timer.Text = if isActive
+				then PotionPresentation.FormatDuration(remainingSeconds)
+				else "00:00"
+		end
+
+		if slot.viewport and slot.viewport:IsA("ViewportFrame") then
+			local renderKey = if activeConfig then activeConfig.id else "none"
+			if self._hudRenderKeys[familyId] ~= renderKey then
+				if activeConfig then
+					local preview = PotionPresentation.BuildPreviewPresentation({
+						potionId = activeConfig.id,
+					})
+					local bundleModel = preview and preview.bundleModel or nil
+					ViewportModelRenderer.RenderPotion(slot.viewport, bundleModel)
+					slot.viewport.Visible = true
+				else
+					ViewportModelRenderer.Clear(slot.viewport)
+					slot.viewport.Visible = false
+				end
+				self._hudRenderKeys[familyId] = renderKey
+			end
+		end
+	end
+
+	root.Visible = anyVisible
 end
 
 function PotionController:RequestState()
@@ -449,8 +545,10 @@ function PotionController:GetRuntimeBonuses()
 		rollSpeedBonus = 0,
 	}
 
-	for _, config in ipairs(PotionConfig.GetAll()) do
-		if self:IsActive(config.id) then
+	for _, familyId in ipairs(PotionConfig.GetFamilyIds()) do
+		local activeEntry = self:_getActiveEntryByFamilyId(familyId)
+		local config = PotionConfig.Get(activeEntry and activeEntry.potionId or nil)
+		if config then
 			if tonumber(config.passiveIncomeMultiplier) and config.passiveIncomeMultiplier > 1 then
 				bonuses.passiveIncomeMultiplier *= config.passiveIncomeMultiplier
 			end

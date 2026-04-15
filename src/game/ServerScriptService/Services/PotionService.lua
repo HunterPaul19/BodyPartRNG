@@ -141,63 +141,118 @@ local function getRuntimeState(player: Player): { [string]: number }
 	return activeByPotionId
 end
 
-local function buildActivePotionPayload(player: Player): { [string]: ActivePotionEntry }
-	local payload = {}
-	local now = getServerTimeNow()
-	local activeByPotionId = runtimeActiveByPlayer[player]
+local function buildResolvedActiveByFamily(activeByPotionId: { [string]: number }?, now: number): { [string]: { potionId: string, expiresAt: number } }
+	local resolved = {}
 	if typeof(activeByPotionId) ~= "table" then
-		return payload
+		return resolved
 	end
 
 	for potionId, expiresAt in pairs(activeByPotionId) do
-		local remainingSeconds = expiresAt - now
-		if remainingSeconds > 0 then
-			payload[potionId] = {
-				potionId = potionId,
-				expiresAt = expiresAt,
-			}
+		local resolvedExpiresAt = tonumber(expiresAt)
+		local config = PotionConfig.Get(potionId)
+		if resolvedExpiresAt and config and resolvedExpiresAt > now then
+			local current = resolved[config.familyId]
+			local currentConfig = if current then PotionConfig.Get(current.potionId) else nil
+			local shouldReplace = current == nil
+				or resolvedExpiresAt > current.expiresAt
+				or (
+					resolvedExpiresAt == current.expiresAt
+					and (tonumber(config.tier) or 0) > (tonumber(currentConfig and currentConfig.tier) or 0)
+				)
+
+			if shouldReplace then
+				resolved[config.familyId] = {
+					potionId = config.id,
+					expiresAt = resolvedExpiresAt,
+				}
+			end
 		end
 	end
 
+	return resolved
+end
+
+local function buildNormalizedActiveByPotionId(activeByPotionId: { [string]: number }?, now: number): { [string]: number }
+	local normalized = {}
+	for _, entry in pairs(buildResolvedActiveByFamily(activeByPotionId, now)) do
+		normalized[entry.potionId] = entry.expiresAt
+	end
+	return normalized
+end
+
+local function areActiveMapsEqual(left: { [string]: number }?, right: { [string]: number }?): boolean
+	local leftMap = if typeof(left) == "table" then left else {}
+	local rightMap = if typeof(right) == "table" then right else {}
+
+	for potionId, expiresAt in pairs(leftMap) do
+		if rightMap[potionId] ~= expiresAt then
+			return false
+		end
+	end
+
+	for potionId, expiresAt in pairs(rightMap) do
+		if leftMap[potionId] ~= expiresAt then
+			return false
+		end
+	end
+
+	return true
+end
+
+local function setRuntimeState(player: Player, activeByPotionId: { [string]: number })
+	if next(activeByPotionId) == nil then
+		runtimeActiveByPlayer[player] = nil
+	else
+		runtimeActiveByPlayer[player] = activeByPotionId
+	end
+end
+
+local function buildActivePotionPayload(player: Player): { [string]: ActivePotionEntry }
+	local payload = {}
+	local now = getServerTimeNow()
+	for potionId, expiresAt in pairs(buildNormalizedActiveByPotionId(runtimeActiveByPlayer[player], now)) do
+		payload[potionId] = {
+			potionId = potionId,
+			expiresAt = expiresAt,
+		}
+	end
 	return payload
 end
 
 local function persistRuntimeRemaining(player: Player)
 	local now = getServerTimeNow()
 	local updates = {}
-	local activeByPotionId = runtimeActiveByPlayer[player]
-	if typeof(activeByPotionId) == "table" then
-		for potionId, expiresAt in pairs(activeByPotionId) do
-			local remainingSeconds = math.max(0, math.ceil(expiresAt - now))
-			if remainingSeconds > 0 then
-				updates[potionId] = remainingSeconds
-			end
+	for potionId, expiresAt in pairs(buildNormalizedActiveByPotionId(runtimeActiveByPlayer[player], now)) do
+		local remainingSeconds = math.max(0, math.ceil(expiresAt - now))
+		if remainingSeconds > 0 then
+			updates[potionId] = remainingSeconds
 		end
 	end
 	DataService:SetPotionActiveRemainingMap(player, updates)
 end
 
-local function clearExpiredPotionsForPlayer(player: Player): boolean
+local function normalizeRuntimeStateForPlayer(player: Player): boolean
 	local activeByPotionId = runtimeActiveByPlayer[player]
 	if typeof(activeByPotionId) ~= "table" then
 		return false
 	end
 
-	local now = getServerTimeNow()
-	local didChange = false
-	for potionId, expiresAt in pairs(activeByPotionId) do
-		if expiresAt <= now then
-			activeByPotionId[potionId] = nil
-			DataService:SetPotionActiveRemaining(player, potionId, nil)
-			didChange = true
+	local normalized = buildNormalizedActiveByPotionId(activeByPotionId, getServerTimeNow())
+	if areActiveMapsEqual(activeByPotionId, normalized) then
+		if next(normalized) == nil then
+			runtimeActiveByPlayer[player] = nil
+			return true
 		end
+		return false
 	end
 
-	if next(activeByPotionId) == nil then
-		runtimeActiveByPlayer[player] = nil
-	end
+	setRuntimeState(player, normalized)
+	persistRuntimeRemaining(player)
+	return true
+end
 
-	return didChange
+local function clearExpiredPotionsForPlayer(player: Player): boolean
+	return normalizeRuntimeStateForPlayer(player)
 end
 
 function PotionService:GetRuntimeBonuses(player: Player)
@@ -207,22 +262,15 @@ function PotionService:GetRuntimeBonuses(player: Player)
 		rollSpeedBonus = 0,
 	}
 
-	local activeByPotionId = runtimeActiveByPlayer[player]
-	if typeof(activeByPotionId) ~= "table" then
-		return bonuses
-	end
-
 	local now = getServerTimeNow()
-	for potionId, expiresAt in pairs(activeByPotionId) do
-		if expiresAt > now then
-			local config = PotionConfig.Get(potionId)
-			if config then
-				if tonumber(config.passiveIncomeMultiplier) and config.passiveIncomeMultiplier > 1 then
-					bonuses.passiveIncomeMultiplier *= config.passiveIncomeMultiplier
-				end
-				bonuses.luckBonus += tonumber(config.luckBonus) or 0
-				bonuses.rollSpeedBonus += tonumber(config.rollSpeedBonus) or 0
+	for _, entry in pairs(buildResolvedActiveByFamily(runtimeActiveByPlayer[player], now)) do
+		local config = PotionConfig.Get(entry.potionId)
+		if config then
+			if tonumber(config.passiveIncomeMultiplier) and config.passiveIncomeMultiplier > 1 then
+				bonuses.passiveIncomeMultiplier *= config.passiveIncomeMultiplier
 			end
+			bonuses.luckBonus += tonumber(config.luckBonus) or 0
+			bonuses.rollSpeedBonus += tonumber(config.rollSpeedBonus) or 0
 		end
 	end
 
@@ -275,15 +323,21 @@ function PotionService:UsePotion(player: Player, potionId: string): (boolean, st
 	end
 
 	local now = getServerTimeNow()
-	local activeByPotionId = getRuntimeState(player)
-	local nextExpiresAt = math.max(now, tonumber(activeByPotionId[config.id]) or 0) + config.durationSeconds
+	local activeByPotionId = table.clone(getRuntimeState(player))
+	for activePotionId in pairs(activeByPotionId) do
+		local activeConfig = PotionConfig.Get(activePotionId)
+		if activeConfig and activeConfig.familyId == config.familyId then
+			activeByPotionId[activePotionId] = nil
+		end
+	end
+
+	local nextExpiresAt = now + config.durationSeconds
 	activeByPotionId[config.id] = nextExpiresAt
-	DataService:SetPotionActiveRemaining(player, config.id, math.ceil(nextExpiresAt - now))
+	setRuntimeState(player, activeByPotionId)
+	persistRuntimeRemaining(player)
 
 	local remainingOwnedAmount = tonumber(updatedRecord and updatedRecord.amount) or 0
-	local message = if nextExpiresAt - now > config.durationSeconds
-		then string.format('Extended %s. %d use(s) left.', config.label, remainingOwnedAmount)
-		else string.format('Used %s. %d use(s) left.', config.label, remainingOwnedAmount)
+	local message = string.format('Used %s. %d use(s) left.', config.label, remainingOwnedAmount)
 	self:NotifyClient(player, message)
 	return true, message
 end
@@ -420,9 +474,7 @@ function PotionService:OnStart()
 				activeByPotionId[potionId] = now + resolvedRemainingSeconds
 			end
 		end
-		if next(activeByPotionId) ~= nil then
-			runtimeActiveByPlayer[player] = activeByPotionId
-		end
+		setRuntimeState(player, buildNormalizedActiveByPotionId(activeByPotionId, now))
 		PotionService:NotifyClient(player)
 	end)
 

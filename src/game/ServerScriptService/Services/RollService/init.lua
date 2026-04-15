@@ -56,7 +56,7 @@ local function formatMoney(value: any): string
 end
 
 local function getQuickRollPassConfig()
-	return PurchaseReceiptService.RobuxPurchases.Passes.quick_roll
+	return PurchaseReceiptService:GetOffer("quick_roll")
 end
 
 local function response(ok: boolean, message: string, state: any?, rollResult: any?)
@@ -201,15 +201,15 @@ local function buildQuickRollState(player: Player)
 	local owned = false
 	local enabled = false
 
-	if passConfig and passConfig.id then
-		owned = PurchaseReceiptService:HasPass(player, passConfig.key or passConfig.id)
+	if passConfig and passConfig.offerKey then
+		owned = PurchaseReceiptService:HasEntitlement(player, passConfig.offerKey)
 		enabled = owned and DataService:GetQuickRollEnabled(player)
 	end
 
 	return {
 		owned = owned,
 		enabled = enabled,
-		passId = passConfig and passConfig.id or nil,
+		passId = passConfig and passConfig.selfPurchase and passConfig.selfPurchase.robloxId or nil,
 	}
 end
 
@@ -734,11 +734,11 @@ end
 
 function RollService:PromptQuickRollPurchase(player: Player): (boolean, string)
 	local passConfig = getQuickRollPassConfig()
-	if not passConfig or not passConfig.id then
+	if not passConfig or not passConfig.offerKey then
 		return false, "Quick Roll is not configured."
 	end
 
-	local ok, message = PurchaseReceiptService:PromptPassPurchase(player, passConfig.key or "quick_roll")
+	local ok, message = PurchaseReceiptService:PromptOfferPurchase(player, passConfig.offerKey)
 	if not ok then
 		return false, message or "Failed to open the Quick Roll purchase prompt."
 	end

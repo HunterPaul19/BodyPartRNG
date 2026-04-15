@@ -21,6 +21,7 @@ local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelR
 local DataController = require(script.Parent.DataController)
 local FrameController = require(script.Parent.FrameController)
 local PotionController = require(script.Parent.PotionController)
+local SlotCardRenderer = require(script.Parent.SlotCardRenderer)
 local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
@@ -384,9 +385,8 @@ function InventoryController:_ensureState()
 	self._searchText = ""
 	self._rowFramesByOwnedId = {}
 	self._rowButtonsByOwnedId = {}
-	self._slotCardFramesByRegion = {}
+	self._slotCardRenderer = nil
 	self._slotCardButtonsByRegion = {}
-	self._auraSlotCardFrame = nil :: Frame?
 	self._auraSlotCardButton = nil :: ImageButton?
 	self._inventoryRecordsCache = {}
 	self._inventoryRecordsDirty = true
@@ -997,12 +997,8 @@ function InventoryController:_populateRowButtonForRecord(recordView: InventoryRe
 	self:_populateCardButtonForRecord(base, recordView, isSelected)
 end
 
-function InventoryController:_populateCardButtonForRecord(base: ImageButton?, recordView: InventoryRecordView, isSelected: boolean?)
-	if not base then
-		return
-	end
-
-	BodyPartPresentation.PopulateBundleCard(base, {
+function InventoryController:_buildCardPayloadForRecord(recordView: InventoryRecordView): any
+	return {
 		nameText = recordView.nameText,
 		usageText = recordView.usageText,
 		bundleModel = recordView.bundleModel,
@@ -1014,8 +1010,17 @@ function InventoryController:_populateCardButtonForRecord(base: ImageButton?, re
 		sizeTagStyle = recordView.sizeTagStyle,
 		iconTexture = recordView.iconTexture,
 		preferIconOverViewport = recordView.preferIconOverViewport,
-		isSelected = isSelected == true,
-	})
+	}
+end
+
+function InventoryController:_populateCardButtonForRecord(base: ImageButton?, recordView: InventoryRecordView, isSelected: boolean?)
+	if not base then
+		return
+	end
+
+	local payload = self:_buildCardPayloadForRecord(recordView)
+	payload.isSelected = isSelected == true
+	BodyPartPresentation.PopulateBundleCard(base, payload)
 end
 
 local function resolveMutationCoverTexture(record: OwnedBodyPartRecord): string?
@@ -1417,42 +1422,6 @@ function InventoryController:_destroyRow(ownedId: string)
 	self._rowButtonsByOwnedId[ownedId] = nil
 end
 
-function InventoryController:_createMountedCardFrame(name: string, callback: () -> ()): (Frame?, ImageButton?)
-	local cardFrame = self._listTemplate:Clone()
-	cardFrame.Name = name
-	cardFrame.Visible = true
-
-	local base = cardFrame:FindFirstChild("Base")
-	if base and base:IsA("ImageButton") then
-		UIController:CreateButton(base, callback)
-		return cardFrame, base
-	end
-
-	return cardFrame, nil
-end
-
-function InventoryController:_hideMountedCardFrame(cardFrame: Frame?)
-	if not cardFrame then
-		return
-	end
-
-	cardFrame.Visible = false
-	cardFrame.Parent = nil
-end
-
-function InventoryController:_mountMountedCardFrame(cardFrame: Frame?, parent: Instance?)
-	if not (cardFrame and parent and parent:IsA("GuiObject")) then
-		return
-	end
-
-	cardFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-	cardFrame.Position = UDim2.fromScale(0.5, 0.5)
-	cardFrame.Size = UDim2.fromScale(1.2, 1.2)
-	cardFrame.LayoutOrder = 0
-	cardFrame.Visible = true
-	cardFrame.Parent = parent
-end
-
 function InventoryController:_cancelPendingListRowSequence()
 	self._listRowAnimationGeneration += 1
 
@@ -1555,50 +1524,32 @@ function InventoryController:_consumePendingFilterRowAnimation(): boolean
 	return true
 end
 
-function InventoryController:_ensureSlotCard(region: string): Frame?
-	local slotFrame = self._ui.slotFrames[region]
-	if not slotFrame then
+function InventoryController:_renderMountedSlotCard(
+	slotKey: string,
+	slotHost: GuiObject?,
+	callback: () -> (),
+	recordView: InventoryRecordView,
+	isSelected: boolean?
+): ImageButton?
+	if not (slotHost and self._slotCardRenderer) then
 		return nil
 	end
 
-	local cardFrame = self._slotCardFramesByRegion[region]
-	if not cardFrame then
-		local cardButton
-		cardFrame, cardButton = self:_createMountedCardFrame(string.format("Equipped_%s", region), function()
-			self:_setPreviewForRegion(region)
-		end)
-		self._slotCardFramesByRegion[region] = cardFrame
-		self._slotCardButtonsByRegion[region] = cardButton
-	end
-
-	self:_mountMountedCardFrame(cardFrame, slotFrame)
-	return cardFrame
+	return self._slotCardRenderer:Render(
+		slotKey,
+		slotHost,
+		callback,
+		self:_buildCardPayloadForRecord(recordView),
+		isSelected == true
+	)
 end
 
-function InventoryController:_hideSlotCard(region: string)
-	self:_hideMountedCardFrame(self._slotCardFramesByRegion[region])
-end
-
-function InventoryController:_ensureAuraSlotCard(): Frame?
-	local slotFrame = self._ui.auraSlotFrame
-	if not slotFrame then
-		return nil
+function InventoryController:_hideMountedSlotCard(slotKey: string)
+	if not self._slotCardRenderer then
+		return
 	end
 
-	if not self._auraSlotCardFrame then
-		local cardButton
-		self._auraSlotCardFrame, cardButton = self:_createMountedCardFrame("Equipped_Aura", function()
-			self:_setPreviewForAura()
-		end)
-		self._auraSlotCardButton = cardButton
-	end
-
-	self:_mountMountedCardFrame(self._auraSlotCardFrame, slotFrame)
-	return self._auraSlotCardFrame
-end
-
-function InventoryController:_hideAuraSlotCard()
-	self:_hideMountedCardFrame(self._auraSlotCardFrame)
+	self._slotCardRenderer:Hide(slotKey)
 end
 
 function InventoryController:_hideRow(ownedId: string)
@@ -1938,10 +1889,17 @@ function InventoryController:_syncSlotButtons()
 		if entry ~= nil then
 			local recordView = self._recordViewsByOwnedId[entry.ownedId]
 			if recordView then
-				self:_ensureSlotCard(region)
-				local slotCardButton = self._slotCardButtonsByRegion[region]
 				local isSelected = isPreviewRegion or isSelectedOwnedRegion
-				self:_populateCardButtonForRecord(slotCardButton, recordView, isSelected)
+				local slotCardButton = self:_renderMountedSlotCard(
+					string.format("inventory_bodyPart_%s", region),
+					self._ui.slotFrames[region],
+					function()
+						self:_setPreviewForRegion(region)
+					end,
+					recordView,
+					isSelected
+				)
+				self._slotCardButtonsByRegion[region] = slotCardButton
 				if slotCardButton then
 					self:_setOutlineColor(
 						slotCardButton,
@@ -1950,10 +1908,12 @@ function InventoryController:_syncSlotButtons()
 					)
 				end
 			else
-				self:_hideSlotCard(region)
+				self._slotCardButtonsByRegion[region] = nil
+				self:_hideMountedSlotCard(string.format("inventory_bodyPart_%s", region))
 			end
 		else
-			self:_hideSlotCard(region)
+			self._slotCardButtonsByRegion[region] = nil
+			self:_hideMountedSlotCard(string.format("inventory_bodyPart_%s", region))
 		end
 
 		if isPreviewRegion or isSelectedOwnedRegion then
@@ -1982,9 +1942,16 @@ function InventoryController:_syncSlotButtons()
 		if equippedAuraOwnedId ~= nil then
 			local recordView = self._recordViewsByOwnedId[equippedAuraOwnedId]
 			if recordView then
-				self:_ensureAuraSlotCard()
 				local isSelected = isPreviewAura
-				self:_populateCardButtonForRecord(self._auraSlotCardButton, recordView, isSelected)
+				self._auraSlotCardButton = self:_renderMountedSlotCard(
+					"inventory_aura",
+					self._ui.auraSlotFrame,
+					function()
+						self:_setPreviewForAura()
+					end,
+					recordView,
+					isSelected
+				)
 				if self._auraSlotCardButton then
 					self:_setOutlineColor(
 						self._auraSlotCardButton,
@@ -1993,10 +1960,12 @@ function InventoryController:_syncSlotButtons()
 					)
 				end
 			else
-				self:_hideAuraSlotCard()
+				self._auraSlotCardButton = nil
+				self:_hideMountedSlotCard("inventory_aura")
 			end
 		else
-			self:_hideAuraSlotCard()
+			self._auraSlotCardButton = nil
+			self:_hideMountedSlotCard("inventory_aura")
 		end
 
 		if isPreviewAura then
@@ -2091,7 +2060,11 @@ function InventoryController:_syncPreview()
 		previewIcon.Image = ""
 		previewViewport.Visible = true
 		if self._previewRenderKey ~= renderKey then
-			ViewportModelRenderer.RenderBundle(previewViewport, previewModel.bundleModel)
+			if previewModel.itemType == "potion" then
+				ViewportModelRenderer.RenderPotion(previewViewport, previewModel.bundleModel)
+			else
+				ViewportModelRenderer.RenderBundle(previewViewport, previewModel.bundleModel)
+			end
 		end
 	end
 
@@ -3226,6 +3199,7 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 	self._inventoryRoot = inventoryRoot
 	self._scrollingFrame = scrollingFrame
 	self._listTemplate = template
+	self._slotCardRenderer = SlotCardRenderer.new(playerGui)
 
 	local filterButtons = {}
 	local auraButtons = {}

@@ -15,6 +15,15 @@ local function formatMoney(value: number?): string
 	return "$" .. formatWholeNumber(value)
 end
 
+local function formatDecimal(value: number?, minimumDecimals: number?): string
+	local resolvedValue = tonumber(value) or 0
+	local decimals = math.max(0, math.floor(tonumber(minimumDecimals) or 0))
+	local formatted = string.format("%." .. tostring(math.max(decimals, 2)) .. "f", resolvedValue)
+	formatted = string.gsub(formatted, "0+$", "")
+	formatted = string.gsub(formatted, "%.$", "")
+	return formatted
+end
+
 local function formatDuration(seconds: number?): string
 	local totalSeconds = math.max(0, math.floor(tonumber(seconds) or 0))
 	local minutes = math.floor(totalSeconds / 60)
@@ -73,13 +82,13 @@ end
 
 local function buildEffectText(config: PotionConfig.PotionConfigEntry): string
 	if tonumber(config.passiveIncomeMultiplier) and config.passiveIncomeMultiplier > 1 then
-		return string.format("Effect: x%s Passive Income", formatWholeNumber(config.passiveIncomeMultiplier))
+		return string.format("Effect: x%s Passive Income", formatDecimal(config.passiveIncomeMultiplier))
 	end
 	if tonumber(config.luckBonus) and config.luckBonus > 0 then
-		return string.format("Effect: x%s Luck", formatWholeNumber(1 + config.luckBonus))
+		return string.format("Effect: +%s Luck", formatDecimal(config.luckBonus))
 	end
 	if tonumber(config.rollSpeedBonus) and config.rollSpeedBonus > 0 then
-		return string.format("Effect: x%s Roll Speed", formatWholeNumber(1 + config.rollSpeedBonus))
+		return string.format("Effect: +%s Roll Speed", formatDecimal(config.rollSpeedBonus))
 	end
 	return "Effect: None"
 end
@@ -133,7 +142,9 @@ function PotionPresentation.BuildPreviewPresentation(payload: any)
 		partText = buildEffectText(config),
 		rarityText = string.format("Duration: %s", formatDuration(config.durationSeconds)),
 		mutationText = string.format("Owned: x%s", formatWholeNumber(ownedAmount)),
-		sizeText = if isActive then "Use: Extends current timer" else string.format("Use: Starts a %s timer", formatDuration(config.durationSeconds)),
+		sizeText = if isActive
+			then "Use: Replaces same-family tier"
+			else string.format("Use: Starts a %s timer", formatDuration(config.durationSeconds)),
 		existingText = if isActive
 			then string.format("Active: %s remaining", formatDuration(remainingSeconds))
 			else "Active: Inactive",

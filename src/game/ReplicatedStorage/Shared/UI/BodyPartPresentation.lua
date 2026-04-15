@@ -3,6 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
+local MutationCovers = require(ReplicatedStorage.Shared.Config.MutationCovers)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local SizeIcons = require(ReplicatedStorage.Shared.Config.SizeIcons)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
@@ -222,6 +223,16 @@ local function resolveMutationPresentation(record: any): (string, string, Color3
 	return mutationId, MutationConfig.GetDisplayName(mutationId), MutationConfig.GetColor(mutationId)
 end
 
+local function resolveMutationCoverTexture(record: any): string?
+	local mutationId = MutationConfig.NormalizeId(resolveMutationInput(record))
+	local mutationCoverTexture = MutationCovers[mutationId]
+	if typeof(mutationCoverTexture) == "string" and mutationCoverTexture ~= "" then
+		return mutationCoverTexture
+	end
+
+	return nil
+end
+
 function BodyPartPresentation.GetRegionLabel(region: string): string
 	return REGION_TO_LABEL[region] or tostring(region)
 end
@@ -415,10 +426,41 @@ function BodyPartPresentation.BuildPreviewPresentation(payload: any)
 		bundleModel = BodyPartsCatalog.ResolveBundleModel(piece.id),
 		sizeTagStyle = getSizeTagStyle(previewScale, sizeId),
 		sizeTagTexture = getSizeTagTexture(previewScale, sizeId),
+		cardNameText = BodyPartPresentation.FormatInventoryNameText(piece.displayName, record),
+		cardUsageText = formatMoneyPerSecond(passiveIncomePerSecond),
 		cardAccentColor = if rarityStyle then rarityStyle.accentColor else nil,
 		baseFillColor = if rarityStyle then rarityStyle.baseFillColor else nil,
 		selectedFillColor = if rarityStyle then rarityStyle.selectedFillColor else nil,
+		mutationCoverTexture = resolveMutationCoverTexture(record),
+		preferIconOverViewport = false,
 	}
+end
+
+function BodyPartPresentation.BuildBundleCardPayload(previewPresentation: any, overrides: any?)
+	if typeof(previewPresentation) ~= "table" then
+		return nil
+	end
+
+	local payload = {
+		nameText = previewPresentation.cardNameText,
+		usageText = previewPresentation.cardUsageText,
+		bundleModel = previewPresentation.bundleModel,
+		cardAccentColor = previewPresentation.cardAccentColor,
+		baseFillColor = previewPresentation.baseFillColor,
+		selectedFillColor = previewPresentation.selectedFillColor,
+		mutationCoverTexture = previewPresentation.mutationCoverTexture,
+		sizeTagStyle = previewPresentation.sizeTagStyle,
+		iconTexture = previewPresentation.iconTexture,
+		preferIconOverViewport = previewPresentation.preferIconOverViewport,
+	}
+
+	if typeof(overrides) == "table" then
+		for key, value in pairs(overrides) do
+			payload[key] = value
+		end
+	end
+
+	return payload
 end
 
 local function getDefaultImageColor(instance: Instance): Color3?

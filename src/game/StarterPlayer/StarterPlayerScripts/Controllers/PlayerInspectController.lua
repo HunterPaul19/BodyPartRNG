@@ -10,6 +10,7 @@ local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresent
 local PlayerStatsPresentation = require(ReplicatedStorage.Shared.UI.PlayerStatsPresentation)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 local FrameController = require(script.Parent.FrameController)
+local SlotCardRenderer = require(script.Parent.SlotCardRenderer)
 local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
@@ -186,6 +187,55 @@ local function setOutlineColor(button: GuiButton, color: Color3, transparency: n
 	end
 end
 
+local function captureSlotPlaceholderState(button: ImageButton)
+	local children = {}
+
+	for _, child in ipairs(button:GetChildren()) do
+		if child:IsA("GuiObject") then
+			children[child.Name] = {
+				visible = child.Visible,
+			}
+		end
+	end
+
+	return {
+		imageTransparency = button.ImageTransparency,
+		children = children,
+	}
+end
+
+local function syncSlotPlaceholder(button: ImageButton?, defaults: any, isFilled: boolean)
+	if not (button and defaults) then
+		return
+	end
+
+	if isFilled then
+		button.ImageTransparency = 1
+
+		for _, childName in ipairs({ "Icon", "Usage", "Viewport" }) do
+			local child = button:FindFirstChild(childName)
+			if child and child:IsA("GuiObject") then
+				child.Visible = false
+			end
+		end
+
+		local outline = button:FindFirstChild("Outline")
+		if outline and outline:IsA("GuiObject") then
+			outline.Visible = true
+		end
+		return
+	end
+
+	button.ImageTransparency = defaults.imageTransparency
+
+	for childName, childState in pairs(defaults.children) do
+		local child = button:FindFirstChild(childName)
+		if child and child:IsA("GuiObject") then
+			child.Visible = childState.visible
+		end
+	end
+end
+
 local function createCharacterPreviewModelFromDescription(description: HumanoidDescription?): Model?
 	if not description then
 		return nil
@@ -239,6 +289,9 @@ function PlayerInspectController:_ensureState()
 	self._characterRenderToken = 0
 	self._partInfoTween = nil :: Tween?
 	self._remotes = {}
+	self._slotCardRenderer = nil
+	self._mountedRegionButtons = {}
+	self._slotPlaceholderDefaults = {}
 	self._ui = nil
 	self._partInfoLabelFontFaces = nil
 end
@@ -437,28 +490,51 @@ function PlayerInspectController:_syncRegionButtons()
 		end
 		if button then
 			button.Active = true
+			syncSlotPlaceholder(button, self._slotPlaceholderDefaults[region], entry ~= nil)
 			local isSelected = self._selectedRegion == region and entry ~= nil
 			if entry then
 				local previewPresentation = BodyPartPresentation.BuildPreviewPresentation({
 					record = entry,
 					scale = entry.scale,
 				})
-				BodyPartPresentation.PopulateBundleCard(button, {
-					passiveIncomePerSecond = previewPresentation and previewPresentation.passiveIncomePerSecond or 0,
-					bundleModel = previewPresentation and previewPresentation.bundleModel or nil,
-					sizeTagStyle = previewPresentation and previewPresentation.sizeTagStyle or nil,
-					iconVisible = false,
-					cardAccentColor = previewPresentation and previewPresentation.cardAccentColor or nil,
-					baseFillColor = previewPresentation and previewPresentation.baseFillColor or nil,
-					selectedFillColor = previewPresentation and previewPresentation.selectedFillColor or nil,
-					isSelected = isSelected,
-				})
+				local mountedButton = if previewPresentation and regionFrame and self._slotCardRenderer
+					then self._slotCardRenderer:Render(
+						string.format("inspect_%s", region),
+						regionFrame,
+						function()
+							if self:_getEquippedEntries()[region] == nil then
+								self:_setSelectedRegion(nil)
+								return
+							end
+
+							self:_setSelectedRegion(region)
+						end,
+						BodyPartPresentation.BuildBundleCardPayload(previewPresentation),
+						isSelected
+					)
+					else nil
+				if mountedButton and self._mountedRegionButtons[region] ~= mountedButton then
+					self._mountedRegionButtons[region] = mountedButton
+					mountedButton.MouseEnter:Connect(function()
+						self._hoveredRegion = region
+						self._hoveredAura = false
+						self:_syncModalContents()
+					end)
+
+					mountedButton.MouseLeave:Connect(function()
+						if self._hoveredRegion == region then
+							self._hoveredRegion = nil
+							self:_syncModalContents()
+						end
+					end)
+				end
+				if mountedButton then
+					setOutlineColor(mountedButton, if isSelected then SELECTED_COLOR else DEFAULT_OUTLINE_COLOR, if isSelected then 0 else 0.22)
+				end
 			else
-				BodyPartPresentation.PopulateBundleCard(button, {
-					usageText = "",
-					bundleModel = nil,
-					iconVisible = true,
-				})
+				if self._slotCardRenderer then
+					self._slotCardRenderer:Hide(string.format("inspect_%s", region))
+				end
 			end
 
 			local isHovered = self._hoveredRegion == region
@@ -943,6 +1019,7 @@ function PlayerInspectController:_cacheUi(playerGui: PlayerGui)
 			local button = regionFrame:FindFirstChild("Temp")
 			if button and button:IsA("ImageButton") then
 				regionButtons[region] = button
+				self._slotPlaceholderDefaults[region] = captureSlotPlaceholderState(button)
 			end
 		end
 	end
@@ -1002,6 +1079,7 @@ function PlayerInspectController:_cacheUi(playerGui: PlayerGui)
 		rollSpeedLabel = characterRoot:WaitForChild("Roll Speed", 30),
 		totalOddsAddedLabel = totalOddsAddedLabel,
 	}
+	self._slotCardRenderer = SlotCardRenderer.new(playerGui)
 
 	for _, label in pairs(self._ui.partInfoLabels) do
 		label.RichText = true

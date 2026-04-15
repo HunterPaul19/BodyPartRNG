@@ -15,6 +15,7 @@ PlayerStats.EARNED_MONEY_SOURCES = {
 
 PlayerStats.SPENT_MONEY_SOURCES = {
 	roll_cost = true,
+	appraisal_cost = true,
 	admin = true,
 	other = true,
 }
@@ -115,6 +116,21 @@ local function cloneCounterMap(value: any): { [string]: number }
 	end
 
 	return clone
+end
+
+local function mergeCounterMaps(...)
+	local merged = {}
+	for _, value in ipairs({ ... }) do
+		if typeof(value) == "table" then
+			for key, amount in pairs(value) do
+				if typeof(key) == "string" and key ~= "" then
+					merged[key] = math.max(0, toWholeNumber(merged[key], 0)) + math.max(0, toWholeNumber(amount, 0))
+				end
+			end
+		end
+	end
+
+	return merged
 end
 
 local function cloneFixedCounterMap(value: any, allowedKeys: { [string]: boolean }): { [string]: number }
@@ -225,9 +241,14 @@ function PlayerStats.CreateEmpty(): any
 		monetization = {
 			firstPurchaseAt = 0,
 			firstPurchaseKey = "",
-			passPromptShownByKey = {},
-			passPurchasedByKey = {},
-			productPurchasedByKey = {},
+			promptShownByKey = {},
+			purchaseGrantedByKey = {},
+			selfPurchaseByKey = {},
+			giftPurchaseByKey = {},
+			giftsSentByKey = {},
+			giftsDeliveredByKey = {},
+			giftsReceivedByKey = {},
+			duplicateGiftBlockedByKey = {},
 		},
 		settings = {
 			rollTypeChanges = 0,
@@ -331,9 +352,25 @@ function PlayerStats.Normalize(value: any, options: any?): any
 
 	normalized.monetization.firstPurchaseAt = math.max(0, toWholeNumber(monetization.firstPurchaseAt, 0))
 	normalized.monetization.firstPurchaseKey = normalizeString(monetization.firstPurchaseKey)
-	normalized.monetization.passPromptShownByKey = cloneCounterMap(monetization.passPromptShownByKey)
-	normalized.monetization.passPurchasedByKey = cloneCounterMap(monetization.passPurchasedByKey)
-	normalized.monetization.productPurchasedByKey = cloneCounterMap(monetization.productPurchasedByKey)
+	normalized.monetization.promptShownByKey = mergeCounterMaps(
+		cloneCounterMap(monetization.promptShownByKey),
+		cloneCounterMap(monetization.passPromptShownByKey)
+	)
+	normalized.monetization.purchaseGrantedByKey = mergeCounterMaps(
+		cloneCounterMap(monetization.purchaseGrantedByKey),
+		cloneCounterMap(monetization.passPurchasedByKey),
+		cloneCounterMap(monetization.productPurchasedByKey)
+	)
+	normalized.monetization.selfPurchaseByKey = mergeCounterMaps(
+		cloneCounterMap(monetization.selfPurchaseByKey),
+		cloneCounterMap(monetization.passPurchasedByKey),
+		cloneCounterMap(monetization.productPurchasedByKey)
+	)
+	normalized.monetization.giftPurchaseByKey = cloneCounterMap(monetization.giftPurchaseByKey)
+	normalized.monetization.giftsSentByKey = cloneCounterMap(monetization.giftsSentByKey)
+	normalized.monetization.giftsDeliveredByKey = cloneCounterMap(monetization.giftsDeliveredByKey)
+	normalized.monetization.giftsReceivedByKey = cloneCounterMap(monetization.giftsReceivedByKey)
+	normalized.monetization.duplicateGiftBlockedByKey = cloneCounterMap(monetization.duplicateGiftBlockedByKey)
 
 	normalized.settings.rollTypeChanges = math.max(0, toWholeNumber(settings.rollTypeChanges, 0))
 	normalized.settings.rollRegionChanges = math.max(0, toWholeNumber(settings.rollRegionChanges, 0))

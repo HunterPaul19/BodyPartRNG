@@ -28,7 +28,11 @@ function MerchantShopState.CloneStockByPotionId(stockByPotionId: any): MerchantS
 
 	for _, entry in ipairs(MerchantShopConfig.GetAll()) do
 		if stockByPotionId[entry.potionId] ~= nil then
-			cloned[entry.potionId] = normalizeWhole(stockByPotionId[entry.potionId], 0, 10)
+			cloned[entry.potionId] = normalizeWhole(
+				stockByPotionId[entry.potionId],
+				0,
+				MerchantShopConfig.GetMaxStockForPotionId(entry.potionId)
+			)
 		end
 	end
 

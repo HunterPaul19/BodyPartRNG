@@ -14,7 +14,6 @@ local MERCHANT_SHOP_FOLDER_NAME = "MerchantShop"
 local GET_SHOP_STATE_REMOTE_NAME = "GetShopState"
 local PURCHASE_SHOP_ITEM_REMOTE_NAME = "PurchaseShopItem"
 local REFRESH_INTERVAL_SECONDS = 300
-local MAX_STOCK_PER_ITEM = 10
 local MERCHANT_SHOP_KEY = Schema.MerchantShop and Schema.MerchantShop.key or nil
 local MONEY_KEY = Schema.Money and Schema.Money.key or nil
 
@@ -104,10 +103,23 @@ local function getRefreshesAt(cycleId: number): number
 	return (cycleId + 1) * REFRESH_INTERVAL_SECONDS
 end
 
-local function createFullStockMap(): { [string]: number }
+local function createCycleRandom(player: Player, cycleId: number): Random
+	local seed = ((player.UserId % 1000000) * 9973 + (cycleId % 1000000) * 7919) % 2147483647
+	if seed <= 0 then
+		seed = 1
+	end
+
+	return Random.new(seed)
+end
+
+local function createCycleStockMap(player: Player, cycleId: number): { [string]: number }
 	local stockByPotionId = {}
+	local cycleRandom = createCycleRandom(player, cycleId)
 	for _, entry in ipairs(MerchantShopConfig.GetAll()) do
-		stockByPotionId[entry.potionId] = MAX_STOCK_PER_ITEM
+		local appearanceChance = math.clamp(tonumber(entry.appearanceChance) or 0, 0, 1)
+		local stockPerRefresh = MerchantShopConfig.GetMaxStockForPotionId(entry.potionId)
+		local appears = appearanceChance >= 1 or cycleRandom:NextNumber() <= appearanceChance
+		stockByPotionId[entry.potionId] = if appears then stockPerRefresh else 0
 	end
 	return stockByPotionId
 end
@@ -139,13 +151,17 @@ function MerchantShopService:_resolveCurrentState(player: Player): MerchantShopS
 	if rawState.cycleId ~= cycleId then
 		return self:_saveState(player, {
 			cycleId = cycleId,
-			stockByPotionId = createFullStockMap(),
+			stockByPotionId = createCycleStockMap(player, cycleId),
 		})
 	end
 
-	local stockByPotionId = createFullStockMap()
+	local stockByPotionId = createCycleStockMap(player, cycleId)
 	for potionId, stock in pairs(rawState.stockByPotionId) do
-		stockByPotionId[potionId] = math.clamp(normalizeQuantity(stock), 0, MAX_STOCK_PER_ITEM)
+		stockByPotionId[potionId] = math.clamp(
+			normalizeQuantity(stock),
+			0,
+			MerchantShopConfig.GetMaxStockForPotionId(potionId)
+		)
 	end
 
 	local normalizedState = {
@@ -203,7 +219,8 @@ function MerchantShopService:PurchaseShopItem(player: Player, payload: any)
 	end
 
 	local resolvedState = self:_resolveCurrentState(player)
-	local availableStock = math.clamp(normalizeQuantity(resolvedState.stockByPotionId[entry.potionId]), 0, MAX_STOCK_PER_ITEM)
+	local maxStock = MerchantShopConfig.GetMaxStockForPotionId(entry.potionId)
+	local availableStock = math.clamp(normalizeQuantity(resolvedState.stockByPotionId[entry.potionId]), 0, maxStock)
 	if availableStock <= 0 then
 		return response(false, string.format("%s is out of stock.", entry.shopLabel), self:_buildShopStatePayload(player, resolvedState))
 	end
@@ -242,7 +259,7 @@ function MerchantShopService:PurchaseShopItem(player: Player, payload: any)
 		cycleId = resolvedState.cycleId,
 		stockByPotionId = MerchantShopState.CloneStockByPotionId(resolvedState.stockByPotionId),
 	}
-	nextState.stockByPotionId[entry.potionId] = math.clamp(availableStock - quantity, 0, MAX_STOCK_PER_ITEM)
+	nextState.stockByPotionId[entry.potionId] = math.clamp(availableStock - quantity, 0, maxStock)
 	nextState = self:_saveState(player, nextState)
 
 	local successMessage = string.format(

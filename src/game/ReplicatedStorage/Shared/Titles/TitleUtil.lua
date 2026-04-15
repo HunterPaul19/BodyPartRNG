@@ -1,7 +1,6 @@
 local AchievementState = require(script.Parent.AchievementState)
 local TitleConfig = require(script.Parent.Parent.Config.TitleConfig)
-
-local VIP_HEX = "#ff8c00"
+local PremiumBenefits = require(script.Parent.Parent.Premium.PremiumBenefits)
 
 local TitleUtil = {}
 
@@ -62,13 +61,14 @@ function TitleUtil.IsTitleUnlocked(titleId: any, achievementState: any): boolean
 	return normalizedState.completedIds[title.achievementId] == true
 end
 
-function TitleUtil.GetPrefixSegments(vipOwned: boolean, equippedTitleId: any): { { text: string, colorHex: string } }
+function TitleUtil.GetPrefixSegments(premiumTier: any, equippedTitleId: any): { { text: string, colorHex: string } }
 	local segments = {}
+	local normalizedTier = PremiumBenefits.NormalizeTier(premiumTier)
 
-	if vipOwned == true then
+	if normalizedTier ~= PremiumBenefits.Tiers.none then
 		table.insert(segments, {
-			text = "[VIP]",
-			colorHex = VIP_HEX,
+			text = PremiumBenefits.Tags[normalizedTier],
+			colorHex = PremiumBenefits.Colors[normalizedTier],
 		})
 	end
 
@@ -84,8 +84,8 @@ function TitleUtil.GetPrefixSegments(vipOwned: boolean, equippedTitleId: any): {
 	return segments
 end
 
-function TitleUtil.BuildRichTextPrefix(vipOwned: boolean, equippedTitleId: any): string
-	local segments = TitleUtil.GetPrefixSegments(vipOwned, equippedTitleId)
+function TitleUtil.BuildRichTextPrefix(premiumTier: any, equippedTitleId: any): string
+	local segments = TitleUtil.GetPrefixSegments(premiumTier, equippedTitleId)
 	local richSegments = {}
 
 	for _, segment in ipairs(segments) do
@@ -98,8 +98,31 @@ function TitleUtil.BuildRichTextPrefix(vipOwned: boolean, equippedTitleId: any):
 	return table.concat(richSegments, " ")
 end
 
-function TitleUtil.BuildRichTextDisplayName(vipOwned: boolean, equippedTitleId: any, displayName: any): string
-	local prefix = TitleUtil.BuildRichTextPrefix(vipOwned, equippedTitleId)
+function TitleUtil.BuildRichTextDisplayName(premiumTier: any, equippedTitleId: any, displayName: any): string
+	local prefix = TitleUtil.BuildRichTextPrefix(premiumTier, equippedTitleId)
+	local safeDisplayName = TitleUtil.EscapeRichText(displayName)
+	if prefix == "" then
+		return safeDisplayName
+	end
+
+	return prefix .. " " .. safeDisplayName
+end
+
+function TitleUtil.BuildLeaderboardRichTextPrefix(premiumTier: any): string
+	local normalizedTier = PremiumBenefits.NormalizeTier(premiumTier)
+	if normalizedTier == PremiumBenefits.Tiers.none then
+		return ""
+	end
+
+	return string.format(
+		'<font color="%s"><b>%s</b></font>',
+		PremiumBenefits.Colors[normalizedTier],
+		TitleUtil.EscapeRichText(PremiumBenefits.Tags[normalizedTier])
+	)
+end
+
+function TitleUtil.BuildLeaderboardRichTextDisplayName(premiumTier: any, displayName: any): string
+	local prefix = TitleUtil.BuildLeaderboardRichTextPrefix(premiumTier)
 	local safeDisplayName = TitleUtil.EscapeRichText(displayName)
 	if prefix == "" then
 		return safeDisplayName

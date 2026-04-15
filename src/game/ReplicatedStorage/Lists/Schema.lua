@@ -2,6 +2,7 @@ local OwnedBodyParts = require(script.Parent.Parent.Shared.Character.OwnedBodyPa
 local OwnedAuras = require(script.Parent.Parent.Shared.Character.OwnedAuras)
 local OwnedPotions = require(script.Parent.Parent.Shared.Character.OwnedPotions)
 local MerchantShopState = require(script.Parent.Parent.Shared.Character.MerchantShopState)
+local MarketplaceState = require(script.Parent.Parent.Shared.Marketplace.State)
 local BodyPartLoadout = require(script.Parent.Parent.Shared.Character.BodyPartLoadout)
 local RollTargetRegions = require(script.Parent.Parent.Shared.Character.RollTargetRegions)
 local RollSelection = require(script.Parent.Parent.Shared.Character.OwnedRollTypes)
@@ -50,6 +51,11 @@ return {
 		value = MerchantShopState.CreateEmptyState(),
 	},
 
+	Marketplace = {
+		key = "marketplace",
+		value = MarketplaceState.CreateEmpty(),
+	},
+
 	EquippedLoadout = {
 		key = "equippedLoadout",
 		value = BodyPartLoadout.CreateEmptyEquippedState(),
@@ -77,6 +83,11 @@ return {
 
 	VipOwned = {
 		key = "vipOwned",
+		value = false,
+	},
+
+	VipPlusOwned = {
+		key = "vipPlusOwned",
 		value = false,
 	},
 

@@ -2,17 +2,51 @@ local ViewportModelRenderer = {}
 
 local MINIMUM_EXTENT = 2
 local DEFAULT_FIELD_OF_VIEW = 35
+local POTION_MARGIN_SCALE = 1.5
+local POTION_FOCUS_Y_SCALE = -0.02
+local POTION_SIDE_OFFSET_SCALE = 0.18
+local POTION_HEIGHT_OFFSET_SCALE = 0.08
+local POTION_BACKDROP_TRANSPARENCY = 0.45
+local POTION_BACKDROP_COLOR = Color3.fromRGB(42, 42, 42)
 local DIALOGUE_PORTRAIT_MIN_HEIGHT = 2.6
 local DIALOGUE_PORTRAIT_MARGIN_SCALE = 1.08
 local VIEWPORT_AMBIENT = Color3.fromRGB(255, 255, 255)
 local VIEWPORT_LIGHT_COLOR = Color3.fromRGB(255, 255, 255)
 local VIEWPORT_LIGHT_DIRECTION = Vector3.new(-1, -0.6, -0.8)
 local CACHE_KEY_ATTRIBUTE = "ViewportModelRenderer_CacheKey"
+local rollPreviewSessions = setmetatable({}, { __mode = "k" })
+
+local function applyViewportLighting(viewportFrame: ViewportFrame, camera: Camera)
+	viewportFrame.CurrentCamera = camera
+	viewportFrame.Ambient = VIEWPORT_AMBIENT
+	viewportFrame.LightColor = VIEWPORT_LIGHT_COLOR
+	viewportFrame.LightDirection = VIEWPORT_LIGHT_DIRECTION
+end
+
+local function destroyRollPreviewSession(viewportFrame: ViewportFrame)
+	local sessionState = rollPreviewSessions[viewportFrame]
+	if not sessionState then
+		return
+	end
+
+	for _, cachedModel in pairs(sessionState.cachedModels) do
+		if cachedModel and cachedModel.Parent ~= nil then
+			cachedModel.Parent = nil
+		end
+		if cachedModel then
+			cachedModel:Destroy()
+		end
+	end
+
+	rollPreviewSessions[viewportFrame] = nil
+end
 
 local function clearViewport(viewportFrame: ViewportFrame)
 	if not (viewportFrame and viewportFrame:IsA("ViewportFrame")) then
 		return
 	end
+
+	destroyRollPreviewSession(viewportFrame)
 
 	for _, child in ipairs(viewportFrame:GetChildren()) do
 		if child:IsA("WorldModel") or child:IsA("Camera") or child:IsA("Model") then
@@ -87,6 +121,143 @@ local function getModelCacheToken(model: Model?): string
 	return model.Name
 end
 
+local function getBundleCameraCFrame(previewModel: Model, framingPreviewModel: Model?): CFrame
+	local boundingBoxCFrame, boundingBoxSize
+	if framingPreviewModel then
+		boundingBoxCFrame, boundingBoxSize = framingPreviewModel:GetBoundingBox()
+	else
+		boundingBoxCFrame, boundingBoxSize = previewModel:GetBoundingBox()
+	end
+	local extent = math.max(boundingBoxSize.X, boundingBoxSize.Y, boundingBoxSize.Z, MINIMUM_EXTENT)
+
+	return CFrame.lookAt(
+		boundingBoxCFrame.Position + Vector3.new(extent * 0.65, extent * 0.2, extent * 1.85),
+		boundingBoxCFrame.Position
+	)
+end
+
+local function getPreviewFrontVector(previewModel: Model): Vector3
+	local lookVector = Vector3.new(previewModel:GetPivot().LookVector.X, 0, previewModel:GetPivot().LookVector.Z)
+	if lookVector.Magnitude > 0.001 then
+		return lookVector.Unit
+	end
+
+	return Vector3.new(0, 0, -1)
+end
+
+local function getPotionCameraCFrame(viewportFrame: ViewportFrame, previewModel: Model): CFrame
+	local boundingBoxCFrame, boundingBoxSize = previewModel:GetBoundingBox()
+	local focusPoint = boundingBoxCFrame.Position + Vector3.new(0, boundingBoxSize.Y * POTION_FOCUS_Y_SCALE, 0)
+	local frontVector = getPreviewFrontVector(previewModel)
+	local rightVector = Vector3.yAxis:Cross(frontVector)
+	if rightVector.Magnitude <= 0.001 then
+		rightVector = Vector3.xAxis
+	else
+		rightVector = rightVector.Unit
+	end
+	local verticalHalfExtent = math.max(boundingBoxSize.Y * 0.5, MINIMUM_EXTENT * 0.5) * POTION_MARGIN_SCALE
+	local viewportSize = viewportFrame.AbsoluteSize
+	local aspectRatio = if viewportSize.Y > 0 then viewportSize.X / viewportSize.Y else 1
+	local verticalFov = math.rad(DEFAULT_FIELD_OF_VIEW)
+	local horizontalFov = 2 * math.atan(math.tan(verticalFov * 0.5) * math.max(aspectRatio, 0.01))
+	local horizontalHalfExtent = math.max(boundingBoxSize.X, boundingBoxSize.Z, MINIMUM_EXTENT) * 0.5 * POTION_MARGIN_SCALE
+	local verticalDistance = verticalHalfExtent / math.tan(verticalFov * 0.5)
+	local horizontalDistance = horizontalHalfExtent / math.tan(horizontalFov * 0.5)
+	local distance = math.max(verticalDistance, horizontalDistance)
+	local cameraPosition = focusPoint
+		+ frontVector * distance
+		+ rightVector * (distance * POTION_SIDE_OFFSET_SCALE)
+		+ Vector3.yAxis * (distance * POTION_HEIGHT_OFFSET_SCALE)
+
+	return CFrame.lookAt(cameraPosition, focusPoint, Vector3.yAxis)
+end
+
+local function optimizePotionPreview(previewModel: Model)
+	for _, descendant in ipairs(previewModel:GetDescendants()) do
+		if descendant:IsA("BasePart") and descendant.Transparency > 0 and descendant.Transparency < 1 then
+			descendant.Transparency = math.min(descendant.Transparency, 0.28)
+		end
+	end
+end
+
+local function addPotionBackdrop(worldModel: WorldModel, previewModel: Model, cameraCFrame: CFrame)
+	local boundingBoxCFrame, boundingBoxSize = previewModel:GetBoundingBox()
+	local viewDirection = cameraCFrame.LookVector
+	local backdrop = Instance.new("Part")
+	backdrop.Name = "PotionBackdrop"
+	backdrop.Anchored = true
+	backdrop.CanCollide = false
+	backdrop.CanQuery = false
+	backdrop.CanTouch = false
+	backdrop.CastShadow = false
+	backdrop.Material = Enum.Material.SmoothPlastic
+	backdrop.Color = POTION_BACKDROP_COLOR
+	backdrop.Transparency = POTION_BACKDROP_TRANSPARENCY
+	backdrop.Size = Vector3.new(
+		math.max(boundingBoxSize.X, boundingBoxSize.Z) * 1.3,
+		boundingBoxSize.Y * 1.15,
+		0.05
+	)
+	backdrop.CFrame = CFrame.lookAt(
+		boundingBoxCFrame.Position - viewDirection * (math.max(boundingBoxSize.X, boundingBoxSize.Z) * 0.9),
+		cameraCFrame.Position,
+		Vector3.yAxis
+	)
+	backdrop.Parent = worldModel
+end
+
+local function createRollPreviewSession(viewportFrame: ViewportFrame, sessionToken: any)
+	clearViewport(viewportFrame)
+
+	local worldModel = Instance.new("WorldModel")
+	worldModel.Name = "PreviewWorld"
+	worldModel.Parent = viewportFrame
+
+	local camera = Instance.new("Camera")
+	camera.Name = "PreviewCamera"
+	camera.FieldOfView = DEFAULT_FIELD_OF_VIEW
+	camera.Parent = viewportFrame
+
+	applyViewportLighting(viewportFrame, camera)
+
+	local sessionState = {
+		sessionToken = sessionToken,
+		worldModel = worldModel,
+		camera = camera,
+		cachedModels = {},
+		activeModel = nil,
+		activeCacheKey = nil,
+	}
+	rollPreviewSessions[viewportFrame] = sessionState
+
+	return sessionState
+end
+
+local function ensureRollPreviewSession(viewportFrame: ViewportFrame, sessionToken: any)
+	local sessionState = rollPreviewSessions[viewportFrame]
+	if sessionState
+		and sessionState.sessionToken == sessionToken
+		and sessionState.worldModel
+		and sessionState.worldModel.Parent == viewportFrame
+		and sessionState.camera
+		and sessionState.camera.Parent == viewportFrame
+	then
+		return sessionState
+	end
+
+	return createRollPreviewSession(viewportFrame, sessionToken)
+end
+
+local function deactivateActiveRollPreview(sessionState)
+	local activeModel = sessionState.activeModel
+	if activeModel and activeModel.Parent == sessionState.worldModel then
+		activeModel.Parent = nil
+	end
+
+	sessionState.activeModel = nil
+	sessionState.activeCacheKey = nil
+end
+
 local function renderModel(viewportFrame: ViewportFrame, sourceModel: Model?, framingModel: Model?): boolean
 	if not (viewportFrame and viewportFrame:IsA("ViewportFrame")) then
 		return false
@@ -134,25 +305,21 @@ local function renderModel(viewportFrame: ViewportFrame, sourceModel: Model?, fr
 	local boundingBoxCFrame, boundingBoxSize
 	if framingPreviewModel then
 		boundingBoxCFrame, boundingBoxSize = framingPreviewModel:GetBoundingBox()
-		framingPreviewModel:Destroy()
 	else
 		boundingBoxCFrame, boundingBoxSize = previewModel:GetBoundingBox()
 	end
-	local extent = math.max(boundingBoxSize.X, boundingBoxSize.Y, boundingBoxSize.Z, MINIMUM_EXTENT)
 
 	local camera = Instance.new("Camera")
 	camera.Name = "PreviewCamera"
 	camera.FieldOfView = DEFAULT_FIELD_OF_VIEW
 	camera.Parent = viewportFrame
-	camera.CFrame = CFrame.lookAt(
-		boundingBoxCFrame.Position + Vector3.new(extent * 0.65, extent * 0.2, extent * 1.85),
-		boundingBoxCFrame.Position
-	)
+	camera.CFrame = getBundleCameraCFrame(previewModel, framingPreviewModel)
 
-	viewportFrame.CurrentCamera = camera
-	viewportFrame.Ambient = VIEWPORT_AMBIENT
-	viewportFrame.LightColor = VIEWPORT_LIGHT_COLOR
-	viewportFrame.LightDirection = VIEWPORT_LIGHT_DIRECTION
+	if framingPreviewModel then
+		framingPreviewModel:Destroy()
+	end
+
+	applyViewportLighting(viewportFrame, camera)
 	viewportFrame:SetAttribute(CACHE_KEY_ATTRIBUTE, cacheKey)
 
 	return true
@@ -237,6 +404,7 @@ local function renderDialoguePortrait(viewportFrame: ViewportFrame, sourceModel:
 		return false
 	end
 
+	optimizePotionPreview(previewModel)
 	previewModel.Parent = worldModel
 
 	local head = previewModel:FindFirstChild("Head", true)
@@ -265,12 +433,117 @@ local function renderDialoguePortrait(viewportFrame: ViewportFrame, sourceModel:
 	return true
 end
 
+local function renderPotion(viewportFrame: ViewportFrame, sourceModel: Model?): boolean
+	if not (viewportFrame and viewportFrame:IsA("ViewportFrame")) then
+		return false
+	end
+	if not (sourceModel and sourceModel:IsA("Model")) then
+		clearViewport(viewportFrame)
+		return false
+	end
+
+	local cacheKey = table.concat({
+		"potion",
+		getModelCacheToken(sourceModel),
+	}, "|")
+	if viewportFrame:GetAttribute(CACHE_KEY_ATTRIBUTE) == cacheKey
+		and viewportFrame.CurrentCamera ~= nil
+		and viewportFrame:FindFirstChild("PreviewWorld") ~= nil
+	then
+		return true
+	end
+
+	clearViewport(viewportFrame)
+
+	local worldModel = Instance.new("WorldModel")
+	worldModel.Name = "PreviewWorld"
+	worldModel.Parent = viewportFrame
+
+	local previewModel = createPreviewClone(sourceModel, "PotionPreviewModel")
+	if not previewModel then
+		worldModel:Destroy()
+		return false
+	end
+
+	previewModel.Parent = worldModel
+
+	local camera = Instance.new("Camera")
+	camera.Name = "PreviewCamera"
+	camera.FieldOfView = DEFAULT_FIELD_OF_VIEW
+	camera.Parent = viewportFrame
+	camera.CFrame = getPotionCameraCFrame(viewportFrame, previewModel)
+	addPotionBackdrop(worldModel, previewModel, camera.CFrame)
+
+	applyViewportLighting(viewportFrame, camera)
+	viewportFrame:SetAttribute(CACHE_KEY_ATTRIBUTE, cacheKey)
+
+	return true
+end
+
 function ViewportModelRenderer.Clear(viewportFrame: ViewportFrame)
 	clearViewport(viewportFrame)
 end
 
+function ViewportModelRenderer.ClearRollPreview(viewportFrame: ViewportFrame)
+	clearViewport(viewportFrame)
+end
+
+function ViewportModelRenderer.RenderRollPreview(viewportFrame: ViewportFrame, sourceModel: Model?, sessionToken: any): boolean
+	if not (viewportFrame and viewportFrame:IsA("ViewportFrame")) then
+		return false
+	end
+	if sessionToken == nil then
+		clearViewport(viewportFrame)
+		return false
+	end
+
+	local sessionState = ensureRollPreviewSession(viewportFrame, sessionToken)
+	if not (sourceModel and sourceModel:IsA("Model")) then
+		deactivateActiveRollPreview(sessionState)
+		viewportFrame:SetAttribute(CACHE_KEY_ATTRIBUTE, nil)
+		return false
+	end
+
+	local cacheKey = table.concat({
+		"roll",
+		getModelCacheToken(sourceModel),
+	}, "|")
+	if sessionState.activeCacheKey == cacheKey
+		and sessionState.activeModel ~= nil
+		and sessionState.activeModel.Parent == sessionState.worldModel
+	then
+		return true
+	end
+
+	local previewModel = sessionState.cachedModels[cacheKey]
+	if not previewModel then
+		previewModel = createPreviewClone(sourceModel, "RollPreviewModel")
+		if not previewModel then
+			deactivateActiveRollPreview(sessionState)
+			viewportFrame:SetAttribute(CACHE_KEY_ATTRIBUTE, nil)
+			return false
+		end
+		sessionState.cachedModels[cacheKey] = previewModel
+	end
+
+	deactivateActiveRollPreview(sessionState)
+
+	previewModel.Parent = sessionState.worldModel
+	sessionState.camera.CFrame = getBundleCameraCFrame(previewModel, nil)
+	applyViewportLighting(viewportFrame, sessionState.camera)
+	viewportFrame:SetAttribute(CACHE_KEY_ATTRIBUTE, cacheKey)
+	sessionState.activeModel = previewModel
+	sessionState.activeCacheKey = cacheKey
+
+	return true
+end
+
 function ViewportModelRenderer.RenderBundle(viewportFrame: ViewportFrame, bundleModel: Model?): boolean
 	return renderModel(viewportFrame, bundleModel, nil)
+end
+
+function ViewportModelRenderer.RenderPotion(viewportFrame: ViewportFrame, potionModel: Model?): boolean
+	return renderPotion(viewportFrame, potionModel)
 end
 
 function ViewportModelRenderer.RenderCharacterModel(viewportFrame: ViewportFrame, characterModel: Model?, framingModel: Model?): boolean

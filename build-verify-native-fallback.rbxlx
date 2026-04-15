@@ -3472,98 +3472,6 @@ return setmetatable({}, {
         </Properties>
         <Item class="ModuleScript" referent="26">
           <Properties>
-            <string name="Name">AppraisalPricing</string>
-            <string name="Source">local BodyPartEconomy = require(script.Parent.BodyPartEconomy)
-
-local AppraisalPricing = {}
-
-AppraisalPricing.COST_MULTIPLIER = 3
-
-local function normalizeWhole(value: any): number
-	return math.max(0, math.floor(tonumber(value) or 0))
-end
-
-function AppraisalPricing.GetCostForSellValue(sellValue: any): number
-	return normalizeWhole(sellValue) * AppraisalPricing.COST_MULTIPLIER
-end
-
-function AppraisalPricing.GetCost(record: any, piece: any): number
-	return AppraisalPricing.GetCostForSellValue(BodyPartEconomy.GetSellValue(record, piece))
-end
-
-return table.freeze(AppraisalPricing)</string>
-          </Properties>
-        </Item>
-        <Item class="ModuleScript" referent="27">
-          <Properties>
-            <string name="Name">AppraisalState</string>
-            <string name="Source">local AppraisalConfig = require(script.Parent.Parent.Config.AppraisalConfig)
-
-local AppraisalState = {}
-
-export type AppraisalStateValue = {
-	cycleId: number,
-	isActive: boolean,
-	stockRemaining: number,
-	stockPerSpawn: number,
-	departsAt: number,
-	nextAppearsAt: number,
-}
-
-local function normalizeWhole(value: any, minimum: number, maximum: number): number
-	return math.clamp(math.floor(tonumber(value) or 0), minimum, maximum)
-end
-
-function AppraisalState.CreateEmptyState(): AppraisalStateValue
-	return {
-		cycleId = -1,
-		isActive = false,
-		stockRemaining = 0,
-		stockPerSpawn = AppraisalConfig.stockPerSpawn,
-		departsAt = 0,
-		nextAppearsAt = 0,
-	}
-end
-
-function AppraisalState.CloneState(state: any): AppraisalStateValue
-	local emptyState = AppraisalState.CreateEmptyState()
-	if typeof(state) ~= "table" then
-		return emptyState
-	end
-
-	local stockPerSpawn = normalizeWhole(
-		state.stockPerSpawn,
-		1,
-		math.max(1, AppraisalConfig.stockPerSpawn)
-	)
-
-	return {
-		cycleId = math.floor(tonumber(state.cycleId) or emptyState.cycleId),
-		isActive = state.isActive == true,
-		stockRemaining = normalizeWhole(state.stockRemaining, 0, stockPerSpawn),
-		stockPerSpawn = stockPerSpawn,
-		departsAt = math.max(0, tonumber(state.departsAt) or emptyState.departsAt),
-		nextAppearsAt = math.max(0, tonumber(state.nextAppearsAt) or emptyState.nextAppearsAt),
-	}
-end
-
-function AppraisalState.AreEqual(a: any, b: any): boolean
-	local left = AppraisalState.CloneState(a)
-	local right = AppraisalState.CloneState(b)
-
-	return left.cycleId == right.cycleId
-		and left.isActive == right.isActive
-		and left.stockRemaining == right.stockRemaining
-		and left.stockPerSpawn == right.stockPerSpawn
-		and left.departsAt == right.departsAt
-		and left.nextAppearsAt == right.nextAppearsAt
-end
-
-return table.freeze(AppraisalState)</string>
-          </Properties>
-        </Item>
-        <Item class="ModuleScript" referent="28">
-          <Properties>
             <string name="Name">BodyPartCollection</string>
             <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -3688,22 +3596,7 @@ end
 return table.freeze(BodyPartCollection)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="29">
-          <Properties>
-            <string name="Name">BodyPartEconomy</string>
-            <string name="Source">local BodyPartEconomy = {}
-
-function BodyPartEconomy.GetSellValue(record: any, piece: any): number
-	local passiveIncomePerSecond = tonumber(record and record.finalPassiveIncomePerSecond)
-		or tonumber(piece and piece.passiveIncomePerSecond)
-		or 0
-	return math.max(1, math.floor(passiveIncomePerSecond * 60))
-end
-
-return table.freeze(BodyPartEconomy)</string>
-          </Properties>
-        </Item>
-        <Item class="ModuleScript" referent="30">
+        <Item class="ModuleScript" referent="27">
           <Properties>
             <string name="Name">BodyPartLoadout</string>
             <string name="Source">local BodyPartRegions = require(script.Parent.BodyPartRegions)
@@ -3845,7 +3738,7 @@ end
 return BodyPartLoadout</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="31">
+        <Item class="ModuleScript" referent="28">
           <Properties>
             <string name="Name">BodyPartRegions</string>
             <string name="Source">local BodyPartRegions = {}
@@ -3871,7 +3764,7 @@ end
 return BodyPartRegions</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="32">
+        <Item class="ModuleScript" referent="29">
           <Properties>
             <string name="Name">BodyPartVisuals</string>
             <string name="Source">local RunService = game:GetService("RunService")
@@ -7339,7 +7232,7 @@ end
 return BodyPartVisuals</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="33">
+        <Item class="ModuleScript" referent="30">
           <Properties>
             <string name="Name">CharacterAppearanceHostApplier</string>
             <string name="Source">local HttpService = game:GetService("HttpService")
@@ -7945,7 +7838,7 @@ end
 return CharacterAppearanceHostApplier</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="34">
+        <Item class="ModuleScript" referent="31">
           <Properties>
             <string name="Name">MerchantShopState</string>
             <string name="Source">local MerchantShopConfig = require(script.Parent.Parent.Config.MerchantShopConfig)
@@ -8000,7 +7893,7 @@ end
 return table.freeze(MerchantShopState)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="35">
+        <Item class="ModuleScript" referent="32">
           <Properties>
             <string name="Name">OwnedAuras</string>
             <string name="Source">local OwnedAuras = {}
@@ -8037,7 +7930,7 @@ end
 return OwnedAuras</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="36">
+        <Item class="ModuleScript" referent="33">
           <Properties>
             <string name="Name">OwnedBodyParts</string>
             <string name="Source">local OwnedBodyParts = {}
@@ -8098,7 +7991,7 @@ end
 return OwnedBodyParts</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="37">
+        <Item class="ModuleScript" referent="34">
           <Properties>
             <string name="Name">OwnedPotions</string>
             <string name="Source">local OwnedPotions = {}
@@ -8124,7 +8017,7 @@ end
 return OwnedPotions</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="38">
+        <Item class="ModuleScript" referent="35">
           <Properties>
             <string name="Name">OwnedRollTypes</string>
             <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -8148,7 +8041,7 @@ end
 return table.freeze(OwnedRollTypes)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="39">
+        <Item class="ModuleScript" referent="36">
           <Properties>
             <string name="Name">RollTargetRegions</string>
             <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -8195,11 +8088,11 @@ return table.freeze(RollTargetRegions)</string>
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="40">
+      <Item class="Folder" referent="37">
         <Properties>
           <string name="Name">Config</string>
         </Properties>
-        <Item class="ModuleScript" referent="41">
+        <Item class="ModuleScript" referent="38">
           <Properties>
             <string name="Name">AchievementConfig</string>
             <string name="Source">export type AchievementTriggerType =
@@ -8335,48 +8228,7 @@ end
 return table.freeze(AchievementConfig)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="42">
-          <Properties>
-            <string name="Name">AppraisalConfig</string>
-            <string name="Source">local MutationConfig = require(script.Parent.MutationConfig)
-
-local AppraisalConfig = {
-	cycleIntervalSeconds = 900,
-	activeDurationSeconds = 300,
-	stockPerSpawn = 15,
-	mutationWeights = MutationConfig.GetOrdered(),
-	sizeWeights = table.freeze({
-		table.freeze({
-			id = "tiny",
-			weight = 8,
-		}),
-		table.freeze({
-			id = "small",
-			weight = 5,
-		}),
-		table.freeze({
-			id = "normal",
-			weight = 60,
-		}),
-		table.freeze({
-			id = "large",
-			weight = 18,
-		}),
-		table.freeze({
-			id = "huge",
-			weight = 6,
-		}),
-		table.freeze({
-			id = "titanic",
-			weight = 3,
-		}),
-	}),
-}
-
-return table.freeze(AppraisalConfig)</string>
-          </Properties>
-        </Item>
-        <Item class="ModuleScript" referent="43">
+        <Item class="ModuleScript" referent="39">
           <Properties>
             <string name="Name">AuraConfig</string>
             <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -9604,7 +9456,7 @@ end
 return table.freeze(AuraConfig)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="44">
+        <Item class="ModuleScript" referent="40">
           <Properties>
             <string name="Name">BodyPartIcons</string>
             <string name="Source">export type BodyPartIconEntry = {
@@ -9652,11 +9504,11 @@ end
 return table.freeze(BodyPartIcons)</string>
           </Properties>
         </Item>
-        <Item class="Folder" referent="45">
+        <Item class="Folder" referent="41">
           <Properties>
             <string name="Name">BodyParts</string>
           </Properties>
-          <Item class="ModuleScript" referent="46">
+          <Item class="ModuleScript" referent="42">
             <Properties>
               <string name="Name">Catalog</string>
               <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -10188,7 +10040,7 @@ end
 return table.freeze(Catalog)</string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="47">
+          <Item class="ModuleScript" referent="43">
             <Properties>
               <string name="Name">Pieces</string>
               <string name="Source">local Pieces = {
@@ -14859,7 +14711,7 @@ return table.freeze(Catalog)</string>
 return Pieces</string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="48">
+          <Item class="ModuleScript" referent="44">
             <Properties>
               <string name="Name">Runtime</string>
               <string name="Source">local Runtime = {}
@@ -14881,7 +14733,7 @@ end
 return table.freeze(Runtime)</string>
             </Properties>
           </Item>
-          <Item class="ModuleScript" referent="49">
+          <Item class="ModuleScript" referent="45">
             <Properties>
               <string name="Name">Sets</string>
               <string name="Source">local Sets = {
@@ -16687,7 +16539,7 @@ return Sets</string>
             </Properties>
           </Item>
         </Item>
-        <Item class="ModuleScript" referent="50">
+        <Item class="ModuleScript" referent="46">
           <Properties>
             <string name="Name">DayNightCycleConfig</string>
             <string name="Source">local DayNightCycleConfig = {}
@@ -16967,7 +16819,7 @@ end
 return table.freeze(DayNightCycleConfig)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="51">
+        <Item class="ModuleScript" referent="47">
           <Properties>
             <string name="Name">DialogueDefinitions</string>
             <string name="Source">export type DialogueAction = {
@@ -17089,7 +16941,7 @@ end
 return table.freeze(DialogueDefinitions)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="52">
+        <Item class="ModuleScript" referent="48">
           <Properties>
             <string name="Name">MerchantShopConfig</string>
             <string name="Source">local MerchantShopConfig = {}
@@ -17143,7 +16995,7 @@ end
 return table.freeze(MerchantShopConfig)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="53">
+        <Item class="ModuleScript" referent="49">
           <Properties>
             <string name="Name">MutationConfig</string>
             <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -17162,37 +17014,37 @@ local ORDERED: { MutationEntry } = {
 	{
 		id = "none",
 		displayName = "None",
-		weight = 88,
+		weight = 72,
 		multiplier = 1.0,
 		color = Color3.fromRGB(170, 170, 170),
 	},
 	{
-		id = "diamond",
-		displayName = "Diamond",
-		weight = 6,
-		multiplier = 1.5,
-		color = Color3.fromRGB(94, 234, 255),
-	},
-	{
 		id = "magma",
 		displayName = "Magma",
-		weight = 4,
-		multiplier = 2.0,
+		weight = 18,
+		multiplier = 1.12,
 		color = Color3.fromRGB(255, 122, 54),
-	},
-	{
-		id = "corrupted",
-		displayName = "Corrupted",
-		weight = 1.5,
-		multiplier = 3.0,
-		color = Color3.fromRGB(214, 46, 113),
 	},
 	{
 		id = "prismatic",
 		displayName = "Prismatic",
-		weight = 0.5,
-		multiplier = 5.0,
+		weight = 7,
+		multiplier = 1.28,
 		color = Color3.fromRGB(180, 98, 255),
+	},
+	{
+		id = "corrupted",
+		displayName = "Corrupted",
+		weight = 2.4,
+		multiplier = 1.48,
+		color = Color3.fromRGB(214, 46, 113),
+	},
+	{
+		id = "diamond",
+		displayName = "Diamond",
+		weight = 0.6,
+		multiplier = 1.75,
+		color = Color3.fromRGB(94, 234, 255),
 	},
 }
 
@@ -17349,7 +17201,7 @@ end
 return table.freeze(MutationConfig)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="54">
+        <Item class="ModuleScript" referent="50">
           <Properties>
             <string name="Name">MutationCovers</string>
             <string name="Source">local MutationCovers = {
@@ -17362,7 +17214,7 @@ return table.freeze(MutationConfig)</string>
 return table.freeze(MutationCovers)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="55">
+        <Item class="ModuleScript" referent="51">
           <Properties>
             <string name="Name">PotionConfig</string>
             <string name="Source">local PotionConfig = {}
@@ -17412,7 +17264,7 @@ local ENTRIES: { PotionConfigEntry } = {
 local entriesById: { [string]: PotionConfigEntry } = {}
 
 for _, entry in ipairs(ENTRIES) do
-	entriesById[string.lower(entry.id)] = table.freeze(entry)
+	entriesById[entry.id] = table.freeze(entry)
 end
 
 local function normalizeId(potionId: any): string?
@@ -17425,8 +17277,7 @@ local function normalizeId(potionId: any): string?
 		return nil
 	end
 
-	local normalizedId = string.lower(trimmed)
-	return if entriesById[normalizedId] then normalizedId else nil
+	return if entriesById[trimmed] then trimmed else nil
 end
 
 function PotionConfig.NormalizeId(potionId: any): string?
@@ -17458,7 +17309,7 @@ end
 return table.freeze(PotionConfig)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="56">
+        <Item class="ModuleScript" referent="52">
           <Properties>
             <string name="Name">RollTypes</string>
             <string name="Source">export type RollTypeConfig = {
@@ -17566,7 +17417,7 @@ end
 return table.freeze(RollTypes)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="57">
+        <Item class="ModuleScript" referent="53">
           <Properties>
             <string name="Name">RollingConfig</string>
             <string name="Source">local RollingConfig = {
@@ -17662,7 +17513,7 @@ end
 return table.freeze(RollingConfig)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="58">
+        <Item class="ModuleScript" referent="54">
           <Properties>
             <string name="Name">SizeConfig</string>
             <string name="Source">local SizeConfig = {}
@@ -17891,7 +17742,7 @@ end
 return table.freeze(SizeConfig)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="59">
+        <Item class="ModuleScript" referent="55">
           <Properties>
             <string name="Name">SizeIcons</string>
             <string name="Source">local function createStyle(
@@ -17962,7 +17813,7 @@ local SizeIcons = {
 return table.freeze(SizeIcons)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="60">
+        <Item class="ModuleScript" referent="56">
           <Properties>
             <string name="Name">TitleConfig</string>
             <string name="Source">export type TitleConfigEntry = {
@@ -18148,11 +17999,11 @@ return table.freeze(TitleConfig)</string>
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="61">
+      <Item class="Folder" referent="57">
         <Properties>
           <string name="Name">Diagnostics</string>
         </Properties>
-        <Item class="ModuleScript" referent="62">
+        <Item class="ModuleScript" referent="58">
           <Properties>
             <string name="Name">PerfStats</string>
             <string name="Source">local HttpService = game:GetService("HttpService")
@@ -18307,11 +18158,11 @@ return table.freeze(PerfStats)</string>
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="63">
+      <Item class="Folder" referent="59">
         <Properties>
           <string name="Name">Effects</string>
         </Properties>
-        <Item class="ModuleScript" referent="64">
+        <Item class="ModuleScript" referent="60">
           <Properties>
             <string name="Name">ApplyVariant</string>
             <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -18419,11 +18270,11 @@ return ApplyVariant</string>
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="65">
+      <Item class="Folder" referent="61">
         <Properties>
           <string name="Name">Formatting</string>
         </Properties>
-        <Item class="ModuleScript" referent="66">
+        <Item class="ModuleScript" referent="62">
           <Properties>
             <string name="Name">NumberFormatter</string>
             <string name="Source">local NumberFormatter = {}
@@ -18480,11 +18331,11 @@ return NumberFormatter</string>
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="67">
+      <Item class="Folder" referent="63">
         <Properties>
           <string name="Name">Marketplace</string>
         </Properties>
-        <Item class="ModuleScript" referent="68">
+        <Item class="ModuleScript" referent="64">
           <Properties>
             <string name="Name">State</string>
             <string name="Source">local MarketplaceState = {}
@@ -18751,11 +18602,11 @@ return MarketplaceState</string>
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="69">
+      <Item class="Folder" referent="65">
         <Properties>
           <string name="Name">Premium</string>
         </Properties>
-        <Item class="ModuleScript" referent="70">
+        <Item class="ModuleScript" referent="66">
           <Properties>
             <string name="Name">PremiumBenefits</string>
             <string name="Source">local PremiumBenefits = {}
@@ -18849,11 +18700,11 @@ return table.freeze(PremiumBenefits)</string>
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="71">
+      <Item class="Folder" referent="67">
         <Properties>
           <string name="Name">Rolling</string>
         </Properties>
-        <Item class="ModuleScript" referent="72">
+        <Item class="ModuleScript" referent="68">
           <Properties>
             <string name="Name">RollMath</string>
             <string name="Source">local RollMath = {}
@@ -18970,11 +18821,11 @@ return table.freeze(RollMath)</string>
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="73">
+      <Item class="Folder" referent="69">
         <Properties>
           <string name="Name">Stats</string>
         </Properties>
-        <Item class="ModuleScript" referent="74">
+        <Item class="ModuleScript" referent="70">
           <Properties>
             <string name="Name">PlayerStats</string>
             <string name="Source">local BodyPartCollection = require(script.Parent.Parent.Character.BodyPartCollection)
@@ -18994,7 +18845,6 @@ PlayerStats.EARNED_MONEY_SOURCES = {
 
 PlayerStats.SPENT_MONEY_SOURCES = {
 	roll_cost = true,
-	appraisal_cost = true,
 	admin = true,
 	other = true,
 }
@@ -19434,11 +19284,11 @@ return PlayerStats</string>
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="75">
+      <Item class="Folder" referent="71">
         <Properties>
           <string name="Name">Titles</string>
         </Properties>
-        <Item class="ModuleScript" referent="76">
+        <Item class="ModuleScript" referent="72">
           <Properties>
             <string name="Name">AchievementState</string>
             <string name="Source">local AchievementState = {}
@@ -19508,7 +19358,7 @@ end
 return table.freeze(AchievementState)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="77">
+        <Item class="ModuleScript" referent="73">
           <Properties>
             <string name="Name">TitleUtil</string>
             <string name="Source">local AchievementState = require(script.Parent.AchievementState)
@@ -19648,11 +19498,11 @@ return table.freeze(TitleUtil)</string>
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="78">
+      <Item class="Folder" referent="74">
         <Properties>
           <string name="Name">UI</string>
         </Properties>
-        <Item class="ModuleScript" referent="79">
+        <Item class="ModuleScript" referent="75">
           <Properties>
             <string name="Name">AdminPanelDefinitions</string>
             <string name="Source">local AdminPanelDefinitions = {}
@@ -19672,11 +19522,6 @@ AdminPanelDefinitions.Tabs = {
 						id = "test_dialogue",
 						title = "Test Dialogue",
 						description = "Launch the sample merchant dialogue locally so the dialogue tree and shop handoff can be verified from the admin panel.",
-					},
-					{
-						id = "show_appraiser",
-						title = "Show Appraiser",
-						description = "Force the appraiser to appear immediately so the appraisal flow can be tested on demand.",
 					},
 					{
 						id = "refresh_server_state",
@@ -19932,7 +19777,7 @@ end
 return AdminPanelDefinitions</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="80">
+        <Item class="ModuleScript" referent="76">
           <Properties>
             <string name="Name">AuraPresentation</string>
             <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -20122,7 +19967,7 @@ end
 return table.freeze(AuraPresentation)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="81">
+        <Item class="ModuleScript" referent="77">
           <Properties>
             <string name="Name">BodyPartPresentation</string>
             <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -20830,7 +20675,7 @@ end
 return table.freeze(BodyPartPresentation)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="82">
+        <Item class="ModuleScript" referent="78">
           <Properties>
             <string name="Name">Notify</string>
             <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -20956,7 +20801,7 @@ end
 return Notify</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="83">
+        <Item class="ModuleScript" referent="79">
           <Properties>
             <string name="Name">PlayerStatsPresentation</string>
             <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -21271,7 +21116,7 @@ end
 return PlayerStatsPresentation</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="84">
+        <Item class="ModuleScript" referent="80">
           <Properties>
             <string name="Name">PotionPresentation</string>
             <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -21427,7 +21272,7 @@ end
 return table.freeze(PotionPresentation)</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="85">
+        <Item class="ModuleScript" referent="81">
           <Properties>
             <string name="Name">ScreenDarkener</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -21660,7 +21505,7 @@ end
 return ScreenDarkener</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="86">
+        <Item class="ModuleScript" referent="82">
           <Properties>
             <string name="Name">TutorialTextGui</string>
             <string name="Source">local TweenService = game:GetService("TweenService")
@@ -21756,19 +21601,13 @@ end
 return TutorialTextGui</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="87">
+        <Item class="ModuleScript" referent="83">
           <Properties>
             <string name="Name">ViewportModelRenderer</string>
             <string name="Source">local ViewportModelRenderer = {}
 
 local MINIMUM_EXTENT = 2
 local DEFAULT_FIELD_OF_VIEW = 35
-local POTION_MARGIN_SCALE = 1.5
-local POTION_FOCUS_Y_SCALE = -0.02
-local POTION_SIDE_OFFSET_SCALE = 0.18
-local POTION_HEIGHT_OFFSET_SCALE = 0.08
-local POTION_BACKDROP_TRANSPARENCY = 0.45
-local POTION_BACKDROP_COLOR = Color3.fromRGB(42, 42, 42)
 local DIALOGUE_PORTRAIT_MIN_HEIGHT = 2.6
 local DIALOGUE_PORTRAIT_MARGIN_SCALE = 1.08
 local VIEWPORT_AMBIENT = Color3.fromRGB(255, 255, 255)
@@ -21895,76 +21734,6 @@ local function getBundleCameraCFrame(previewModel: Model, framingPreviewModel: M
 		boundingBoxCFrame.Position + Vector3.new(extent * 0.65, extent * 0.2, extent * 1.85),
 		boundingBoxCFrame.Position
 	)
-end
-
-local function getPreviewFrontVector(previewModel: Model): Vector3
-	local lookVector = Vector3.new(previewModel:GetPivot().LookVector.X, 0, previewModel:GetPivot().LookVector.Z)
-	if lookVector.Magnitude > 0.001 then
-		return lookVector.Unit
-	end
-
-	return Vector3.new(0, 0, -1)
-end
-
-local function getPotionCameraCFrame(viewportFrame: ViewportFrame, previewModel: Model): CFrame
-	local boundingBoxCFrame, boundingBoxSize = previewModel:GetBoundingBox()
-	local focusPoint = boundingBoxCFrame.Position + Vector3.new(0, boundingBoxSize.Y * POTION_FOCUS_Y_SCALE, 0)
-	local frontVector = getPreviewFrontVector(previewModel)
-	local rightVector = Vector3.yAxis:Cross(frontVector)
-	if rightVector.Magnitude &lt;= 0.001 then
-		rightVector = Vector3.xAxis
-	else
-		rightVector = rightVector.Unit
-	end
-	local verticalHalfExtent = math.max(boundingBoxSize.Y * 0.5, MINIMUM_EXTENT * 0.5) * POTION_MARGIN_SCALE
-	local viewportSize = viewportFrame.AbsoluteSize
-	local aspectRatio = if viewportSize.Y > 0 then viewportSize.X / viewportSize.Y else 1
-	local verticalFov = math.rad(DEFAULT_FIELD_OF_VIEW)
-	local horizontalFov = 2 * math.atan(math.tan(verticalFov * 0.5) * math.max(aspectRatio, 0.01))
-	local horizontalHalfExtent = math.max(boundingBoxSize.X, boundingBoxSize.Z, MINIMUM_EXTENT) * 0.5 * POTION_MARGIN_SCALE
-	local verticalDistance = verticalHalfExtent / math.tan(verticalFov * 0.5)
-	local horizontalDistance = horizontalHalfExtent / math.tan(horizontalFov * 0.5)
-	local distance = math.max(verticalDistance, horizontalDistance)
-	local cameraPosition = focusPoint
-		+ frontVector * distance
-		+ rightVector * (distance * POTION_SIDE_OFFSET_SCALE)
-		+ Vector3.yAxis * (distance * POTION_HEIGHT_OFFSET_SCALE)
-
-	return CFrame.lookAt(cameraPosition, focusPoint, Vector3.yAxis)
-end
-
-local function optimizePotionPreview(previewModel: Model)
-	for _, descendant in ipairs(previewModel:GetDescendants()) do
-		if descendant:IsA("BasePart") and descendant.Transparency > 0 and descendant.Transparency &lt; 1 then
-			descendant.Transparency = math.min(descendant.Transparency, 0.28)
-		end
-	end
-end
-
-local function addPotionBackdrop(worldModel: WorldModel, previewModel: Model, cameraCFrame: CFrame)
-	local boundingBoxCFrame, boundingBoxSize = previewModel:GetBoundingBox()
-	local viewDirection = cameraCFrame.LookVector
-	local backdrop = Instance.new("Part")
-	backdrop.Name = "PotionBackdrop"
-	backdrop.Anchored = true
-	backdrop.CanCollide = false
-	backdrop.CanQuery = false
-	backdrop.CanTouch = false
-	backdrop.CastShadow = false
-	backdrop.Material = Enum.Material.SmoothPlastic
-	backdrop.Color = POTION_BACKDROP_COLOR
-	backdrop.Transparency = POTION_BACKDROP_TRANSPARENCY
-	backdrop.Size = Vector3.new(
-		math.max(boundingBoxSize.X, boundingBoxSize.Z) * 1.3,
-		boundingBoxSize.Y * 1.15,
-		0.05
-	)
-	backdrop.CFrame = CFrame.lookAt(
-		boundingBoxCFrame.Position - viewDirection * (math.max(boundingBoxSize.X, boundingBoxSize.Z) * 0.9),
-		cameraCFrame.Position,
-		Vector3.yAxis
-	)
-	backdrop.Parent = worldModel
 end
 
 local function createRollPreviewSession(viewportFrame: ViewportFrame, sessionToken: any)
@@ -22165,7 +21934,6 @@ local function renderDialoguePortrait(viewportFrame: ViewportFrame, sourceModel:
 		return false
 	end
 
-	optimizePotionPreview(previewModel)
 	previewModel.Parent = worldModel
 
 	local head = previewModel:FindFirstChild("Head", true)
@@ -22189,53 +21957,6 @@ local function renderDialoguePortrait(viewportFrame: ViewportFrame, sourceModel:
 	viewportFrame.Ambient = VIEWPORT_AMBIENT
 	viewportFrame.LightColor = VIEWPORT_LIGHT_COLOR
 	viewportFrame.LightDirection = VIEWPORT_LIGHT_DIRECTION
-	viewportFrame:SetAttribute(CACHE_KEY_ATTRIBUTE, cacheKey)
-
-	return true
-end
-
-local function renderPotion(viewportFrame: ViewportFrame, sourceModel: Model?): boolean
-	if not (viewportFrame and viewportFrame:IsA("ViewportFrame")) then
-		return false
-	end
-	if not (sourceModel and sourceModel:IsA("Model")) then
-		clearViewport(viewportFrame)
-		return false
-	end
-
-	local cacheKey = table.concat({
-		"potion",
-		getModelCacheToken(sourceModel),
-	}, "|")
-	if viewportFrame:GetAttribute(CACHE_KEY_ATTRIBUTE) == cacheKey
-		and viewportFrame.CurrentCamera ~= nil
-		and viewportFrame:FindFirstChild("PreviewWorld") ~= nil
-	then
-		return true
-	end
-
-	clearViewport(viewportFrame)
-
-	local worldModel = Instance.new("WorldModel")
-	worldModel.Name = "PreviewWorld"
-	worldModel.Parent = viewportFrame
-
-	local previewModel = createPreviewClone(sourceModel, "PotionPreviewModel")
-	if not previewModel then
-		worldModel:Destroy()
-		return false
-	end
-
-	previewModel.Parent = worldModel
-
-	local camera = Instance.new("Camera")
-	camera.Name = "PreviewCamera"
-	camera.FieldOfView = DEFAULT_FIELD_OF_VIEW
-	camera.Parent = viewportFrame
-	camera.CFrame = getPotionCameraCFrame(viewportFrame, previewModel)
-	addPotionBackdrop(worldModel, previewModel, camera.CFrame)
-
-	applyViewportLighting(viewportFrame, camera)
 	viewportFrame:SetAttribute(CACHE_KEY_ATTRIBUTE, cacheKey)
 
 	return true
@@ -22303,10 +22024,6 @@ function ViewportModelRenderer.RenderBundle(viewportFrame: ViewportFrame, bundle
 	return renderModel(viewportFrame, bundleModel, nil)
 end
 
-function ViewportModelRenderer.RenderPotion(viewportFrame: ViewportFrame, potionModel: Model?): boolean
-	return renderPotion(viewportFrame, potionModel)
-end
-
 function ViewportModelRenderer.RenderCharacterModel(viewportFrame: ViewportFrame, characterModel: Model?, framingModel: Model?): boolean
 	return renderModel(viewportFrame, characterModel, framingModel)
 end
@@ -22325,35 +22042,35 @@ return table.freeze(ViewportModelRenderer)</string>
       </Item>
     </Item>
   </Item>
-  <Item class="ServerScriptService" referent="88">
+  <Item class="ServerScriptService" referent="84">
     <Properties>
       <string name="Name">ServerScriptService</string>
     </Properties>
-    <Item class="Folder" referent="89">
+    <Item class="Folder" referent="85">
       <Properties>
         <string name="Name">Packages</string>
       </Properties>
-      <Item class="ModuleScript" referent="90">
+      <Item class="ModuleScript" referent="86">
         <Properties>
           <string name="Name">ProfileService</string>
           <string name="Source">return require(script.Parent._Index["etheroit_profileservice@1.2.0"]["profileservice"])</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="91">
+      <Item class="ModuleScript" referent="87">
         <Properties>
           <string name="Name">ReplicaService</string>
           <string name="Source">return require(script.Parent._Index["etheroit_replicaservice@1.0.2"]["replicaservice"])</string>
         </Properties>
       </Item>
-      <Item class="Folder" referent="92">
+      <Item class="Folder" referent="88">
         <Properties>
           <string name="Name">_Index</string>
         </Properties>
-        <Item class="Folder" referent="93">
+        <Item class="Folder" referent="89">
           <Properties>
             <string name="Name">etheroit_profileservice@1.2.0</string>
           </Properties>
-          <Item class="ModuleScript" referent="94">
+          <Item class="ModuleScript" referent="90">
             <Properties>
               <string name="Name">profileservice</string>
               <string name="Source">-- local Madwork = _G.Madwork
@@ -24773,11 +24490,11 @@ return ProfileService</string>
             </Properties>
           </Item>
         </Item>
-        <Item class="Folder" referent="95">
+        <Item class="Folder" referent="91">
           <Properties>
             <string name="Name">etheroit_replicaservice@1.0.2</string>
           </Properties>
-          <Item class="ModuleScript" referent="96">
+          <Item class="ModuleScript" referent="92">
             <Properties>
               <string name="Name">replicaservice</string>
               <string name="Source">-- local Madwork = _G.Madwork
@@ -25841,11 +25558,11 @@ end)
 
 return ReplicaService</string>
             </Properties>
-            <Item class="Folder" referent="97">
+            <Item class="Folder" referent="93">
               <Properties>
                 <string name="Name">Experimental</string>
               </Properties>
-              <Item class="ModuleScript" referent="98">
+              <Item class="ModuleScript" referent="94">
                 <Properties>
                   <string name="Name">ReplicaServiceListeners</string>
                   <string name="Source">--[[
@@ -26315,7 +26032,7 @@ return ReplicaService</string>
                 </Properties>
               </Item>
             </Item>
-            <Item class="ModuleScript" referent="99">
+            <Item class="ModuleScript" referent="95">
               <Properties>
                 <string name="Name">MadworkMaid</string>
                 <string name="Source">--[[
@@ -26470,7 +26187,7 @@ MadworkMaid.Cleanup = PerformCleanupTask
 return MadworkMaid</string>
               </Properties>
             </Item>
-            <Item class="ModuleScript" referent="100">
+            <Item class="ModuleScript" referent="96">
               <Properties>
                 <string name="Name">MadworkScriptSignal</string>
                 <string name="Source">--[[
@@ -26709,7 +26426,7 @@ end
 return MadworkScriptSignal</string>
               </Properties>
             </Item>
-            <Item class="ModuleScript" referent="101">
+            <Item class="ModuleScript" referent="97">
               <Properties>
                 <string name="Name">RateLimiter</string>
                 <string name="Source">--[[
@@ -26852,11 +26569,11 @@ return RateLimiter</string>
         </Item>
       </Item>
     </Item>
-    <Item class="Folder" referent="102">
+    <Item class="Folder" referent="98">
       <Properties>
         <string name="Name">Services</string>
       </Properties>
-      <Item class="ModuleScript" referent="103">
+      <Item class="ModuleScript" referent="99">
         <Properties>
           <string name="Name">AchievementService</string>
           <string name="Source">local Players = game:GetService("Players")
@@ -27135,7 +26852,7 @@ end
 return AchievementService</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="104">
+      <Item class="ModuleScript" referent="100">
         <Properties>
           <string name="Name">AdminConfig</string>
           <string name="Source">local AdminConfig = {
@@ -27149,7 +26866,7 @@ return AchievementService</string>
 return AdminConfig</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="105">
+      <Item class="ModuleScript" referent="101">
         <Properties>
           <string name="Name">AdminService</string>
           <string name="Source">local Players = game:GetService("Players")
@@ -27157,7 +26874,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local AdminConfig = require(script.Parent.AdminConfig)
-local AppraisalService = require(script.Parent.AppraisalService)
 local AuraService = require(script.Parent.AuraService)
 local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
@@ -27509,13 +27225,6 @@ local function handleTestDialogue()
 	})
 end
 
-local function handleShowAppraiser()
-	local appraisalState = AppraisalService:ForceAppear()
-	return response(true, "OK", "The appraiser has been forced onto the map.", {
-		appraisalState = appraisalState,
-	})
-end
-
 local function handleGetRuntimeState(player: Player)
 	return response(true, "OK", "Loaded body part runtime state.", BodyPartService:GetClientState(player))
 end
@@ -27754,10 +27463,6 @@ function AdminService:HandleAction(player: Player, request: any)
 		return handleTestDialogue()
 	end
 
-	if tabId == "overview" and actionId == "show_appraiser" then
-		return handleShowAppraiser()
-	end
-
 	if tabId == PLAYERS_TAB_ID and actionId == "inspect_player_profile" then
 		return handleInspectPlayerProfile(payload or {})
 	end
@@ -27854,426 +27559,7 @@ end
 return AdminService</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="106">
-        <Properties>
-          <string name="Name">AppraisalService</string>
-          <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local ServerStorage = game:GetService("ServerStorage")
-local Workspace = game:GetService("Workspace")
-
-local AppraisalPricing = require(ReplicatedStorage.Shared.Character.AppraisalPricing)
-local AppraisalState = require(ReplicatedStorage.Shared.Character.AppraisalState)
-local BodyPartEconomy = require(ReplicatedStorage.Shared.Character.BodyPartEconomy)
-local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
-local AppraisalConfig = require(ReplicatedStorage.Shared.Config.AppraisalConfig)
-local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
-local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
-local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
-local RollMath = require(ReplicatedStorage.Shared.Rolling.RollMath)
-local BodyPartService = require(script.Parent.BodyPartService)
-local DataService = require(script.Parent.DataService)
-
-local REMOTES_FOLDER_NAME = "Remotes"
-local APPRAISAL_FOLDER_NAME = "Appraisal"
-local GET_STATE_REMOTE_NAME = "GetState"
-local PERFORM_APPRAISAL_REMOTE_NAME = "PerformAppraisal"
-local UPDATED_REMOTE_NAME = "Updated"
-local PARKING_FOLDER_NAME = "AppraisalNpcParking"
-local APPRAISER_MODEL_NAME = "Appraiser"
-
-local remotesFolder: Folder? = nil
-local appraisalFolder: Folder? = nil
-local getStateRemote: RemoteFunction? = nil
-local performAppraisalRemote: RemoteFunction? = nil
-local updatedRemote: RemoteEvent? = nil
-
-local AppraisalService = {
-	_started = false,
-	_state = AppraisalState.CreateEmptyState(),
-	_cycleId = -1,
-	_stockRemaining = AppraisalConfig.stockPerSpawn,
-	_forcedActiveUntil = 0,
-	_appraiserModel = nil :: Model?,
-	_workspaceParent = nil :: Instance?,
-}
-
-local function response(ok: boolean, message: string, appraisalState: any?, appraisalResult: any?, code: string?)
-	return {
-		ok = ok,
-		message = message,
-		code = code,
-		appraisalState = AppraisalState.CloneState(appraisalState),
-		appraisalResult = appraisalResult,
-	}
-end
-
-local function ensureRemotesFolder(): Folder
-	if remotesFolder and remotesFolder.Parent == ReplicatedStorage then
-		return remotesFolder
-	end
-
-	local existing = ReplicatedStorage:FindFirstChild(REMOTES_FOLDER_NAME)
-	if existing and existing:IsA("Folder") then
-		remotesFolder = existing
-		return existing
-	end
-	if existing then
-		existing:Destroy()
-	end
-
-	local folder = Instance.new("Folder")
-	folder.Name = REMOTES_FOLDER_NAME
-	folder.Parent = ReplicatedStorage
-	remotesFolder = folder
-	return folder
-end
-
-local function ensureAppraisalFolder(): Folder
-	local rootFolder = ensureRemotesFolder()
-	if appraisalFolder and appraisalFolder.Parent == rootFolder then
-		return appraisalFolder
-	end
-
-	local existing = rootFolder:FindFirstChild(APPRAISAL_FOLDER_NAME)
-	if existing and existing:IsA("Folder") then
-		appraisalFolder = existing
-		return existing
-	end
-	if existing then
-		existing:Destroy()
-	end
-
-	local folder = Instance.new("Folder")
-	folder.Name = APPRAISAL_FOLDER_NAME
-	folder.Parent = rootFolder
-	appraisalFolder = folder
-	return folder
-end
-
-local function ensureRemoteFunction(cachedRemote: RemoteFunction?, remoteName: string): RemoteFunction
-	local folder = ensureAppraisalFolder()
-	if cachedRemote and cachedRemote.Parent == folder then
-		return cachedRemote
-	end
-
-	local existing = folder:FindFirstChild(remoteName)
-	if existing and existing:IsA("RemoteFunction") then
-		return existing
-	end
-	if existing then
-		existing:Destroy()
-	end
-
-	local remote = Instance.new("RemoteFunction")
-	remote.Name = remoteName
-	remote.Parent = folder
-	return remote
-end
-
-local function ensureUpdatedRemote(): RemoteEvent
-	local folder = ensureAppraisalFolder()
-	if updatedRemote and updatedRemote.Parent == folder then
-		return updatedRemote
-	end
-
-	local existing = folder:FindFirstChild(UPDATED_REMOTE_NAME)
-	if existing and existing:IsA("RemoteEvent") then
-		updatedRemote = existing
-		return existing
-	end
-	if existing then
-		existing:Destroy()
-	end
-
-	local remote = Instance.new("RemoteEvent")
-	remote.Name = UPDATED_REMOTE_NAME
-	remote.Parent = folder
-	updatedRemote = remote
-	return remote
-end
-
-local function ensureParkingFolder(): Folder
-	local existing = ServerStorage:FindFirstChild(PARKING_FOLDER_NAME)
-	if existing and existing:IsA("Folder") then
-		return existing
-	end
-	if existing then
-		existing:Destroy()
-	end
-
-	local folder = Instance.new("Folder")
-	folder.Name = PARKING_FOLDER_NAME
-	folder.Parent = ServerStorage
-	return folder
-end
-
-local function chooseWeightedEntry(randomSource: Random, entries: { any })
-	return RollMath.ChooseWeighted(randomSource, entries, function(entry)
-		return entry.weight
-	end)
-end
-
-local function buildCycleState(now: number, stockRemaining: number, forcedActiveUntil: number?)
-	local cycleInterval = AppraisalConfig.cycleIntervalSeconds
-	local activeDuration = AppraisalConfig.activeDurationSeconds
-	local cycleId = math.floor(now / cycleInterval)
-	local cycleStartsAt = cycleId * cycleInterval
-	local departsAt = cycleStartsAt + activeDuration
-	local forcedDeparture = math.max(0, math.floor(tonumber(forcedActiveUntil) or 0))
-	local isForcedActive = forcedDeparture > now
-	local resolvedDepartsAt = if isForcedActive then math.max(departsAt, forcedDeparture) else departsAt
-
-	return {
-		cycleId = cycleId,
-		isActive = isForcedActive or now &lt; departsAt,
-		stockRemaining = math.clamp(math.floor(tonumber(stockRemaining) or 0), 0, AppraisalConfig.stockPerSpawn),
-		stockPerSpawn = AppraisalConfig.stockPerSpawn,
-		departsAt = resolvedDepartsAt,
-		nextAppearsAt = (cycleId + 1) * cycleInterval,
-	}
-end
-
-local function buildAppraisalSnapshot(record: any, piece: any)
-	return {
-		mutationId = MutationConfig.NormalizeId(record and record.mutationId),
-		mutationDisplayName = MutationConfig.GetDisplayName(record and record.mutationId),
-		sizeId = SizeConfig.NormalizeId(record and record.sizeId),
-		sizeScale = SizeConfig.NormalizeScale(record and record.sizeMultiplier, record and record.sizeId),
-		sellValue = BodyPartEconomy.GetSellValue(record, piece),
-	}
-end
-
-function AppraisalService:_ensureNpcResolved()
-	if self._appraiserModel and self._appraiserModel.Parent then
-		return
-	end
-
-	local parkingFolder = ensureParkingFolder()
-	local workspaceModel = Workspace:FindFirstChild(APPRAISER_MODEL_NAME)
-	local parkedModel = parkingFolder:FindFirstChild(APPRAISER_MODEL_NAME)
-	local model = nil
-
-	if workspaceModel and workspaceModel:IsA("Model") then
-		model = workspaceModel
-		self._workspaceParent = workspaceModel.Parent
-	elseif parkedModel and parkedModel:IsA("Model") then
-		model = parkedModel
-	end
-
-	if not self._workspaceParent then
-		self._workspaceParent = Workspace
-	end
-
-	self._appraiserModel = model
-end
-
-function AppraisalService:_setNpcActive(isActive: boolean)
-	self:_ensureNpcResolved()
-
-	local appraiserModel = self._appraiserModel
-	if not (appraiserModel and appraiserModel.Parent) then
-		return
-	end
-
-	if isActive then
-		local targetParent = self._workspaceParent or Workspace
-		if appraiserModel.Parent ~= targetParent then
-			appraiserModel.Parent = targetParent
-		end
-		return
-	end
-
-	local parkingFolder = ensureParkingFolder()
-	if appraiserModel.Parent ~= parkingFolder then
-		appraiserModel.Parent = parkingFolder
-	end
-end
-
-function AppraisalService:_broadcastState()
-	ensureUpdatedRemote():FireAllClients(AppraisalState.CloneState(self._state))
-end
-
-function AppraisalService:_reconcileState(shouldBroadcast: boolean?): any
-	self:_ensureNpcResolved()
-
-	local now = Workspace:GetServerTimeNow()
-	if self._forcedActiveUntil > 0 and now >= self._forcedActiveUntil then
-		self._forcedActiveUntil = 0
-	end
-
-	local nextCycleId = math.floor(now / AppraisalConfig.cycleIntervalSeconds)
-	if self._cycleId ~= nextCycleId then
-		self._cycleId = nextCycleId
-		self._stockRemaining = AppraisalConfig.stockPerSpawn
-	end
-
-	local nextState = AppraisalState.CloneState(buildCycleState(now, self._stockRemaining, self._forcedActiveUntil))
-	local changed = not AppraisalState.AreEqual(self._state, nextState)
-	self._state = nextState
-	self:_setNpcActive(nextState.isActive)
-
-	if changed and shouldBroadcast ~= false then
-		self:_broadcastState()
-	end
-
-	return self._state
-end
-
-function AppraisalService:ForceAppear(durationSeconds: number?)
-	local now = Workspace:GetServerTimeNow()
-	local resolvedDuration = math.max(1, math.floor(tonumber(durationSeconds) or AppraisalConfig.activeDurationSeconds))
-	self._forcedActiveUntil = math.max(self._forcedActiveUntil or 0, now + resolvedDuration)
-	return self:_reconcileState(true)
-end
-
-function AppraisalService:GetState(_player: Player)
-	return response(true, "Loaded appraisal state.", self:_reconcileState(false))
-end
-
-function AppraisalService:PerformAppraisal(player: Player, payload: any)
-	local state = self:_reconcileState(false)
-	if not state.isActive then
-		return response(false, "The appraiser is unavailable right now.", state)
-	end
-	if state.stockRemaining &lt;= 0 then
-		return response(false, "The appraiser is out of service stock.", state)
-	end
-	if typeof(payload) ~= "table" then
-		return response(false, "Appraisal payload must be a table.", state)
-	end
-
-	local region = payload.region
-	if typeof(region) ~= "string" or not BodyPartRegions.IsValid(region) then
-		return response(false, "A valid region is required.", state)
-	end
-
-	local ownedId = payload.ownedId
-	if typeof(ownedId) ~= "string" or ownedId == "" then
-		return response(false, "ownedId is required.", state)
-	end
-
-	local equippedState = BodyPartService:GetSessionLoadout(player)
-	local equippedEntry = equippedState[region]
-	if not equippedEntry then
-		return response(false, "There is no equipped body part in that slot.", state)
-	end
-	if equippedEntry.ownedId ~= ownedId then
-		return response(false, "That equipped body part changed. Select it again before appraising.", state)
-	end
-
-	local ownedRecord = DataService:GetOwnedBodyParts(player)[ownedId]
-	if not ownedRecord then
-		return response(false, "You do not own that body part anymore.", state)
-	end
-
-	local piece = BodyPartsCatalog.GetPiece(ownedRecord.pieceId)
-	if not piece then
-		return response(false, "That body part is no longer configured.", state)
-	end
-
-	local appraisalCost = AppraisalPricing.GetCost(ownedRecord, piece)
-	local currentMoney = DataService:GetMoney(player)
-	if currentMoney &lt; appraisalCost then
-		return response(
-			false,
-			"You don't have enough money to appraise this body part.",
-			state,
-			nil,
-			"INSUFFICIENT_MONEY"
-		)
-	end
-
-	local previousMoney = currentMoney
-	local updatedMoney = DataService:AddMoney(player, -appraisalCost, "appraisal_cost")
-	if updatedMoney > previousMoney then
-		return response(false, "Could not process the appraisal payment.", state)
-	end
-
-	local previousVariantSnapshot = {
-		mutationId = ownedRecord.mutationId,
-		mutation = ownedRecord.mutation,
-		mutationMultiplier = ownedRecord.mutationMultiplier,
-		sizeId = ownedRecord.sizeId,
-		sizeMultiplier = ownedRecord.sizeMultiplier,
-		variantMultiplier = ownedRecord.variantMultiplier,
-		finalPassiveIncomePerSecond = ownedRecord.finalPassiveIncomePerSecond,
-	}
-
-	local randomSource = Random.new()
-	local mutationRoll = chooseWeightedEntry(randomSource, AppraisalConfig.mutationWeights)
-	local mutationData = MutationConfig.Get(if mutationRoll then mutationRoll.id else nil) or MutationConfig.GetDefault()
-	local sizeRoll = chooseWeightedEntry(randomSource, AppraisalConfig.sizeWeights)
-	local sizeData = SizeConfig.Get(if sizeRoll then sizeRoll.id else nil) or SizeConfig.GetDefault()
-	local sizeScale = SizeConfig.RollScale(randomSource, sizeData)
-	local sizeMoneyMultiplier = SizeConfig.GetMoneyMultiplier(sizeData.id)
-	local variantMultiplier = RollMath.ComputeVariantMultiplier(mutationData.multiplier, sizeMoneyMultiplier)
-	local finalPassiveIncomePerSecond = RollMath.ComputeFinalPassiveIncome(piece.passiveIncomePerSecond, variantMultiplier)
-
-	local updatedRecord, updateError = DataService:UpdateOwnedBodyPartVariant(player, ownedId, {
-		mutationId = mutationData.id,
-		mutation = mutationData.displayName,
-		mutationMultiplier = mutationData.multiplier,
-		sizeId = sizeData.id,
-		sizeMultiplier = sizeScale,
-		variantMultiplier = variantMultiplier,
-		finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
-	})
-	if not updatedRecord then
-		DataService:AddMoney(player, appraisalCost, "other")
-		return response(false, updateError or "The appraisal could not be completed.", state)
-	end
-
-	local refreshed, refreshMessage = BodyPartService:RefreshEquippedOwnedBodyPartVariant(player, ownedId, sizeScale)
-	if not refreshed then
-		DataService:UpdateOwnedBodyPartVariant(player, ownedId, previousVariantSnapshot)
-		DataService:AddMoney(player, appraisalCost, "other")
-		return response(false, refreshMessage or "The body part visuals could not be refreshed.", state)
-	end
-
-	self._stockRemaining = math.max(0, self._stockRemaining - 1)
-	local nextState = self:_reconcileState(true)
-
-	return response(true, "Appraisal complete.", nextState, {
-		ownedId = ownedId,
-		region = region,
-		pieceId = piece.id,
-		before = buildAppraisalSnapshot(ownedRecord, piece),
-		after = buildAppraisalSnapshot(updatedRecord, piece),
-	})
-end
-
-function AppraisalService:OnStart()
-	if self._started then
-		return
-	end
-
-	self._started = true
-	getStateRemote = ensureRemoteFunction(getStateRemote, GET_STATE_REMOTE_NAME)
-	performAppraisalRemote = ensureRemoteFunction(performAppraisalRemote, PERFORM_APPRAISAL_REMOTE_NAME)
-	updatedRemote = ensureUpdatedRemote()
-
-	getStateRemote.OnServerInvoke = function(player: Player)
-		return self:GetState(player)
-	end
-
-	performAppraisalRemote.OnServerInvoke = function(player: Player, payload: any)
-		return self:PerformAppraisal(player, payload)
-	end
-
-	self:_reconcileState(false)
-
-	task.spawn(function()
-		while true do
-			self:_reconcileState(true)
-			task.wait(1)
-		end
-	end)
-end
-
-return AppraisalService</string>
-        </Properties>
-      </Item>
-      <Item class="ModuleScript" referent="107">
+      <Item class="ModuleScript" referent="102">
         <Properties>
           <string name="Name">AuraService</string>
           <string name="Source">local Players = game:GetService("Players")
@@ -28715,7 +28001,7 @@ end
 return AuraService</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="108">
+      <Item class="ModuleScript" referent="103">
         <Properties>
           <string name="Name">BodyPartService</string>
           <string name="Source">local Players = game:GetService("Players")
@@ -28724,7 +28010,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Signal = require(ReplicatedStorage.Common.Signal)
 local BodyPartLoadout = require(ReplicatedStorage.Shared.Character.BodyPartLoadout)
 local BodyPartCollection = require(ReplicatedStorage.Shared.Character.BodyPartCollection)
-local BodyPartEconomy = require(ReplicatedStorage.Shared.Character.BodyPartEconomy)
 local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
 local BodyPartVisuals = require(ReplicatedStorage.Shared.Character.BodyPartVisuals)
@@ -28805,10 +28090,6 @@ local BodyPartService = {}
 BodyPartService.LoadoutChanged = Signal.new()
 local getCharacter
 local waitForCharacterReady
-local rollbackVisualState
-local restoreSessionState
-local rollbackMutationState
-local persistSessionLoadout
 
 export type EquipOptions = {
 	applyVisuals: boolean?,
@@ -29368,7 +28649,10 @@ end
 
 local function getSellValueForRecord(record: OwnedBodyParts.OwnedBodyPartRecord): number
 	local piece = BodyPartsCatalog.GetPiece(record.pieceId)
-	return BodyPartEconomy.GetSellValue(record, piece)
+	local passiveIncomePerSecond = tonumber(record.finalPassiveIncomePerSecond)
+		or tonumber(piece and piece.passiveIncomePerSecond)
+		or 0
+	return math.max(1, math.floor(passiveIncomePerSecond * 60))
 end
 
 local function serializeInspectEntry(entry: BodyPartLoadout.LoadoutEntry, ownedRecord: OwnedBodyParts.OwnedBodyPartRecord?)
@@ -29456,48 +28740,6 @@ end
 
 function BodyPartService:GetSessionLoadout(player: Player): BodyPartLoadout.EquippedState
 	return SessionStore.GetEquipped(player)
-end
-
-function BodyPartService:RefreshEquippedOwnedBodyPartVariant(
-	player: Player,
-	ownedId: string,
-	newScale: number
-): (boolean, string)
-	if typeof(ownedId) ~= "string" or ownedId == "" then
-		return false, "ownedId is required."
-	end
-
-	local previousState = SessionStore.GetEquipped(player)
-	local equippedRegion, equippedEntry = findEquippedEntryForOwnedId(previousState, ownedId)
-	if not equippedRegion or not equippedEntry then
-		return true, "Owned body part variant refreshed."
-	end
-
-	local piece = BodyPartsCatalog.GetPiece(equippedEntry.pieceId)
-	if not piece then
-		return false, string.format("Unknown piece '%s'.", tostring(equippedEntry.pieceId))
-	end
-
-	SessionStore.SetEquipped(player, {
-		ownedId = equippedEntry.ownedId,
-		pieceId = equippedEntry.pieceId,
-		region = equippedEntry.region,
-		scale = BodyPartRuntimeConfig.ClampScale(piece.id, newScale),
-	})
-
-	local success, applyMessage = self:ApplySessionLoadout(player)
-	if not success then
-		rollbackVisualState(player, previousState)
-		return false, applyMessage or "Failed to refresh the equipped body part variant."
-	end
-
-	local persisted, persistMessage = persistSessionLoadout(player, previousState, true)
-	if not persisted then
-		return false, persistMessage or "Failed to save the equipped body part loadout."
-	end
-
-	notifyLoadoutChanged(player)
-	return true, "Owned body part variant refreshed."
 end
 
 function BodyPartService:OwnsFullSet(player: Player, setId: string): boolean
@@ -29714,7 +28956,7 @@ function BodyPartService:EnsureAuraRuntimeCleared(player: Player, reason: string
 	return true, nil
 end
 
-rollbackVisualState = function(player: Player, previousState: BodyPartLoadout.EquippedState)
+local function rollbackVisualState(player: Player, previousState: BodyPartLoadout.EquippedState)
 	SessionStore.Restore(player, previousState)
 
 	local character = getCharacter(player)
@@ -29748,11 +28990,11 @@ rollbackVisualState = function(player: Player, previousState: BodyPartLoadout.Eq
 	end
 end
 
-restoreSessionState = function(player: Player, previousState: BodyPartLoadout.EquippedState)
+local function restoreSessionState(player: Player, previousState: BodyPartLoadout.EquippedState)
 	SessionStore.Restore(player, previousState)
 end
 
-rollbackMutationState = function(player: Player, previousState: BodyPartLoadout.EquippedState, applyVisuals: boolean)
+local function rollbackMutationState(player: Player, previousState: BodyPartLoadout.EquippedState, applyVisuals: boolean)
 	if applyVisuals then
 		rollbackVisualState(player, previousState)
 	else
@@ -29760,7 +29002,7 @@ rollbackMutationState = function(player: Player, previousState: BodyPartLoadout.
 	end
 end
 
-persistSessionLoadout = function(player: Player, previousState: BodyPartLoadout.EquippedState, applyVisuals: boolean): (boolean, string?)
+local function persistSessionLoadout(player: Player, previousState: BodyPartLoadout.EquippedState, applyVisuals: boolean): (boolean, string?)
 	local ok, message = DataService:SetEquippedLoadout(player, SessionStore.GetEquipped(player))
 	if ok then
 		return true, nil
@@ -30271,7 +29513,7 @@ end
 
 return BodyPartService</string>
         </Properties>
-        <Item class="ModuleScript" referent="109">
+        <Item class="ModuleScript" referent="104">
           <Properties>
             <string name="Name">RawCharacterImporter</string>
             <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -31389,7 +30631,7 @@ end
 return RawCharacterImporter</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="110">
+        <Item class="ModuleScript" referent="105">
           <Properties>
             <string name="Name">RawCharacterReconciler</string>
             <string name="Source">local HttpService = game:GetService("HttpService")
@@ -31816,7 +31058,7 @@ end
 return RawCharacterReconciler</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="111">
+        <Item class="ModuleScript" referent="106">
           <Properties>
             <string name="Name">SessionStore</string>
             <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -31873,7 +31115,7 @@ return SessionStore</string>
           </Properties>
         </Item>
       </Item>
-      <Item class="ModuleScript" referent="112">
+      <Item class="ModuleScript" referent="107">
         <Properties>
           <string name="Name">ChatTagService</string>
           <string name="Source">local ChatTagService = {}
@@ -31881,7 +31123,7 @@ return SessionStore</string>
 return ChatTagService</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="113">
+      <Item class="ModuleScript" referent="108">
         <Properties>
           <string name="Name">DataService</string>
           <string name="Source">local Players = game:GetService("Players")
@@ -33136,77 +32378,6 @@ function DataService:SetEquippedLoadout(player: Player, equippedState: BodyPartL
 	return true, "Equipped loadout updated."
 end
 
-function DataService:UpdateOwnedBodyPartVariant(player: Player, ownedId: string, payload: {
-	mutationId: string,
-	mutation: string?,
-	mutationMultiplier: number,
-	sizeId: string,
-	sizeMultiplier: number,
-	variantMultiplier: number,
-	finalPassiveIncomePerSecond: number,
-}): (OwnedBodyParts.OwnedBodyPartRecord?, string?)
-	if not BODY_PARTS_KEY then
-		return nil, "Body parts persistence is not configured."
-	end
-	if not getActiveReplica(player) then
-		return nil, "Player data is not loaded."
-	end
-	if typeof(ownedId) ~= "string" or ownedId == "" then
-		return nil, "ownedId is required."
-	end
-	if typeof(payload) ~= "table" then
-		return nil, "Variant payload must be a table."
-	end
-
-	local bodyPartsState = getReplicaValue(player, BODY_PARTS_KEY)
-	local ownedById = if typeof(bodyPartsState) == "table" then bodyPartsState.ownedById else nil
-	local existingRecord = normalizeOwnedBodyPartRecord(
-		typeof(ownedById) == "table" and ownedById[ownedId] or nil,
-		ownedId
-	)
-	if not existingRecord then
-		return nil, string.format("Owned body part '%s' was not found.", ownedId)
-	end
-
-	local updatedRecord = normalizeOwnedBodyPartRecord({
-		ownedId = existingRecord.ownedId,
-		pieceId = existingRecord.pieceId,
-		rarityDenominator = existingRecord.rarityDenominator,
-		rolledSetId = existingRecord.rolledSetId,
-		rolledSetDisplayName = existingRecord.rolledSetDisplayName,
-		displayOddsDenominator = existingRecord.displayOddsDenominator,
-		displayRarity = existingRecord.displayRarity,
-		serialNumber = existingRecord.serialNumber,
-		isFavorite = existingRecord.isFavorite == true,
-		mutationId = payload.mutationId,
-		mutation = payload.mutation,
-		mutationMultiplier = payload.mutationMultiplier,
-		sizeId = payload.sizeId,
-		sizeMultiplier = payload.sizeMultiplier,
-		variantMultiplier = payload.variantMultiplier,
-		finalPassiveIncomePerSecond = payload.finalPassiveIncomePerSecond,
-	}, ownedId)
-
-	if not updatedRecord then
-		return nil, "Failed to store the updated body part variant."
-	end
-
-	local didUpdate = setReplicaPathValues(player, BODY_PARTS_KEY, { "ownedById", ownedId }, {
-		mutationId = updatedRecord.mutationId,
-		mutation = updatedRecord.mutation,
-		mutationMultiplier = updatedRecord.mutationMultiplier,
-		sizeId = updatedRecord.sizeId,
-		sizeMultiplier = updatedRecord.sizeMultiplier,
-		variantMultiplier = updatedRecord.variantMultiplier,
-		finalPassiveIncomePerSecond = updatedRecord.finalPassiveIncomePerSecond,
-	})
-	if not didUpdate then
-		return nil, "Failed to update the owned body part variant."
-	end
-
-	return deepCopy(updatedRecord), nil
-end
-
 function DataService:GetNextSerialForPiece(pieceId: string): (number?, string?)
 	return BodyPartSerialStore:GetNextSerialForPiece(pieceId)
 end
@@ -33850,7 +33021,7 @@ end
 
 return DataService</string>
         </Properties>
-        <Item class="ModuleScript" referent="114">
+        <Item class="ModuleScript" referent="109">
           <Properties>
             <string name="Name">AuraSerialStore</string>
             <string name="Source">local DataStoreService = game:GetService("DataStoreService")
@@ -33932,7 +33103,7 @@ end
 return AuraSerialStore</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="115">
+        <Item class="ModuleScript" referent="110">
           <Properties>
             <string name="Name">BodyPartSerialStore</string>
             <string name="Source">local DataStoreService = game:GetService("DataStoreService")
@@ -34014,7 +33185,7 @@ end
 return BodyPartSerialStore</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="116">
+        <Item class="ModuleScript" referent="111">
           <Properties>
             <string name="Name">Leaderboards</string>
             <string name="Source">local DataStoreService = game:GetService("DataStoreService")
@@ -34748,7 +33919,7 @@ return Leaderboards</string>
           </Properties>
         </Item>
       </Item>
-      <Item class="ModuleScript" referent="117">
+      <Item class="ModuleScript" referent="112">
         <Properties>
           <string name="Name">DayNightCycleService</string>
           <string name="Source">local Lighting = game:GetService("Lighting")
@@ -34893,7 +34064,7 @@ end
 return DayNightCycleService</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="118">
+      <Item class="ModuleScript" referent="113">
         <Properties>
           <string name="Name">DiagnosticsService</string>
           <string name="Source">local Players = game:GetService("Players")
@@ -34940,7 +34111,7 @@ end
 return DiagnosticsService</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="119">
+      <Item class="ModuleScript" referent="114">
         <Properties>
           <string name="Name">MarketplaceHandlers</string>
           <string name="Source">local MerchantTeleporterHandler = require(script.MerchantTeleporterHandler)
@@ -34963,7 +34134,7 @@ end
 
 return MarketplaceHandlers</string>
         </Properties>
-        <Item class="ModuleScript" referent="120">
+        <Item class="ModuleScript" referent="115">
           <Properties>
             <string name="Name">MerchantTeleporterHandler</string>
             <string name="Source">local MerchantTeleporterHandler = {}
@@ -34979,7 +34150,7 @@ end
 return MerchantTeleporterHandler</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="121">
+        <Item class="ModuleScript" referent="116">
           <Properties>
             <string name="Name">QuickRollHandler</string>
             <string name="Source">local DataService = require(script.Parent.Parent.DataService)
@@ -35001,7 +34172,7 @@ end
 return QuickRollHandler</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="122">
+        <Item class="ModuleScript" referent="117">
           <Properties>
             <string name="Name">StarterPackHandler</string>
             <string name="Source">local StarterPackHandler = {}
@@ -35018,7 +34189,7 @@ end
 return StarterPackHandler</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="123">
+        <Item class="ModuleScript" referent="118">
           <Properties>
             <string name="Name">VipHandler</string>
             <string name="Source">local DataService = require(script.Parent.Parent.DataService)
@@ -35041,7 +34212,7 @@ end
 return VipHandler</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="124">
+        <Item class="ModuleScript" referent="119">
           <Properties>
             <string name="Name">VipPlusHandler</string>
             <string name="Source">local DataService = require(script.Parent.Parent.DataService)
@@ -35065,7 +34236,7 @@ return VipPlusHandler</string>
           </Properties>
         </Item>
       </Item>
-      <Item class="ModuleScript" referent="125">
+      <Item class="ModuleScript" referent="120">
         <Properties>
           <string name="Name">MerchantShopService</string>
           <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -35340,7 +34511,7 @@ end
 return MerchantShopService</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="126">
+      <Item class="ModuleScript" referent="121">
         <Properties>
           <string name="Name">PassiveIncomeService</string>
           <string name="Source">local BodyPartService = require(script.Parent.BodyPartService)
@@ -35443,7 +34614,7 @@ end
 return PassiveIncomeService</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="127">
+      <Item class="ModuleScript" referent="122">
         <Properties>
           <string name="Name">PotionService</string>
           <string name="Source">local Players = game:GetService("Players")
@@ -35886,7 +35057,7 @@ end
 return PotionService</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="128">
+      <Item class="ModuleScript" referent="123">
         <Properties>
           <string name="Name">PremiumBenefitsService</string>
           <string name="Source">local Players = game:GetService("Players")
@@ -36016,7 +35187,7 @@ end
 return PremiumBenefitsService</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="129">
+      <Item class="ModuleScript" referent="124">
         <Properties>
           <string name="Name">PurchaseReceiptService</string>
           <string name="Source">local MarketplaceService = game:GetService("MarketplaceService")
@@ -37038,7 +36209,7 @@ end
 return PurchaseReceipt</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="130">
+      <Item class="ModuleScript" referent="125">
         <Properties>
           <string name="Name">RollService</string>
           <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -38203,7 +37374,7 @@ end
 return RollService</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="131">
+      <Item class="ModuleScript" referent="126">
         <Properties>
           <string name="Name">StatsService</string>
           <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -38585,7 +37756,7 @@ end
 return StatsService</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="132">
+      <Item class="ModuleScript" referent="127">
         <Properties>
           <string name="Name">TestService</string>
           <string name="Source">local TestService = {}
@@ -38605,7 +37776,7 @@ end
 return TestService</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="133">
+      <Item class="ModuleScript" referent="128">
         <Properties>
           <string name="Name">TitleService</string>
           <string name="Source">local Players = game:GetService("Players")
@@ -38799,7 +37970,7 @@ end
 return TitleService</string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="134">
+      <Item class="ModuleScript" referent="129">
         <Properties>
           <string name="Name">VoidRecoveryService</string>
           <string name="Source">local Players = game:GetService("Players")
@@ -38922,7 +38093,7 @@ return VoidRecoveryService</string>
         </Properties>
       </Item>
     </Item>
-    <Item class="Script" referent="135">
+    <Item class="Script" referent="130">
       <Properties>
         <string name="Name">Start</string>
         <token name="RunContext">0</token>
@@ -38954,11 +38125,11 @@ end</string>
       </Properties>
     </Item>
   </Item>
-  <Item class="StarterGui" referent="136">
+  <Item class="StarterGui" referent="131">
     <Properties>
       <string name="Name">StarterGui</string>
     </Properties>
-    <Item class="LocalScript" referent="137">
+    <Item class="LocalScript" referent="132">
       <Properties>
         <string name="Name">HoverClient</string>
         <string name="Source">local Players = game:GetService("Players")
@@ -39044,11 +38215,11 @@ for _, button in playerGui:GetDescendants() do
 end</string>
       </Properties>
     </Item>
-    <Item class="ScreenGui" referent="138">
+    <Item class="ScreenGui" referent="133">
       <Properties>
         <string name="Name">MainInterface</string>
       </Properties>
-      <Item class="ModuleScript" referent="139">
+      <Item class="ModuleScript" referent="134">
         <Properties>
           <string name="Name">GUIController</string>
           <string name="Source">local Players = game:GetService("Players")
@@ -39291,18 +38462,18 @@ end)
 
 return GUIController</string>
         </Properties>
-        <Item class="LocalScript" referent="140">
+        <Item class="LocalScript" referent="135">
           <Properties>
             <string name="Name">Init</string>
             <string name="Source">require(script.Parent)</string>
           </Properties>
         </Item>
       </Item>
-      <Item class="Frame" referent="141">
+      <Item class="Frame" referent="136">
         <Properties>
           <string name="Name">Leaderboard</string>
         </Properties>
-        <Item class="ModuleScript" referent="142">
+        <Item class="ModuleScript" referent="137">
           <Properties>
             <string name="Name">GUIControls</string>
             <string name="Source">local StarterGui = game:GetService("StarterGui")
@@ -39380,11 +38551,11 @@ return GUIControls</string>
           </Properties>
         </Item>
       </Item>
-      <Item class="Frame" referent="143">
+      <Item class="Frame" referent="138">
         <Properties>
           <string name="Name">Roll</string>
         </Properties>
-        <Item class="ModuleScript" referent="144">
+        <Item class="ModuleScript" referent="139">
           <Properties>
             <string name="Name">GUIControls</string>
             <string name="Source">local GUIControls = {}
@@ -40555,19 +39726,19 @@ return GUIControls</string>
       </Item>
     </Item>
   </Item>
-  <Item class="StarterPlayer" referent="145">
+  <Item class="StarterPlayer" referent="140">
     <Properties>
       <string name="Name">StarterPlayer</string>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="146">
+    <Item class="StarterPlayerScripts" referent="141">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="Folder" referent="147">
+      <Item class="Folder" referent="142">
         <Properties>
           <string name="Name">Controllers</string>
         </Properties>
-        <Item class="ModuleScript" referent="148">
+        <Item class="ModuleScript" referent="143">
           <Properties>
             <string name="Name">AdminPanelController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -42774,21 +41945,17 @@ end
 return AdminPanelController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="149">
+        <Item class="ModuleScript" referent="144">
           <Properties>
             <string name="Name">AppraisalController</string>
             <string name="Source">local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Schema = require(ReplicatedStorage.Lists.Schema)
-local AppraisalPricing = require(ReplicatedStorage.Shared.Character.AppraisalPricing)
-local AppraisalState = require(ReplicatedStorage.Shared.Character.AppraisalState)
 local BodyPartLoadout = require(ReplicatedStorage.Shared.Character.BodyPartLoadout)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
-local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
-local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
 local DataController = require(script.Parent.DataController)
 local MerchantPresentationController = require(script.Parent.MerchantPresentationController)
@@ -42797,19 +41964,11 @@ local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local WINDOW_NAME = "AppraisalUI"
-local REMOTES_FOLDER_NAME = "Remotes"
-local APPRAISAL_FOLDER_NAME = "Appraisal"
-local GET_STATE_REMOTE_NAME = "GetState"
-local PERFORM_APPRAISAL_REMOTE_NAME = "PerformAppraisal"
-local UPDATED_REMOTE_NAME = "Updated"
 local BODY_PARTS_DATA_KEY = Schema.BodyParts and Schema.BodyParts.key or "bodyParts"
 local EQUIPPED_LOADOUT_KEY = Schema.EquippedLoadout and Schema.EquippedLoadout.key or "equippedLoadout"
 local SELECTED_COLOR = Color3.fromRGB(116, 192, 255)
 local EQUIPPED_COLOR = Color3.fromRGB(113, 230, 139)
 local DEFAULT_OUTLINE_COLOR = Color3.fromRGB(255, 255, 255)
-local DEFAULT_DIALOGUE_NAME = "Appraiser"
-local ACTIVE_STATUS_TEXT = "Appraisal rerolls size and mutation using server stock."
-local INACTIVE_STATUS_TEXT = "Appraisal is unavailable right now."
 
 type SlotPlaceholderState = {
 	imageTransparency: number,
@@ -42818,44 +41977,6 @@ type SlotPlaceholderState = {
 			visible: boolean,
 		},
 	},
-}
-
-type AppraisalRemotes = {
-	getState: RemoteFunction,
-	performAppraisal: RemoteFunction,
-	updated: RemoteEvent,
-}
-
-type PreviewLabels = {
-	Bundle: TextLabel,
-	Part: TextLabel,
-	Rarity: TextLabel,
-	Mutation: TextLabel,
-	Content: TextLabel,
-	Existing: TextLabel,
-	Cash: TextLabel,
-	Chance: TextLabel,
-}
-
-type AppraisalUi = {
-	root: GuiObject,
-	selectTextLabel: TextLabel,
-	selectedLabel: TextLabel,
-	slotFrames: { [string]: Frame },
-	slotButtons: { [string]: ImageButton },
-	previewHolder: Frame,
-	previewLabels: PreviewLabels,
-	dialogueNameLabel: TextLabel,
-	serverStockLabel: TextLabel,
-	priceLabel: TextLabel,
-	statusLabel: TextLabel,
-	rollButton: ImageButton,
-	rollButtonLabel: TextLabel?,
-	viewportFrame: ViewportFrame?,
-	messageRoot: GuiButton,
-	messageTitle: TextLabel?,
-	messageDescription: TextLabel?,
-	messageClose: GuiButton?,
 }
 
 local AppraisalController = {}
@@ -42921,19 +42042,6 @@ local function syncSlotPlaceholder(button: ImageButton?, defaults: SlotPlacehold
 	end
 end
 
-local function escapeRichText(text: any): string
-	return tostring(text)
-		:gsub("&amp;", "&amp;amp;")
-		:gsub("&lt;", "&amp;lt;")
-		:gsub(">", "&amp;gt;")
-		:gsub('"', "&amp;quot;")
-		:gsub("'", "&amp;apos;")
-end
-
-local function formatMoneyTotal(value: number): string
-	return string.format("%s$ in total", NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0))))
-end
-
 function AppraisalController:_ensureState()
 	if self._started then
 		return
@@ -42941,18 +42049,12 @@ function AppraisalController:_ensureState()
 
 	self._started = true
 	self._isOpen = false
-	self._requestInFlight = false
 	self._selectedRegion = nil :: string?
 	self._slotCardRenderer = nil
 	self._slotPlaceholderDefaults = {} :: { [string]: SlotPlaceholderState }
-	self._ui = nil :: AppraisalUi?
+	self._ui = nil
 	self._defaultSelectText = "Select a body part"
-	self._defaultSelectedText = "Selected:"
 	self._previewLabelFontFaces = nil
-	self._remotes = nil :: AppraisalRemotes?
-	self._appraisalState = AppraisalState.CreateEmptyState()
-	self._speakerModel = nil :: Model?
-	self._rollWarningControls = nil
 end
 
 function AppraisalController:_getOwnedLookup(): { [string]: any }
@@ -42975,15 +42077,6 @@ function AppraisalController:_getEntryForRegion(region: string): BodyPartLoadout
 	return self:_getEquippedState()[region]
 end
 
-function AppraisalController:_getSelectedEntry(): BodyPartLoadout.LoadoutEntry?
-	local selectedRegion = self._selectedRegion
-	if not selectedRegion then
-		return nil
-	end
-
-	return self:_getEntryForRegion(selectedRegion)
-end
-
 function AppraisalController:_buildPreviewPresentationForRegion(region: string)
 	local entry = self:_getEntryForRegion(region)
 	if not entry then
@@ -43002,21 +42095,6 @@ function AppraisalController:_buildPreviewPresentationForRegion(region: string)
 		piece = piece,
 		scale = entry.scale,
 	})
-end
-
-function AppraisalController:_getSelectedAppraisalCost(): number
-	local entry = self:_getSelectedEntry()
-	if not entry then
-		return 0
-	end
-
-	local ownedRecord = self:_getOwnedLookup()[entry.ownedId]
-	local piece = BodyPartsCatalog.GetPiece(entry.pieceId)
-	if not (ownedRecord and piece) then
-		return 0
-	end
-
-	return AppraisalPricing.GetCost(ownedRecord, piece)
 end
 
 function AppraisalController:_applyPreviewLabelStyles(previewModel: any?)
@@ -43048,26 +42126,6 @@ function AppraisalController:_setSelectText(text: string?)
 	end
 end
 
-function AppraisalController:_setSelectedText(region: string?)
-	local label = self._ui and self._ui.selectedLabel or nil
-	if not label then
-		return
-	end
-
-	if typeof(region) ~= "string" or region == "" then
-		label.Text = self._defaultSelectedText
-		return
-	end
-
-	local prefix = self._defaultSelectedText
-	local colonIndex = string.find(prefix, ":", 1, true)
-	if colonIndex then
-		prefix = string.sub(prefix, 1, colonIndex)
-	end
-
-	label.Text = string.format("%s %s", prefix, BodyPartPresentation.GetRegionLabel(region))
-end
-
 function AppraisalController:_hidePreview()
 	local ui = self._ui
 	if not ui then
@@ -43087,14 +42145,12 @@ function AppraisalController:_syncPreview()
 	local region = self._selectedRegion
 	if not region then
 		self:_setSelectText(self._defaultSelectText)
-		self:_setSelectedText(nil)
 		self:_hidePreview()
 		return
 	end
 
 	local previewModel = self:_buildPreviewPresentationForRegion(region)
-	self:_setSelectText(self._defaultSelectText)
-	self:_setSelectedText(region)
+	self:_setSelectText(string.format("Selected: %s", BodyPartPresentation.GetRegionLabel(region)))
 
 	if not previewModel then
 		self:_hidePreview()
@@ -43161,348 +42217,14 @@ function AppraisalController:_syncSlots()
 	end
 end
 
-function AppraisalController:_syncDialogueName()
-	local ui = self._ui
-	if ui then
-		ui.dialogueNameLabel.Text = DEFAULT_DIALOGUE_NAME
-	end
-end
-
-function AppraisalController:_syncServerStock()
-	local ui = self._ui
-	if ui then
-		ui.serverStockLabel.Text = string.format("Server Stock: %d", self._appraisalState.stockRemaining)
-	end
-end
-
-function AppraisalController:_syncPrice()
-	local ui = self._ui
-	if ui then
-		ui.priceLabel.Text = formatMoneyTotal(self:_getSelectedAppraisalCost())
-	end
-end
-
-function AppraisalController:_syncStatus()
-	local ui = self._ui
-	if not ui then
-		return
-	end
-
-	local state = self._appraisalState
-	local statusText = if state.isActive and state.stockRemaining > 0 then ACTIVE_STATUS_TEXT else INACTIVE_STATUS_TEXT
-	ui.statusLabel.Text = statusText
-end
-
-function AppraisalController:_setRollButtonEnabled(enabled: boolean)
-	local ui = self._ui
-	if not ui then
-		return
-	end
-
-	local button = ui.rollButton
-	button.Active = enabled
-	button.Selectable = enabled
-	button.AutoButtonColor = false
-
-	if ui.rollButtonLabel then
-		ui.rollButtonLabel.Text = "Appraise"
-		ui.rollButtonLabel.TextTransparency = if enabled then 0 else 0.35
-	end
-
-	for _, child in ipairs(button:GetChildren()) do
-		if child:IsA("ImageLabel") then
-			if child.Name == "Rays" then
-				child.ImageTransparency = if enabled then 0 else 0.45
-			else
-				child.ImageTransparency = if enabled then 0 else 0.25
-			end
-		end
-	end
-end
-
-function AppraisalController:_canAppraise(): boolean
-	if not self._isOpen or self._requestInFlight then
-		return false
-	end
-
-	local state = self._appraisalState
-	if not state.isActive or state.stockRemaining &lt;= 0 then
-		return false
-	end
-
-	return self:_getSelectedEntry() ~= nil
-end
-
-function AppraisalController:_syncRollButton()
-	self:_setRollButtonEnabled(self:_canAppraise())
-end
-
-function AppraisalController:_getRollWarningControls()
-	if self._rollWarningControls then
-		return self._rollWarningControls
-	end
-
-	local playerGui = LOCAL_PLAYER:FindFirstChild("PlayerGui")
-	if not (playerGui and playerGui:IsA("PlayerGui")) then
-		return nil
-	end
-
-	local mainInterface = playerGui:FindFirstChild("MainInterface") or playerGui:WaitForChild("MainInterface", 5)
-	if not (mainInterface and mainInterface:IsA("LayerCollector")) then
-		return nil
-	end
-
-	local rollWarning = mainInterface:FindFirstChild("RollWarning")
-	if not rollWarning then
-		return nil
-	end
-
-	local controlsModule = rollWarning:FindFirstChild("GUIControls")
-	if not (controlsModule and controlsModule:IsA("ModuleScript")) then
-		return nil
-	end
-
-	local ok, controls = pcall(require, controlsModule)
-	if not ok or typeof(controls) ~= "table" then
-		return nil
-	end
-
-	self._rollWarningControls = controls
-	return controls
-end
-
-function AppraisalController:_showInsufficientFundsWarning(message: string?)
-	local warningControls = self:_getRollWarningControls()
-	if warningControls and typeof(warningControls.ShowInsufficientFundsWarning) == "function" then
-		warningControls.ShowInsufficientFundsWarning(
-			if typeof(message) == "string" and message ~= ""
-				then message
-				else "You don't have enough money to appraise this body part."
-		)
-		return
-	end
-
-	self:_showMessage(
-		DEFAULT_DIALOGUE_NAME,
-		if typeof(message) == "string" and message ~= ""
-			then message
-			else "You don't have enough money to appraise this body part."
-	)
-end
-
 function AppraisalController:_syncUi()
-	self:_syncDialogueName()
 	self:_syncSlots()
 	self:_syncPreview()
-	self:_syncServerStock()
-	self:_syncPrice()
-	self:_syncStatus()
-	self:_syncRollButton()
 end
 
-function AppraisalController:_clearPortrait()
-	local ui = self._ui
-	if not ui or not ui.viewportFrame then
-		return
-	end
-
-	ViewportModelRenderer.Clear(ui.viewportFrame)
-	ui.viewportFrame.Visible = false
-end
-
-function AppraisalController:_renderPortrait()
-	local ui = self._ui
-	if not ui or not ui.viewportFrame then
-		return
-	end
-
-	local rendered = ViewportModelRenderer.RenderDialoguePortrait(ui.viewportFrame, self._speakerModel)
-	ui.viewportFrame.Visible = rendered
-	if not rendered then
-		ViewportModelRenderer.Clear(ui.viewportFrame)
-	end
-end
-
-function AppraisalController:_hideMessage()
-	local ui = self._ui
-	if ui then
-		ui.messageRoot.Visible = false
-	end
-end
-
-function AppraisalController:_showMessage(title: string, description: string)
-	local ui = self._ui
-	if not ui then
-		return
-	end
-
-	ui.messageRoot.Visible = true
-	if ui.messageTitle then
-		ui.messageTitle.Text = title
-	end
-	if ui.messageDescription then
-		ui.messageDescription.Text = description
-	end
-end
-
-function AppraisalController:_buildSuccessDescription(appraisalResult: any): string
-	local before = if typeof(appraisalResult) == "table" then appraisalResult.before else nil
-	local after = if typeof(appraisalResult) == "table" then appraisalResult.after else nil
-
-	local beforeMutation = escapeRichText(if typeof(before) == "table" then before.mutationDisplayName or "Unknown" else "Unknown")
-	local afterMutation = escapeRichText(if typeof(after) == "table" then after.mutationDisplayName or "Unknown" else "Unknown")
-
-	local beforeSizeId = if typeof(before) == "table" then before.sizeId else nil
-	local afterSizeId = if typeof(after) == "table" then after.sizeId else nil
-	local beforeSizeScale = if typeof(before) == "table" then tonumber(before.sizeScale) or 1 else 1
-	local afterSizeScale = if typeof(after) == "table" then tonumber(after.sizeScale) or 1 else 1
-	local beforeSizeDescriptor = escapeRichText(BodyPartPresentation.GetSizeDescriptor(beforeSizeScale, beforeSizeId))
-	local afterSizeDescriptor = escapeRichText(BodyPartPresentation.GetSizeDescriptor(afterSizeScale, afterSizeId))
-
-	return string.format(
-		"You have appraised your item.&lt;br/>&lt;br/>&lt;b>Mutation:&lt;/b> %s -> %s&lt;br/>&lt;b>Size:&lt;/b> %s (%sx) -> %s (%sx)",
-		beforeMutation,
-		afterMutation,
-		beforeSizeDescriptor,
-		BodyPartPresentation.FormatMultiplier(beforeSizeScale),
-		afterSizeDescriptor,
-		BodyPartPresentation.FormatMultiplier(afterSizeScale)
-	)
-end
-
-function AppraisalController:_ensureRemotes(): boolean
-	if self._remotes and self._remotes.getState and self._remotes.performAppraisal and self._remotes.updated then
-		return true
-	end
-
-	local remotesFolder = ReplicatedStorage:FindFirstChild(REMOTES_FOLDER_NAME) or ReplicatedStorage:WaitForChild(REMOTES_FOLDER_NAME, 10)
-	if not (remotesFolder and remotesFolder:IsA("Folder")) then
-		return false
-	end
-
-	local appraisalFolder = remotesFolder:FindFirstChild(APPRAISAL_FOLDER_NAME) or remotesFolder:WaitForChild(APPRAISAL_FOLDER_NAME, 10)
-	if not (appraisalFolder and appraisalFolder:IsA("Folder")) then
-		return false
-	end
-
-	local getState = appraisalFolder:FindFirstChild(GET_STATE_REMOTE_NAME)
-	local performAppraisal = appraisalFolder:FindFirstChild(PERFORM_APPRAISAL_REMOTE_NAME)
-	local updated = appraisalFolder:FindFirstChild(UPDATED_REMOTE_NAME)
-	if not (getState and getState:IsA("RemoteFunction")) then
-		return false
-	end
-	if not (performAppraisal and performAppraisal:IsA("RemoteFunction")) then
-		return false
-	end
-	if not (updated and updated:IsA("RemoteEvent")) then
-		return false
-	end
-
-	self._remotes = {
-		getState = getState,
-		performAppraisal = performAppraisal,
-		updated = updated,
-	}
-
-	return true
-end
-
-function AppraisalController:_invokeRemote(remote: RemoteFunction, payload: any?): any?
-	local ok, result = pcall(function()
-		if payload ~= nil then
-			return remote:InvokeServer(payload)
-		end
-
-		return remote:InvokeServer()
-	end)
-	if not ok then
-		warn(string.format("[AppraisalController] Remote %s failed: %s", remote.Name, tostring(result)))
-		return nil
-	end
-
-	return result
-end
-
-function AppraisalController:_requestState(showFailureMessage: boolean?): boolean
-	if not self:_ensureRemotes() then
-		self._appraisalState = AppraisalState.CreateEmptyState()
-		if showFailureMessage then
-			self:_showMessage(DEFAULT_DIALOGUE_NAME, "The appraiser is not ready right now.")
-		end
-		return false
-	end
-
-	local result = self:_invokeRemote(self._remotes.getState)
-	if typeof(result) ~= "table" then
-		self._appraisalState = AppraisalState.CreateEmptyState()
-		if showFailureMessage then
-			self:_showMessage(DEFAULT_DIALOGUE_NAME, "The appraiser is not ready right now.")
-		end
-		return false
-	end
-
-	self._appraisalState = AppraisalState.CloneState(result.appraisalState)
-	if result.ok ~= true and showFailureMessage then
-		self:_showMessage(DEFAULT_DIALOGUE_NAME, tostring(result.message or "The appraiser is unavailable right now."))
-	end
-
-	return result.ok == true
-end
-
-function AppraisalController:_performAppraisal()
-	if not self:_canAppraise() then
-		return
-	end
-
-	if not self:_ensureRemotes() then
-		self:_showMessage(DEFAULT_DIALOGUE_NAME, "The appraiser is not ready right now.")
-		return
-	end
-
-	local selectedRegion = self._selectedRegion
-	local selectedEntry = self:_getSelectedEntry()
-	if not (selectedRegion and selectedEntry) then
-		self:_showMessage(DEFAULT_DIALOGUE_NAME, "Select an equipped body part first.")
-		return
-	end
-
-	self._requestInFlight = true
-	self:_syncRollButton()
-
-	local result = self:_invokeRemote(self._remotes.performAppraisal, {
-		region = selectedRegion,
-		ownedId = selectedEntry.ownedId,
-	})
-
-	self._requestInFlight = false
-
-	if typeof(result) ~= "table" then
-		self:_syncUi()
-		self:_showMessage(DEFAULT_DIALOGUE_NAME, "The appraisal could not be completed.")
-		return
-	end
-
-	self._appraisalState = AppraisalState.CloneState(result.appraisalState)
-	self:_syncUi()
-
-	if result.ok == true then
-		self:_showMessage(DEFAULT_DIALOGUE_NAME, self:_buildSuccessDescription(result.appraisalResult))
-		return
-	end
-
-	if result.code == "INSUFFICIENT_MONEY" then
-		self:_hideMessage()
-		self:_showInsufficientFundsWarning(tostring(result.message or ""))
-		return
-	end
-
-	self:_showMessage(DEFAULT_DIALOGUE_NAME, tostring(result.message or "The appraisal could not be completed."))
-end
-
-function AppraisalController:_resetSelectionState()
+function AppraisalController:_resetState()
 	self._selectedRegion = nil
 	self:_setSelectText(self._defaultSelectText)
-	self:_setSelectedText(nil)
 	self:_hidePreview()
 
 	if self._slotCardRenderer then
@@ -43510,6 +42232,8 @@ function AppraisalController:_resetSelectionState()
 			self._slotCardRenderer:Hide(string.format("appraisal_%s", region))
 		end
 	end
+
+	self:_syncSlots()
 end
 
 function AppraisalController:_cacheUi(playerGui: PlayerGui)
@@ -43529,7 +42253,6 @@ function AppraisalController:_cacheUi(playerGui: PlayerGui)
 	local previewHolder = appraisalRoot:WaitForChild("ItemPreviewHolder", 30)
 	local previewDetails = previewHolder:WaitForChild("Frame", 30)
 	local selectTextLabel = previewRoot:WaitForChild("SelectText", 30)
-	local main = appraisalRoot:WaitForChild("Main", 30)
 
 	local slotFrames = {}
 	local slotButtons = {}
@@ -43546,29 +42269,9 @@ function AppraisalController:_cacheUi(playerGui: PlayerGui)
 		end
 	end
 
-	local itemDesc = main:WaitForChild("ItemDesc", 30)
-	local statusLabel = itemDesc:FindFirstChildWhichIsA("TextLabel")
-	assert(statusLabel and statusLabel:IsA("TextLabel"), "AppraisalUI.Main.ItemDesc.TextLabel is missing.")
-
-	local messageRoot = main:WaitForChild("MessageUI", 30)
-	assert(messageRoot and messageRoot:IsA("GuiButton"), "AppraisalUI.Main.MessageUI is missing.")
-	local messageFrame = messageRoot:FindFirstChild("Message", true)
-	local messageTitle = if messageFrame then messageFrame:FindFirstChild("Title") else nil
-	local messageDescription = if messageFrame then messageFrame:FindFirstChild("Description") else nil
-	local messageClose = if messageFrame then messageFrame:FindFirstChild("Close") else nil
-
-	local viewportFrame = main:FindFirstChild("ViewportFrame")
-	if viewportFrame and not viewportFrame:IsA("ViewportFrame") then
-		viewportFrame = nil
-	end
-
-	local rollButton = main:WaitForChild("RollButton", 30)
-	assert(rollButton and rollButton:IsA("ImageButton"), "AppraisalUI.Main.RollButton is missing.")
-
 	self._ui = {
 		root = appraisalRoot,
 		selectTextLabel = selectTextLabel,
-		selectedLabel = main:WaitForChild("Selected", 30),
 		slotFrames = slotFrames,
 		slotButtons = slotButtons,
 		previewHolder = previewHolder,
@@ -43582,29 +42285,15 @@ function AppraisalController:_cacheUi(playerGui: PlayerGui)
 			Cash = previewDetails:WaitForChild("Cash", 30),
 			Chance = previewDetails:WaitForChild("Chance", 30),
 		},
-		dialogueNameLabel = main:WaitForChild("DialogueName", 30),
-		serverStockLabel = main:WaitForChild("ServerStock", 30),
-		priceLabel = main:WaitForChild("Price", 30),
-		statusLabel = statusLabel,
-		rollButton = rollButton,
-		rollButtonLabel = rollButton:FindFirstChildWhichIsA("TextLabel"),
-		viewportFrame = viewportFrame,
-		messageRoot = messageRoot,
-		messageTitle = if messageTitle and messageTitle:IsA("TextLabel") then messageTitle else nil,
-		messageDescription = if messageDescription and messageDescription:IsA("TextLabel") then messageDescription else nil,
-		messageClose = if messageClose and messageClose:IsA("GuiButton") then messageClose else nil,
 	}
 
 	for _, label in pairs(self._ui.previewLabels) do
-		label.RichText = true
-	end
-
-	if self._ui.messageDescription then
-		self._ui.messageDescription.RichText = true
+		if label:IsA("TextLabel") then
+			label.RichText = true
+		end
 	end
 
 	self._defaultSelectText = selectTextLabel.Text
-	self._defaultSelectedText = self._ui.selectedLabel.Text
 	self._previewLabelFontFaces = {
 		Bundle = self._ui.previewLabels.Bundle.FontFace,
 		Rarity = self._ui.previewLabels.Rarity.FontFace,
@@ -43621,20 +42310,7 @@ function AppraisalController:_cacheUi(playerGui: PlayerGui)
 		end
 	end
 
-	UIController:CreateButton(self._ui.rollButton, function()
-		self:_performAppraisal()
-	end)
-
-	if self._ui.messageClose then
-		UIController:CreateButton(self._ui.messageClose, function()
-			self:_hideMessage()
-		end)
-	end
-
-	self:_hideMessage()
-	self:_clearPortrait()
-	self:_resetSelectionState()
-	self:_syncUi()
+	self:_resetState()
 end
 
 function AppraisalController:OnStart()
@@ -43642,26 +42318,14 @@ function AppraisalController:OnStart()
 
 	local playerGui = LOCAL_PLAYER:WaitForChild("PlayerGui")
 	self:_cacheUi(playerGui)
-	self:_ensureRemotes()
 
-	MerchantPresentationController.FramePrepared:Connect(function(frameName: string, _root: GuiObject, options: any)
+	MerchantPresentationController.FramePrepared:Connect(function(frameName: string)
 		if frameName ~= WINDOW_NAME then
 			return
 		end
 
 		self._isOpen = true
-		self._requestInFlight = false
-		self._speakerModel = if typeof(options) == "table"
-			and typeof(options.speakerModel) == "Instance"
-			and options.speakerModel:IsA("Model")
-			then options.speakerModel
-			else nil
-
-		self:_hideMessage()
-		self:_requestState(false)
-		self:_resetSelectionState()
-		self:_renderPortrait()
-		self:_syncUi()
+		self:_resetState()
 	end)
 
 	MerchantPresentationController.Closed:Connect(function(frameName: string)
@@ -43670,12 +42334,7 @@ function AppraisalController:OnStart()
 		end
 
 		self._isOpen = false
-		self._requestInFlight = false
-		self._speakerModel = nil
-		self:_hideMessage()
-		self:_clearPortrait()
-		self:_resetSelectionState()
-		self:_syncUi()
+		self:_resetState()
 	end)
 
 	local function refreshIfOpen(key: string?)
@@ -43697,25 +42356,13 @@ function AppraisalController:OnStart()
 		refreshIfOpen(key)
 	end)
 
-	if self._remotes then
-		self._remotes.updated.OnClientEvent:Connect(function(payload: any)
-			self._appraisalState = AppraisalState.CloneState(
-				if typeof(payload) == "table" and payload.appraisalState ~= nil then payload.appraisalState else payload
-			)
-			if self._isOpen then
-				self:_syncUi()
-			end
-		end)
-	end
-
-	self:_resetSelectionState()
-	self:_syncUi()
+	self:_resetState()
 end
 
 return AppraisalController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="150">
+        <Item class="ModuleScript" referent="145">
           <Properties>
             <string name="Name">AutoSellController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -43906,7 +42553,7 @@ end
 return AutoSellController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="151">
+        <Item class="ModuleScript" referent="146">
           <Properties>
             <string name="Name">AutoSellRollController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -44090,7 +42737,7 @@ end
 return AutoSellRollController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="152">
+        <Item class="ModuleScript" referent="147">
           <Properties>
             <string name="Name">BodyPartBuildLockController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -44257,7 +42904,7 @@ end
 return BodyPartBuildLockController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="153">
+        <Item class="ModuleScript" referent="148">
           <Properties>
             <string name="Name">ChatTagController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -44295,7 +42942,7 @@ end
 return ChatTagController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="154">
+        <Item class="ModuleScript" referent="149">
           <Properties>
             <string name="Name">DataController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -44363,7 +43010,7 @@ end
 return DataController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="155">
+        <Item class="ModuleScript" referent="150">
           <Properties>
             <string name="Name">DayNightCycleController</string>
             <string name="Source">local Lighting = game:GetService("Lighting")
@@ -44623,7 +43270,7 @@ end
 return DayNightCycleController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="156">
+        <Item class="ModuleScript" referent="151">
           <Properties>
             <string name="Name">DialogueController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -45334,7 +43981,7 @@ end
 return DialogueController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="157">
+        <Item class="ModuleScript" referent="152">
           <Properties>
             <string name="Name">DialogueInteractionController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -45514,7 +44161,7 @@ end
 return DialogueInteractionController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="158">
+        <Item class="ModuleScript" referent="153">
           <Properties>
             <string name="Name">FoliageController</string>
             <string name="Source">local CollectionService = game:GetService("CollectionService")
@@ -45885,7 +44532,7 @@ end
 return FoliageController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="159">
+        <Item class="ModuleScript" referent="154">
           <Properties>
             <string name="Name">FrameController</string>
             <string name="Source">local CollectionService = game:GetService("CollectionService")
@@ -46621,7 +45268,7 @@ end
 return FrameController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="160">
+        <Item class="ModuleScript" referent="155">
           <Properties>
             <string name="Name">HUDWindowController</string>
             <string name="Source">local Lighting = game:GetService("Lighting")
@@ -46990,7 +45637,7 @@ end
 return HUDWindowController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="161">
+        <Item class="ModuleScript" referent="156">
           <Properties>
             <string name="Name">HelpController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -47312,7 +45959,7 @@ end
 return HelpController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="162">
+        <Item class="ModuleScript" referent="157">
           <Properties>
             <string name="Name">IndexController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -48245,7 +46892,7 @@ end
 return IndexController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="163">
+        <Item class="ModuleScript" referent="158">
           <Properties>
             <string name="Name">InventoryController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -50310,11 +48957,7 @@ function InventoryController:_syncPreview()
 		previewIcon.Image = ""
 		previewViewport.Visible = true
 		if self._previewRenderKey ~= renderKey then
-			if previewModel.itemType == "potion" then
-				ViewportModelRenderer.RenderPotion(previewViewport, previewModel.bundleModel)
-			else
-				ViewportModelRenderer.RenderBundle(previewViewport, previewModel.bundleModel)
-			end
+			ViewportModelRenderer.RenderBundle(previewViewport, previewModel.bundleModel)
 		end
 	end
 
@@ -51737,7 +50380,7 @@ end
 return InventoryController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="164">
+        <Item class="ModuleScript" referent="159">
           <Properties>
             <string name="Name">LeaderboardController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -52392,7 +51035,7 @@ end
 return LeaderboardController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="165">
+        <Item class="ModuleScript" referent="160">
           <Properties>
             <string name="Name">MarketplaceController</string>
             <string name="Source">local CollectionService = game:GetService("CollectionService")
@@ -52943,7 +51586,7 @@ end
 return MarketplaceController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="166">
+        <Item class="ModuleScript" referent="161">
           <Properties>
             <string name="Name">MerchantPresentationController</string>
             <string name="Source">local GuiService = game:GetService("GuiService")
@@ -53845,7 +52488,7 @@ end
 return MerchantPresentationController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="167">
+        <Item class="ModuleScript" referent="162">
           <Properties>
             <string name="Name">MerchantShopController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -54121,7 +52764,7 @@ function MerchantShopController:_renderViewport()
 
 	local potionConfig = self:_getSelectedPotionConfig()
 	local bundleModel = if potionConfig then PotionPresentation.GetBundleModel(potionConfig) else nil
-	local rendered = ViewportModelRenderer.RenderPotion(viewportFrame, bundleModel)
+	local rendered = ViewportModelRenderer.RenderBundle(viewportFrame, bundleModel)
 	viewportFrame.Visible = rendered
 	if not rendered then
 		ViewportModelRenderer.Clear(viewportFrame)
@@ -54402,7 +53045,7 @@ end
 return MerchantShopController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="168">
+        <Item class="ModuleScript" referent="163">
           <Properties>
             <string name="Name">MoneyHUDController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -54489,7 +53132,7 @@ end
 return MoneyHUDController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="169">
+        <Item class="ModuleScript" referent="164">
           <Properties>
             <string name="Name">OverheadTitleController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -54711,7 +53354,7 @@ end
 return OverheadTitleController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="170">
+        <Item class="ModuleScript" referent="165">
           <Properties>
             <string name="Name">PlayerInspectController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -55860,7 +54503,7 @@ end
 return PlayerInspectController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="171">
+        <Item class="ModuleScript" referent="166">
           <Properties>
             <string name="Name">PotionController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -56122,7 +54765,7 @@ function PotionController:_renderHudAssets()
 		local renderKey = config.id
 
 		if slot.viewport and slot.viewport:IsA("ViewportFrame") and self._hudRenderKeys[config.id] ~= renderKey then
-			ViewportModelRenderer.RenderPotion(slot.viewport, bundleModel)
+			ViewportModelRenderer.RenderBundle(slot.viewport, bundleModel)
 			self._hudRenderKeys[config.id] = renderKey
 		end
 	end
@@ -56454,7 +55097,7 @@ end
 return PotionController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="172">
+        <Item class="ModuleScript" referent="167">
           <Properties>
             <string name="Name">SlotCardRenderer</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -56583,7 +55226,7 @@ end
 return SlotCardRenderer</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="173">
+        <Item class="ModuleScript" referent="168">
           <Properties>
             <string name="Name">StoreController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -56679,7 +55322,7 @@ end
 return StoreController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="174">
+        <Item class="ModuleScript" referent="169">
           <Properties>
             <string name="Name">TestController</string>
             <string name="Source">local TestController = {}
@@ -56691,7 +55334,7 @@ end
 return TestController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="175">
+        <Item class="ModuleScript" referent="170">
           <Properties>
             <string name="Name">TitleController</string>
             <string name="Source">local Players = game:GetService("Players")
@@ -57072,7 +55715,7 @@ end
 return TitleController</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="176">
+        <Item class="ModuleScript" referent="171">
           <Properties>
             <string name="Name">UIController</string>
             <string name="Source">local Lighting = game:GetService("Lighting")
@@ -57238,7 +55881,7 @@ return UIController</string>
           </Properties>
         </Item>
       </Item>
-      <Item class="LocalScript" referent="177">
+      <Item class="LocalScript" referent="172">
         <Properties>
           <string name="Name">Start</string>
           <string name="Source">local ReplicatedStorage = game:GetService("ReplicatedStorage")

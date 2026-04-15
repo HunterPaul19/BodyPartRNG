@@ -49,6 +49,7 @@ local EQUIPPED_TITLE_ID_KEY = Schema.EquippedTitleId and Schema.EquippedTitleId.
 local EQUIPPED_AURA_ID_KEY = Schema.EquippedAuraId and Schema.EquippedAuraId.key or nil
 local ACHIEVEMENTS_KEY = Schema.Achievements and Schema.Achievements.key or nil
 local VIP_OWNED_KEY = Schema.VipOwned and Schema.VipOwned.key or nil
+local VIP_PLUS_OWNED_KEY = Schema.VipPlusOwned and Schema.VipPlusOwned.key or nil
 local SELECTED_ROLL_TYPE_KEY = Schema.SelectedRollType and Schema.SelectedRollType.key or nil
 local SELECTED_ROLL_REGION_KEY = Schema.SelectedRollRegion and Schema.SelectedRollRegion.key or nil
 local QUICK_ROLL_ENABLED_KEY = Schema.QuickRollEnabled and Schema.QuickRollEnabled.key or nil
@@ -576,13 +577,20 @@ end
 local function cloneOwnedPotionsState(state: OwnedPotions.OwnedPotionsState?): OwnedPotions.OwnedPotionsState
 	local ownedByPotionId = {}
 	local activeByPotionId = {}
+	local activePotionIdByFamilyId = {}
 
 	if typeof(state) == "table" then
 		if typeof(state.ownedByPotionId) == "table" then
 			for potionId, record in pairs(state.ownedByPotionId) do
 				local normalizedRecord = normalizeOwnedPotionRecord(record, potionId)
 				if normalizedRecord then
-					ownedByPotionId[normalizedRecord.potionId] = normalizedRecord
+					local existingRecord = ownedByPotionId[normalizedRecord.potionId]
+					if existingRecord then
+						existingRecord.amount += normalizedRecord.amount
+						existingRecord.isFavorite = existingRecord.isFavorite or normalizedRecord.isFavorite
+					else
+						ownedByPotionId[normalizedRecord.potionId] = normalizedRecord
+					end
 				end
 			end
 		end
@@ -592,7 +600,32 @@ local function cloneOwnedPotionsState(state: OwnedPotions.OwnedPotionsState?): O
 				local normalizedPotionId = PotionConfig.NormalizeId(potionId)
 				local resolvedRemainingSeconds = math.max(0, clampWholeNumber(remainingSeconds, 0))
 				if normalizedPotionId and resolvedRemainingSeconds > 0 then
-					activeByPotionId[normalizedPotionId] = resolvedRemainingSeconds
+					local familyId = PotionConfig.GetFamilyId(normalizedPotionId)
+					if familyId then
+						local selectedPotionId = activePotionIdByFamilyId[familyId]
+						local selectedRemainingSeconds = if selectedPotionId then activeByPotionId[selectedPotionId] else nil
+						local selectedConfig = if selectedPotionId then PotionConfig.Get(selectedPotionId) else nil
+						local nextConfig = PotionConfig.Get(normalizedPotionId)
+						local shouldReplace = selectedPotionId == nil
+							or resolvedRemainingSeconds > (selectedRemainingSeconds or 0)
+							or (
+								resolvedRemainingSeconds == (selectedRemainingSeconds or 0)
+								and (tonumber(nextConfig and nextConfig.tier) or 0) > (tonumber(selectedConfig and selectedConfig.tier) or 0)
+							)
+
+						if shouldReplace then
+							if selectedPotionId ~= nil then
+								activeByPotionId[selectedPotionId] = nil
+							end
+							activePotionIdByFamilyId[familyId] = normalizedPotionId
+							activeByPotionId[normalizedPotionId] = resolvedRemainingSeconds
+						end
+					else
+						activeByPotionId[normalizedPotionId] = math.max(
+							resolvedRemainingSeconds,
+							tonumber(activeByPotionId[normalizedPotionId]) or 0
+						)
+					end
 				end
 			end
 		end
@@ -1086,6 +1119,26 @@ function DataService:SetVipOwned(player: Player, isOwned: boolean): (boolean, st
 	return true, "VIP ownership updated."
 end
 
+function DataService:GetVipPlusOwned(player: Player): boolean
+	if not VIP_PLUS_OWNED_KEY then
+		return false
+	end
+
+	return self:Get(player, VIP_PLUS_OWNED_KEY) == true
+end
+
+function DataService:SetVipPlusOwned(player: Player, isOwned: boolean): (boolean, string?)
+	if not VIP_PLUS_OWNED_KEY then
+		return false, "VIP+ persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return false, "Player data is not loaded."
+	end
+
+	self:Set(player, VIP_PLUS_OWNED_KEY, isOwned == true)
+	return true, "VIP+ ownership updated."
+end
+
 function DataService:GetSelectedRollType(player: Player): string
 	if not SELECTED_ROLL_TYPE_KEY then
 		return OwnedRollTypes.GetDefaultSelectedRollTypeId()
@@ -1227,6 +1280,77 @@ function DataService:SetEquippedLoadout(player: Player, equippedState: BodyPartL
 
 	self:Set(player, EQUIPPED_LOADOUT_KEY, BodyPartLoadout.NormalizeEquippedState(equippedState))
 	return true, "Equipped loadout updated."
+end
+
+function DataService:UpdateOwnedBodyPartVariant(player: Player, ownedId: string, payload: {
+	mutationId: string,
+	mutation: string?,
+	mutationMultiplier: number,
+	sizeId: string,
+	sizeMultiplier: number,
+	variantMultiplier: number,
+	finalPassiveIncomePerSecond: number,
+}): (OwnedBodyParts.OwnedBodyPartRecord?, string?)
+	if not BODY_PARTS_KEY then
+		return nil, "Body parts persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return nil, "Player data is not loaded."
+	end
+	if typeof(ownedId) ~= "string" or ownedId == "" then
+		return nil, "ownedId is required."
+	end
+	if typeof(payload) ~= "table" then
+		return nil, "Variant payload must be a table."
+	end
+
+	local bodyPartsState = getReplicaValue(player, BODY_PARTS_KEY)
+	local ownedById = if typeof(bodyPartsState) == "table" then bodyPartsState.ownedById else nil
+	local existingRecord = normalizeOwnedBodyPartRecord(
+		typeof(ownedById) == "table" and ownedById[ownedId] or nil,
+		ownedId
+	)
+	if not existingRecord then
+		return nil, string.format("Owned body part '%s' was not found.", ownedId)
+	end
+
+	local updatedRecord = normalizeOwnedBodyPartRecord({
+		ownedId = existingRecord.ownedId,
+		pieceId = existingRecord.pieceId,
+		rarityDenominator = existingRecord.rarityDenominator,
+		rolledSetId = existingRecord.rolledSetId,
+		rolledSetDisplayName = existingRecord.rolledSetDisplayName,
+		displayOddsDenominator = existingRecord.displayOddsDenominator,
+		displayRarity = existingRecord.displayRarity,
+		serialNumber = existingRecord.serialNumber,
+		isFavorite = existingRecord.isFavorite == true,
+		mutationId = payload.mutationId,
+		mutation = payload.mutation,
+		mutationMultiplier = payload.mutationMultiplier,
+		sizeId = payload.sizeId,
+		sizeMultiplier = payload.sizeMultiplier,
+		variantMultiplier = payload.variantMultiplier,
+		finalPassiveIncomePerSecond = payload.finalPassiveIncomePerSecond,
+	}, ownedId)
+
+	if not updatedRecord then
+		return nil, "Failed to store the updated body part variant."
+	end
+
+	local didUpdate = setReplicaPathValues(player, BODY_PARTS_KEY, { "ownedById", ownedId }, {
+		mutationId = updatedRecord.mutationId,
+		mutation = updatedRecord.mutation,
+		mutationMultiplier = updatedRecord.mutationMultiplier,
+		sizeId = updatedRecord.sizeId,
+		sizeMultiplier = updatedRecord.sizeMultiplier,
+		variantMultiplier = updatedRecord.variantMultiplier,
+		finalPassiveIncomePerSecond = updatedRecord.finalPassiveIncomePerSecond,
+	})
+	if not didUpdate then
+		return nil, "Failed to update the owned body part variant."
+	end
+
+	return deepCopy(updatedRecord), nil
 end
 
 function DataService:GetNextSerialForPiece(pieceId: string): (number?, string?)

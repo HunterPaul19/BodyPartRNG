@@ -17,6 +17,11 @@ AdminPanelDefinitions.Tabs = {
 						description = "Launch the sample merchant dialogue locally so the dialogue tree and shop handoff can be verified from the admin panel.",
 					},
 					{
+						id = "show_appraiser",
+						title = "Show Appraiser",
+						description = "Force the appraiser to appear immediately so the appraisal flow can be tested on demand.",
+					},
+					{
 						id = "refresh_server_state",
 						title = "Refresh Server State",
 						description = "Placeholder for forcing a server-wide refresh of tracked gameplay state.",

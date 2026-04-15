@@ -18,7 +18,6 @@ local MERCHANT_SHOP_FOLDER_NAME = "MerchantShop"
 local GET_SHOP_STATE_REMOTE_NAME = "GetShopState"
 local PURCHASE_SHOP_ITEM_REMOTE_NAME = "PurchaseShopItem"
 local SHOP_FRAME_NAME = "ShopUI"
-local STOCK_CAP = 10
 
 type MerchantShopState = {
 	cycleId: number,
@@ -47,7 +46,7 @@ type MerchantShopUi = {
 local MerchantShopController = {
 	_started = false,
 	_ui = nil :: MerchantShopUi?,
-	_runtimeButtonsByPotionId = {} :: { [string]: GuiButton },
+	_runtimeButtonsByPotionId = {} :: { [string]: ImageButton },
 	_remotes = nil,
 	_shopState = nil :: MerchantShopState?,
 	_selectedPotionId = nil :: string?,
@@ -63,7 +62,7 @@ end
 local function buildEmptyState(): MerchantShopState
 	local stockByPotionId = {}
 	for _, entry in ipairs(MerchantShopConfig.GetAll()) do
-		stockByPotionId[entry.potionId] = STOCK_CAP
+		stockByPotionId[entry.potionId] = 0
 	end
 
 	return {
@@ -218,16 +217,34 @@ function MerchantShopController:_cloneShopState(shopState: any): MerchantShopSta
 
 	if typeof(shopState.stockByPotionId) == "table" then
 		for _, entry in ipairs(MerchantShopConfig.GetAll()) do
-			cloned.stockByPotionId[entry.potionId] = math.clamp(normalizeWhole(shopState.stockByPotionId[entry.potionId]), 0, STOCK_CAP)
+			cloned.stockByPotionId[entry.potionId] = math.clamp(
+				normalizeWhole(shopState.stockByPotionId[entry.potionId]),
+				0,
+				MerchantShopConfig.GetMaxStockForPotionId(entry.potionId)
+			)
 		end
 	end
 
 	return cloned
 end
 
+function MerchantShopController:_getVisibleEntries(): { MerchantShopConfig.MerchantShopEntry }
+	local results = {}
+	local shopState = self._shopState or buildEmptyState()
+	for _, entry in ipairs(MerchantShopConfig.GetAll()) do
+		if normalizeWhole(shopState.stockByPotionId[entry.potionId]) > 0 then
+			table.insert(results, entry)
+		end
+	end
+	return results
+end
+
 function MerchantShopController:_getSelectedEntry()
-	local potionId = self._selectedPotionId or "luck"
-	return MerchantShopConfig.GetByPotionId(potionId) or MerchantShopConfig.GetByPotionId("luck")
+	if self._selectedPotionId == nil then
+		return nil
+	end
+
+	return MerchantShopConfig.GetByPotionId(self._selectedPotionId)
 end
 
 function MerchantShopController:_getSelectedPotionConfig()
@@ -242,7 +259,20 @@ function MerchantShopController:_getSelectedStock(): number
 		return 0
 	end
 
-	return math.clamp(normalizeWhole(shopState.stockByPotionId[entry.potionId]), 0, STOCK_CAP)
+	return math.clamp(
+		normalizeWhole(shopState.stockByPotionId[entry.potionId]),
+		0,
+		MerchantShopConfig.GetMaxStockForPotionId(entry.potionId)
+	)
+end
+
+function MerchantShopController:_setPurchaseEnabled(isEnabled: boolean)
+	local ui = self:_ensureUi()
+	ui.purchaseButton.Active = isEnabled
+	ui.purchaseButton.AutoButtonColor = isEnabled
+	if ui.purchaseButtonLabel then
+		ui.purchaseButtonLabel.Text = if isEnabled then "Purchase" else "Unavailable"
+	end
 end
 
 function MerchantShopController:_sanitizeAmountText()
@@ -271,7 +301,7 @@ function MerchantShopController:_renderViewport()
 
 	local potionConfig = self:_getSelectedPotionConfig()
 	local bundleModel = if potionConfig then PotionPresentation.GetBundleModel(potionConfig) else nil
-	local rendered = ViewportModelRenderer.RenderBundle(viewportFrame, bundleModel)
+	local rendered = ViewportModelRenderer.RenderPotion(viewportFrame, bundleModel)
 	viewportFrame.Visible = rendered
 	if not rendered then
 		ViewportModelRenderer.Clear(viewportFrame)
@@ -294,15 +324,19 @@ function MerchantShopController:_hideMessage()
 	ui.messageRoot.Visible = false
 end
 
-function MerchantShopController:_showFailureMessage(message: string)
+function MerchantShopController:_showMessage(title: string, message: string)
 	local ui = self:_ensureUi()
 	ui.messageRoot.Visible = true
 	if ui.messageTitle then
-		ui.messageTitle.Text = "Purchase Failed"
+		ui.messageTitle.Text = title
 	end
 	if ui.messageDescription then
 		ui.messageDescription.Text = message
 	end
+end
+
+function MerchantShopController:_showFailureMessage(message: string)
+	self:_showMessage("Purchase Failed", message)
 end
 
 function MerchantShopController:_refreshText()
@@ -312,19 +346,93 @@ function MerchantShopController:_refreshText()
 	local stock = self:_getSelectedStock()
 	local amount = self:_sanitizeAmountText()
 	local totalPrice = if potionConfig then math.max(0, potionConfig.buyPrice) * amount else 0
+	local stockCap = if entry then MerchantShopConfig.GetMaxStockForPotionId(entry.potionId) else 0
 
-	ui.itemName.Text = if entry then entry.shopLabel else "Item Name"
-	ui.itemDescLabel.Text = if entry then entry.description else "Item Description"
-	ui.stocksLabel.Text = string.format("[Stock: %d/%d]", stock, STOCK_CAP)
+	ui.itemName.Text = if entry then entry.shopLabel else "Merchant Stock Empty"
+	ui.itemDescLabel.Text = if entry
+		then entry.description
+		else "Out of stock until refresh."
+	ui.stocksLabel.Text = string.format("[Stock: %d/%d]", stock, stockCap)
 	ui.priceLabel.Text = string.format("%s$ in total", Globals.formatNumber(totalPrice))
-	if ui.purchaseButtonLabel then
-		ui.purchaseButtonLabel.Text = "Purchase"
+	self:_setPurchaseEnabled(entry ~= nil and stock > 0)
+end
+
+function MerchantShopController:_refreshButtonStates()
+	for potionId, button in pairs(self._runtimeButtonsByPotionId) do
+		if button:IsA("ImageButton") then
+			button.ImageTransparency = if potionId == self._selectedPotionId then 0 else 0.2
+		end
 	end
+end
+
+function MerchantShopController:_refreshVisibleButtons()
+	local layoutOrder = 1
+	local shopState = self._shopState or buildEmptyState()
+	for _, entry in ipairs(MerchantShopConfig.GetAll()) do
+		local button = self._runtimeButtonsByPotionId[entry.potionId]
+		if button then
+			local isVisible = normalizeWhole(shopState.stockByPotionId[entry.potionId]) > 0
+			button.Visible = isVisible
+			button.Active = isVisible
+			button.AutoButtonColor = false
+			if isVisible then
+				button.LayoutOrder = layoutOrder
+				layoutOrder += 1
+			end
+		end
+	end
+
+	self:_refreshButtonStates()
+end
+
+function MerchantShopController:_findSelectableEntry(preferredPotionId: string?): MerchantShopConfig.MerchantShopEntry?
+	local visibleEntries = self:_getVisibleEntries()
+	if #visibleEntries == 0 then
+		return nil
+	end
+
+	if preferredPotionId then
+		for _, entry in ipairs(visibleEntries) do
+			if entry.potionId == preferredPotionId then
+				return entry
+			end
+		end
+	end
+
+	if self._selectedPotionId then
+		for _, entry in ipairs(visibleEntries) do
+			if entry.potionId == self._selectedPotionId then
+				return entry
+			end
+		end
+	end
+
+	return visibleEntries[1]
+end
+
+function MerchantShopController:_applySoldOutState()
+	local ui = self:_ensureUi()
+	self._selectedPotionId = nil
+	self:_refreshButtonStates()
+	self:_clearViewport()
+
+	self._suppressAmountFocus = true
+	ui.amountBox.Text = "0"
+	self._suppressAmountFocus = false
+
+	self:_refreshText()
+	self:_showMessage("Out of Stock", "Out of stock until refresh.")
 end
 
 function MerchantShopController:_applySelection(potionId: string)
 	local entry = MerchantShopConfig.GetByPotionId(potionId)
-	if not entry then
+	if not entry or normalizeWhole((self._shopState or buildEmptyState()).stockByPotionId[entry.potionId]) <= 0 then
+		local fallbackEntry = self:_findSelectableEntry(potionId)
+		if fallbackEntry then
+			self:_applySelection(fallbackEntry.potionId)
+		else
+			self:_applySoldOutState()
+		end
 		return
 	end
 
@@ -337,15 +445,20 @@ function MerchantShopController:_applySelection(potionId: string)
 	ui.amountBox.Text = tostring(if stock > 0 then 1 else 0)
 	self._suppressAmountFocus = false
 
+	self:_hideMessage()
 	self:_refreshText()
 	self:_renderViewport()
 end
 
-function MerchantShopController:_refreshButtonStates()
-	for potionId, button in pairs(self._runtimeButtonsByPotionId) do
-		if button:IsA("ImageButton") then
-			button.ImageTransparency = if potionId == self._selectedPotionId then 0 else 0.2
-		end
+function MerchantShopController:_applyShopState(shopState: any, preferredPotionId: string?)
+	self._shopState = self:_cloneShopState(shopState)
+	self:_refreshVisibleButtons()
+
+	local entry = self:_findSelectableEntry(preferredPotionId)
+	if entry then
+		self:_applySelection(entry.potionId)
+	else
+		self:_applySoldOutState()
 	end
 end
 
@@ -355,15 +468,12 @@ function MerchantShopController:_buildSelectionButtons()
 		return
 	end
 
-	local layoutOrder = 1
 	for _, entry in ipairs(MerchantShopConfig.GetAll()) do
 		local button = ui.buttonTemplate:Clone()
 		button.Name = string.format("MerchantShop_%s", entry.potionId)
-		button.Visible = true
-		button.Active = true
+		button.Visible = false
+		button.Active = false
 		button.AutoButtonColor = false
-		button.LayoutOrder = layoutOrder
-		layoutOrder += 1
 
 		local content = button:FindFirstChild("Content")
 		if content and content:IsA("TextLabel") then
@@ -390,7 +500,7 @@ function MerchantShopController:_requestShopState(): boolean
 	end
 
 	if typeof(result.shopState) == "table" then
-		self._shopState = self:_cloneShopState(result.shopState)
+		self:_applyShopState(result.shopState, self._selectedPotionId)
 		return true
 	end
 
@@ -408,7 +518,7 @@ function MerchantShopController:_purchaseSelectedItem()
 
 	local entry = self:_getSelectedEntry()
 	if not entry then
-		self:_showFailureMessage("Select an item first.")
+		self:_applySoldOutState()
 		return
 	end
 
@@ -423,18 +533,16 @@ function MerchantShopController:_purchaseSelectedItem()
 	end
 
 	if typeof(result.shopState) == "table" then
-		self._shopState = self:_cloneShopState(result.shopState)
+		self:_applyShopState(result.shopState, entry.potionId)
 	end
 
 	if result.ok == true then
-		self:_hideMessage()
-		self:_refreshText()
-		self:_renderViewport()
+		if self._selectedPotionId ~= nil then
+			self:_hideMessage()
+		end
 		return
 	end
 
-	self:_refreshText()
-	self:_renderViewport()
 	self:_showFailureMessage(tostring(result.message or "The purchase could not be completed."))
 end
 
@@ -443,6 +551,7 @@ function MerchantShopController:_bindUi()
 	self:_buildSelectionButtons()
 	self:_hideMessage()
 	self:_clearViewport()
+	self:_refreshVisibleButtons()
 
 	UIController:CreateButton(ui.purchaseButton, function()
 		MerchantShopController:_purchaseSelectedItem()
@@ -487,10 +596,7 @@ function MerchantShopController:_startRefreshWatcher()
 			return
 		end
 
-		if self:_requestShopState() then
-			local entry = self:_getSelectedEntry()
-			self:_applySelection(if entry then entry.potionId else "luck")
-		end
+		self:_requestShopState()
 	end)
 end
 
@@ -508,8 +614,10 @@ function MerchantShopController:_handleShopPrepared(frameName: string, root: Gui
 
 	self._isShopOpen = true
 	self:_hideMessage()
-	self:_requestShopState()
-	self:_applySelection("luck")
+	if not self:_requestShopState() then
+		self:_applyShopState(buildEmptyState())
+		self:_showFailureMessage("The merchant is not ready right now.")
+	end
 	self:_startRefreshWatcher()
 end
 

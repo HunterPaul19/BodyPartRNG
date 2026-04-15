@@ -4,6 +4,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Signal = require(ReplicatedStorage.Common.Signal)
 local BodyPartLoadout = require(ReplicatedStorage.Shared.Character.BodyPartLoadout)
 local BodyPartCollection = require(ReplicatedStorage.Shared.Character.BodyPartCollection)
+local BodyPartEconomy = require(ReplicatedStorage.Shared.Character.BodyPartEconomy)
 local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
 local BodyPartVisuals = require(ReplicatedStorage.Shared.Character.BodyPartVisuals)
@@ -84,6 +85,10 @@ local BodyPartService = {}
 BodyPartService.LoadoutChanged = Signal.new()
 local getCharacter
 local waitForCharacterReady
+local rollbackVisualState
+local restoreSessionState
+local rollbackMutationState
+local persistSessionLoadout
 
 export type EquipOptions = {
 	applyVisuals: boolean?,
@@ -574,6 +579,7 @@ local function buildVisualApplyRequest(
 	if auraError then
 		return nil, auraError
 	end
+	local hasAnyEquippedRegions = BodyPartLoadout.HasAnyEquipped(equippedState)
 
 	for _, region in ipairs(BodyPartRegions.Order) do
 		local entry = equippedState[region]
@@ -594,6 +600,14 @@ local function buildVisualApplyRequest(
 				scale = if forceDefaultScale == true then 1 else entry.scale,
 				attachRules = BodyPartsCatalog.ResolveAttachRules(entry.pieceId),
 				mutation = mutationRequest,
+			}
+		elseif hasAnyEquippedRegions then
+			regions[region] = {
+				bundle = nil,
+				scale = 1,
+				attachRules = nil,
+				mutation = nil,
+				isNativeFallback = true,
 			}
 		end
 	end
@@ -634,10 +648,7 @@ end
 
 local function getSellValueForRecord(record: OwnedBodyParts.OwnedBodyPartRecord): number
 	local piece = BodyPartsCatalog.GetPiece(record.pieceId)
-	local passiveIncomePerSecond = tonumber(record.finalPassiveIncomePerSecond)
-		or tonumber(piece and piece.passiveIncomePerSecond)
-		or 0
-	return math.max(1, math.floor(passiveIncomePerSecond * 60))
+	return BodyPartEconomy.GetSellValue(record, piece)
 end
 
 local function serializeInspectEntry(entry: BodyPartLoadout.LoadoutEntry, ownedRecord: OwnedBodyParts.OwnedBodyPartRecord?)
@@ -725,6 +736,48 @@ end
 
 function BodyPartService:GetSessionLoadout(player: Player): BodyPartLoadout.EquippedState
 	return SessionStore.GetEquipped(player)
+end
+
+function BodyPartService:RefreshEquippedOwnedBodyPartVariant(
+	player: Player,
+	ownedId: string,
+	newScale: number
+): (boolean, string)
+	if typeof(ownedId) ~= "string" or ownedId == "" then
+		return false, "ownedId is required."
+	end
+
+	local previousState = SessionStore.GetEquipped(player)
+	local equippedRegion, equippedEntry = findEquippedEntryForOwnedId(previousState, ownedId)
+	if not equippedRegion or not equippedEntry then
+		return true, "Owned body part variant refreshed."
+	end
+
+	local piece = BodyPartsCatalog.GetPiece(equippedEntry.pieceId)
+	if not piece then
+		return false, string.format("Unknown piece '%s'.", tostring(equippedEntry.pieceId))
+	end
+
+	SessionStore.SetEquipped(player, {
+		ownedId = equippedEntry.ownedId,
+		pieceId = equippedEntry.pieceId,
+		region = equippedEntry.region,
+		scale = BodyPartRuntimeConfig.ClampScale(piece.id, newScale),
+	})
+
+	local success, applyMessage = self:ApplySessionLoadout(player)
+	if not success then
+		rollbackVisualState(player, previousState)
+		return false, applyMessage or "Failed to refresh the equipped body part variant."
+	end
+
+	local persisted, persistMessage = persistSessionLoadout(player, previousState, true)
+	if not persisted then
+		return false, persistMessage or "Failed to save the equipped body part loadout."
+	end
+
+	notifyLoadoutChanged(player)
+	return true, "Owned body part variant refreshed."
 end
 
 function BodyPartService:OwnsFullSet(player: Player, setId: string): boolean
@@ -941,7 +994,7 @@ function BodyPartService:EnsureAuraRuntimeCleared(player: Player, reason: string
 	return true, nil
 end
 
-local function rollbackVisualState(player: Player, previousState: BodyPartLoadout.EquippedState)
+rollbackVisualState = function(player: Player, previousState: BodyPartLoadout.EquippedState)
 	SessionStore.Restore(player, previousState)
 
 	local character = getCharacter(player)
@@ -975,11 +1028,11 @@ local function rollbackVisualState(player: Player, previousState: BodyPartLoadou
 	end
 end
 
-local function restoreSessionState(player: Player, previousState: BodyPartLoadout.EquippedState)
+restoreSessionState = function(player: Player, previousState: BodyPartLoadout.EquippedState)
 	SessionStore.Restore(player, previousState)
 end
 
-local function rollbackMutationState(player: Player, previousState: BodyPartLoadout.EquippedState, applyVisuals: boolean)
+rollbackMutationState = function(player: Player, previousState: BodyPartLoadout.EquippedState, applyVisuals: boolean)
 	if applyVisuals then
 		rollbackVisualState(player, previousState)
 	else
@@ -987,7 +1040,7 @@ local function rollbackMutationState(player: Player, previousState: BodyPartLoad
 	end
 end
 
-local function persistSessionLoadout(player: Player, previousState: BodyPartLoadout.EquippedState, applyVisuals: boolean): (boolean, string?)
+persistSessionLoadout = function(player: Player, previousState: BodyPartLoadout.EquippedState, applyVisuals: boolean): (boolean, string?)
 	local ok, message = DataService:SetEquippedLoadout(player, SessionStore.GetEquipped(player))
 	if ok then
 		return true, nil

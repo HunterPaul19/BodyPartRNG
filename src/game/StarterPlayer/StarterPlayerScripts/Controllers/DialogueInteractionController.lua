@@ -7,6 +7,8 @@ local MerchantPresentationController = require(script.Parent.MerchantPresentatio
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local DIALOGUE_ID_ATTRIBUTE = "DialogueId"
+local DIALOGUE_FRAME_ATTRIBUTE = "DialogueFrameName"
+local DIALOGUE_CAMERA_PART_ATTRIBUTE = "DialogueCameraPartName"
 local SHOP_FRAME_ATTRIBUTE = "ShopFrameName"
 local SHOP_CAMERA_PART_ATTRIBUTE = "ShopCameraPartName"
 
@@ -43,8 +45,9 @@ local function findNamedBasePart(root: Instance, targetName: string): BasePart?
 	return nil
 end
 
-local function resolveShopCameraPart(source: Instance): BasePart?
-	local targetName = readStringAttribute(source, SHOP_CAMERA_PART_ATTRIBUTE)
+local function resolveDialogueCameraPart(source: Instance): BasePart?
+	local targetName = readStringAttribute(source, DIALOGUE_CAMERA_PART_ATTRIBUTE)
+		or readStringAttribute(source, SHOP_CAMERA_PART_ATTRIBUTE)
 	if not targetName then
 		return nil
 	end
@@ -81,8 +84,9 @@ local function buildContext(source: Instance, interactionType: string): { [strin
 		interactionType = interactionType,
 		sourceInstance = source,
 		speakerModel = resolveSpeakerModel(source),
-		shopFrameName = readStringAttribute(source, SHOP_FRAME_ATTRIBUTE),
-		shopCameraPart = resolveShopCameraPart(source),
+		dialogueFrameName = readStringAttribute(source, DIALOGUE_FRAME_ATTRIBUTE)
+			or readStringAttribute(source, SHOP_FRAME_ATTRIBUTE),
+		dialogueCameraPart = resolveDialogueCameraPart(source),
 	}
 end
 

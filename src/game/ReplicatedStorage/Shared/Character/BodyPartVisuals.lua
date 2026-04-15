@@ -20,10 +20,11 @@ export type ApplyMutationRequest = {
 }
 
 export type ApplyRegionRequest = {
-	bundle: Model,
+	bundle: Model?,
 	scale: number?,
 	attachRules: { [string]: AttachRule }?,
 	mutation: ApplyMutationRequest?,
+	isNativeFallback: boolean?,
 }
 
 export type ApplyAuraRequest = {
@@ -60,6 +61,9 @@ local ASSEMBLY_SOURCE_NAME_ATTRIBUTE = "AssemblySourceName"
 local ASSEMBLY_TARGET_PART_NAME_ATTRIBUTE = "AssemblyTargetPartName"
 local ASSEMBLY_ANCHOR_PART_ATTRIBUTE = "AssemblyAnchor"
 local HAS_IMPORTED_BODY_COLORS_ATTRIBUTE = "HasImportedBodyColors"
+local REGION_SOURCE_ATTRIBUTE = "RegionSource"
+local REGION_SOURCE_BUNDLE = "Bundle"
+local REGION_SOURCE_NATIVE_FALLBACK = "NativeFallback"
 
 local REGION_PARTS = {
 	Head = { "Head" },
@@ -2060,6 +2064,14 @@ local function resolveTemplateSource(bundle: Model, regionRequest: ApplyRegionRe
 	return findRegionPart(bundle, templateChildName)
 end
 
+local function resolveNativeFallbackSource(character: Model, partName: string): BasePart?
+	local source = character:FindFirstChild(partName)
+	if source and source:IsA("BasePart") then
+		return source
+	end
+	return nil
+end
+
 local function buildTargetSizes(baseRig: Model, request: ApplyRequest): ({ [string]: Vector3 }?, string?)
 	local targetSizes, baseError = capturePartSizeMap(baseRig)
 	if not targetSizes then
@@ -2069,6 +2081,10 @@ local function buildTargetSizes(baseRig: Model, request: ApplyRequest): ({ [stri
 	for _, region in ipairs(BodyPartRegions.Order) do
 		local regionRequest = request.regions and request.regions[region] or nil
 		if regionRequest then
+			if regionRequest.isNativeFallback == true then
+				continue
+			end
+
 			local bundle = regionRequest.bundle
 			if not (bundle and bundle:IsA("Model")) then
 				return nil, string.format("%s is missing a bundle model.", region)
@@ -2222,46 +2238,6 @@ local function placePartFromAttachmentWorldCFrame(
 	local offset = getScaledOffset(attachRule and (attachRule.visualOffsetCFrame or attachRule.offsetCFrame) or CFrame.new(), finalScale)
 	visualPart.CFrame = attachmentWorldCFrame * attachment.CFrame:Inverse() * offset
 	return true
-end
-
-local function placeHeadLockedToTorso(
-	character: Model,
-	visualPartsByName: { [string]: BasePart },
-	referencePose
-): (boolean, BasePart | string)
-	local anchorUpperTorso = getAppliedTorsoAnchorPart(character, "UpperTorso")
-	local torsoAttachmentWorldCFrame =
-		getAppliedRegionAttachmentWorldCFrame(character, "Torso", "UpperTorso", "NeckRigAttachment")
-	if torsoAttachmentWorldCFrame == nil then
-		local liveUpperTorso = character:FindFirstChild("UpperTorso")
-		if liveUpperTorso and liveUpperTorso:IsA("BasePart") then
-			anchorUpperTorso = liveUpperTorso
-		end
-	end
-
-	if not anchorUpperTorso then
-		return false, "Missing UpperTorso on character for head lock placement."
-	end
-
-	local visualHead = visualPartsByName.Head
-	if not visualHead then
-		return false, "Missing visual head part for head lock placement."
-	end
-
-	if torsoAttachmentWorldCFrame == nil then
-		torsoAttachmentWorldCFrame = getLiveReferenceAttachmentWorldCFrame(character, referencePose, "UpperTorso", "NeckRigAttachment")
-	end
-	if torsoAttachmentWorldCFrame == nil then
-		return false, "Missing UpperTorso.NeckRigAttachment for head lock placement."
-	end
-
-	local headAttachment = findDirectAttachment(visualHead, "NeckRigAttachment")
-	if not headAttachment then
-		return false, "Missing Head.NeckRigAttachment for head lock placement."
-	end
-
-	visualHead.CFrame = torsoAttachmentWorldCFrame * headAttachment.CFrame:Inverse()
-	return true, anchorUpperTorso
 end
 
 local function canUseCustomArticulatedPlacement(
@@ -2530,6 +2506,39 @@ local function placePartsWithAttachmentChain(
 	end
 
 	return true
+end
+
+local function correctTorsoUpperPartFromLiveWaistSeam(
+	character: Model,
+	referencePose,
+	visualPartsByName: { [string]: BasePart }
+): (boolean, string?)
+	local upperTorsoVisual = visualPartsByName.UpperTorso
+	if not upperTorsoVisual then
+		return false, "Missing visual UpperTorso for torso seam correction."
+	end
+
+	local upperWaistAttachment = findDirectAttachment(upperTorsoVisual, "WaistRigAttachment")
+	if not upperWaistAttachment then
+		return false, "Missing visual UpperTorso.WaistRigAttachment for torso seam correction."
+	end
+
+	local targetWaistWorldCFrame =
+		getLiveReferenceAttachmentWorldCFrame(character, referencePose, "LowerTorso", "WaistRigAttachment")
+	local seamSource = "LiveLowerTorsoWaist"
+
+	if targetWaistWorldCFrame == nil then
+		targetWaistWorldCFrame =
+			getLiveReferenceAttachmentWorldCFrame(character, referencePose, "UpperTorso", "WaistRigAttachment")
+		seamSource = "LiveUpperTorsoWaist"
+	end
+
+	if targetWaistWorldCFrame == nil then
+		return false, "Missing live torso waist seam for torso upper-part correction."
+	end
+
+	upperTorsoVisual.CFrame = targetWaistWorldCFrame * upperWaistAttachment.CFrame:Inverse()
+	return true, seamSource
 end
 
 local function transformRegionParts(visualPartsByName: { [string]: BasePart }, transform: CFrame)
@@ -3015,14 +3024,17 @@ applyRegion = function(character: Model, region: string, regionRequest: ApplyReg
 		return false, string.format("Unknown region %s.", tostring(region))
 	end
 
+	local isNativeFallback = regionRequest.isNativeFallback == true
 	local bundle = regionRequest.bundle
-	if not (bundle and bundle:IsA("Model")) then
-		return false, string.format("%s is missing a bundle model.", region)
-	end
+	if not isNativeFallback then
+		if not (bundle and bundle:IsA("Model")) then
+			return false, string.format("%s is missing a bundle model.", region)
+		end
 
-	local validationError = validateBundleVisualContract(bundle, region)
-	if validationError then
-		return false, validationError
+		local validationError = validateBundleVisualContract(bundle, region)
+		if validationError then
+			return false, validationError
+		end
 	end
 
 	clearRegionInternal(character, region)
@@ -3032,13 +3044,13 @@ applyRegion = function(character: Model, region: string, regionRequest: ApplyReg
 	local visualPartsByName = {}
 	local characterPartsByName = {}
 	local templateCFramesByName = {}
-	local allowedAnimationConstraintNames = bundle:GetAttribute("ArticulatedRegionReady") == false
+	local allowedAnimationConstraintNames = (not isNativeFallback and bundle:GetAttribute("ArticulatedRegionReady") == false)
 			and nil
 		or buildAllowedAnimationConstraintLookup(region)
-	local nativeRigPlacementReady = bundle:GetAttribute("NativeRigPlacementReady")
-	local transformRotationReady = bundle:GetAttribute("TransformRotationReady")
-	local rigAttachmentOrientationReady = bundle:GetAttribute("RigAttachmentOrientationReady")
-	local rotationDriftFree = bundle:GetAttribute("RotationDriftFree")
+	local nativeRigPlacementReady = if isNativeFallback then true else bundle:GetAttribute("NativeRigPlacementReady")
+	local transformRotationReady = if isNativeFallback then true else bundle:GetAttribute("TransformRotationReady")
+	local rigAttachmentOrientationReady = if isNativeFallback then true else bundle:GetAttribute("RigAttachmentOrientationReady")
+	local rotationDriftFree = if isNativeFallback then true else bundle:GetAttribute("RotationDriftFree")
 
 	for _, bodyPartName in ipairs(getRigPartNames(region) or {}) do
 		local characterPart = character:FindFirstChild(bodyPartName)
@@ -3046,8 +3058,13 @@ applyRegion = function(character: Model, region: string, regionRequest: ApplyReg
 			return false, string.format("Missing R15 body part %s on character.", bodyPartName)
 		end
 
-		local source = resolveTemplateSource(bundle, regionRequest, bodyPartName)
+		local source = if isNativeFallback
+			then resolveNativeFallbackSource(character, bodyPartName)
+			else resolveTemplateSource(bundle, regionRequest, bodyPartName)
 		if not source then
+			if isNativeFallback then
+				return false, string.format("Character is missing native fallback part %s.", bodyPartName)
+			end
 			return false, string.format("Bundle %s is missing %s.", bundle.Name, bodyPartName)
 		end
 
@@ -3063,97 +3080,72 @@ applyRegion = function(character: Model, region: string, regionRequest: ApplyReg
 		characterPartsByName[bodyPartName] = characterPart
 	end
 
-	local accessoriesApplied, accessoryError = applyBundleAccessories(regionFolder, bundle, visualPartsByName, finalScale)
-	if not accessoriesApplied then
-		clearRegionInternal(character, region)
-		return false, accessoryError
-	end
+	if not isNativeFallback then
+		local accessoriesApplied, accessoryError = applyBundleAccessories(regionFolder, bundle, visualPartsByName, finalScale)
+		if not accessoriesApplied then
+			clearRegionInternal(character, region)
+			return false, accessoryError
+		end
 
-	local assembliesApplied, assemblyError = applyBundleGenericAssemblies(regionFolder, bundle, visualPartsByName, finalScale)
-	if not assembliesApplied then
-		clearRegionInternal(character, region)
-		return false, assemblyError
+		local assembliesApplied, assemblyError = applyBundleGenericAssemblies(regionFolder, bundle, visualPartsByName, finalScale)
+		if not assembliesApplied then
+			clearRegionInternal(character, region)
+			return false, assemblyError
+		end
 	end
 
 	local placementMode = PLACEMENT_MODE_PIVOT
-	local headLockedToTorso = false
-	local headLockPart0 = nil
-	if region == "Head" then
-		local locked, lockResult = placeHeadLockedToTorso(character, visualPartsByName, referencePose)
-		if not locked then
-			clearRegionInternal(character, region)
-			return false, tostring(lockResult)
+	if not isNativeFallback and canUseCustomArticulatedPlacement(region, bundle, visualPartsByName, templateCFramesByName) then
+		if placePartsWithAuthoredAssembly(region, regionRequest, referencePose, visualPartsByName, templateCFramesByName, finalScale) then
+			placementMode = PLACEMENT_MODE_ARTICULATED
 		end
-		headLockedToTorso = true
-		headLockPart0 = lockResult :: BasePart
-	elseif region == "Torso" then
-		local placed = placeTorsoFromLiveParts(referencePose, regionRequest, visualPartsByName, finalScale)
-		if not placed then
-			clearRegionInternal(character, region)
-			return false, "Failed to place torso from the neutral reference pose."
-		end
-		placementMode = PLACEMENT_MODE_TORSO_JOINT
-	elseif region == "LeftArm" or region == "RightArm" then
-		local placed = placeLimbWithLiveJointChain(character, region, referencePose, regionRequest, visualPartsByName, finalScale)
-		if not placed then
-			clearRegionInternal(character, region)
-			return false, string.format("Failed to place %s from the neutral joint chain.", region)
-		end
-		placementMode = PLACEMENT_MODE_ARM_JOINT
-	elseif region == "LeftLeg" or region == "RightLeg" then
-		local placed = placeLimbWithLiveJointChain(character, region, referencePose, regionRequest, visualPartsByName, finalScale)
-		if not placed then
-			clearRegionInternal(character, region)
-			return false, string.format("Failed to place %s from the neutral joint chain.", region)
-		end
-		placementMode = PLACEMENT_MODE_LEG_JOINT
-	else
-		if canUseCustomArticulatedPlacement(region, bundle, visualPartsByName, templateCFramesByName) then
-			if placePartsWithAuthoredAssembly(region, regionRequest, referencePose, visualPartsByName, templateCFramesByName, finalScale) then
-				placementMode = PLACEMENT_MODE_ARTICULATED
-			end
-		end
+	end
 
-		if placementMode == PLACEMENT_MODE_PIVOT
-			and canUseAuthoredAssemblyPlacement(region, bundle, visualPartsByName, templateCFramesByName)
-		then
-			if placePartsWithAuthoredAssembly(region, regionRequest, referencePose, visualPartsByName, templateCFramesByName, finalScale) then
-				placementMode = PLACEMENT_MODE_AUTHORED
-			end
+	if placementMode == PLACEMENT_MODE_PIVOT
+		and not isNativeFallback
+		and canUseAuthoredAssemblyPlacement(region, bundle, visualPartsByName, templateCFramesByName)
+	then
+		if placePartsWithAuthoredAssembly(region, regionRequest, referencePose, visualPartsByName, templateCFramesByName, finalScale) then
+			placementMode = PLACEMENT_MODE_AUTHORED
 		end
+	end
 
-		if placementMode == PLACEMENT_MODE_PIVOT and canUseAttachmentChainPlacement(region, visualPartsByName) then
-			if placePartsWithAttachmentChain(region, regionRequest, referencePose, visualPartsByName, finalScale) then
-				placementMode = PLACEMENT_MODE_CHAIN
-			end
+	if placementMode == PLACEMENT_MODE_PIVOT and canUseAttachmentChainPlacement(region, visualPartsByName) then
+		if placePartsWithAttachmentChain(region, regionRequest, referencePose, visualPartsByName, finalScale) then
+			placementMode = PLACEMENT_MODE_CHAIN
 		end
+	end
 
-		if placementMode == PLACEMENT_MODE_PIVOT then
-			for _, bodyPartName in ipairs(getRigPartNames(region) or {}) do
-				local partReferenceCFrame = referencePose and referencePose.partCFrames[bodyPartName] or nil
-				if not partReferenceCFrame then
-					clearRegionInternal(character, region)
-					return false, string.format("Missing neutral reference pose for %s.", bodyPartName)
-				end
-				placePartFromReference(
-					partReferenceCFrame,
-					visualPartsByName[bodyPartName],
-					getAttachRule(regionRequest, bodyPartName),
-					finalScale
-				)
+	if placementMode == PLACEMENT_MODE_PIVOT then
+		for _, bodyPartName in ipairs(getRigPartNames(region) or {}) do
+			local partReferenceCFrame = referencePose and referencePose.partCFrames[bodyPartName] or nil
+			if not partReferenceCFrame then
+				clearRegionInternal(character, region)
+				return false, string.format("Missing neutral reference pose for %s.", bodyPartName)
 			end
+			placePartFromReference(
+				partReferenceCFrame,
+				visualPartsByName[bodyPartName],
+				getAttachRule(regionRequest, bodyPartName),
+				finalScale
+			)
 		end
+	end
+
+	local torsoSeamCorrectionSource = nil
+	if region == "Torso" then
+		local corrected, seamSourceOrError = correctTorsoUpperPartFromLiveWaistSeam(character, referencePose, visualPartsByName)
+		if not corrected then
+			clearRegionInternal(character, region)
+			return false, seamSourceOrError or "Failed to correct torso upper-part seam placement."
+		end
+		torsoSeamCorrectionSource = seamSourceOrError
 	end
 
 	local usedExternalSeamAlignment, externalSeamAnchorRegion, externalSeamAttachmentName, externalSeamError, externalSeamAnchorSource =
 		false, nil, nil, nil, nil
-	local usesLiveRigChainPlacement = placementMode == PLACEMENT_MODE_TORSO_JOINT
-		or placementMode == PLACEMENT_MODE_ARM_JOINT
-		or placementMode == PLACEMENT_MODE_LEG_JOINT
-	if not headLockedToTorso and not usesLiveRigChainPlacement then
-		usedExternalSeamAlignment, externalSeamAnchorRegion, externalSeamAttachmentName, externalSeamError, externalSeamAnchorSource =
-			applyExternalSeamAlignment(character, region, visualPartsByName, referencePose)
-	end
+	usedExternalSeamAlignment, externalSeamAnchorRegion, externalSeamAttachmentName, externalSeamError, externalSeamAnchorSource =
+		applyExternalSeamAlignment(character, region, visualPartsByName, referencePose)
 	if externalSeamError then
 		clearRegionInternal(character, region)
 		return false, externalSeamError
@@ -3169,9 +3161,7 @@ applyRegion = function(character: Model, region: string, regionRequest: ApplyReg
 		local visualPart = visualPartsByName[bodyPartName]
 		local attachRule = getAttachRule(regionRequest, bodyPartName)
 
-		if headLockedToTorso and bodyPartName == "Head" and headLockPart0 then
-			createSolvedRigWeld("BodyPartWeld", headLockPart0, visualPart, visualPart)
-		elseif (placementMode == PLACEMENT_MODE_ARTICULATED or placementMode == PLACEMENT_MODE_AUTHORED)
+		if (placementMode == PLACEMENT_MODE_ARTICULATED or placementMode == PLACEMENT_MODE_AUTHORED)
 			and authoredRootVisualPart
 			and authoredRootCharacterPart
 		then
@@ -3199,8 +3189,12 @@ applyRegion = function(character: Model, region: string, regionRequest: ApplyReg
 	end
 
 	regionFolder:SetAttribute("BodyPartRegion", region)
-	regionFolder:SetAttribute("BundleName", bundle.Name)
-	regionFolder:SetAttribute(HAS_IMPORTED_BODY_COLORS_ATTRIBUTE, bundle:GetAttribute(HAS_IMPORTED_BODY_COLORS_ATTRIBUTE) == true)
+	regionFolder:SetAttribute("BundleName", if isNativeFallback then REGION_SOURCE_NATIVE_FALLBACK else bundle.Name)
+	regionFolder:SetAttribute(
+		HAS_IMPORTED_BODY_COLORS_ATTRIBUTE,
+		if isNativeFallback then false else bundle:GetAttribute(HAS_IMPORTED_BODY_COLORS_ATTRIBUTE) == true
+	)
+	regionFolder:SetAttribute(REGION_SOURCE_ATTRIBUTE, if isNativeFallback then REGION_SOURCE_NATIVE_FALLBACK else REGION_SOURCE_BUNDLE)
 	regionFolder:SetAttribute("AppliedScale", finalScale)
 	regionFolder:SetAttribute("PlacementMode", placementMode)
 	regionFolder:SetAttribute("RuntimeMode", if USE_SOULS_STYLE_RUNTIME then "SoulsAdapter" else "Legacy")
@@ -3211,26 +3205,16 @@ applyRegion = function(character: Model, region: string, regionRequest: ApplyReg
 		"IsCustomCapable",
 		placementMode == PLACEMENT_MODE_ARTICULATED
 			or placementMode == PLACEMENT_MODE_AUTHORED
-			or placementMode == PLACEMENT_MODE_TORSO_JOINT
-			or placementMode == PLACEMENT_MODE_ARM_JOINT
-			or placementMode == PLACEMENT_MODE_LEG_JOINT
 	)
-	regionFolder:SetAttribute("SupportsExternalSeams", bundle:GetAttribute("ExternalSeamReady") ~= false)
+	regionFolder:SetAttribute("SupportsExternalSeams", if isNativeFallback then true else bundle:GetAttribute("ExternalSeamReady") ~= false)
 	regionFolder:SetAttribute("UsedExternalSeamAlignment", usedExternalSeamAlignment)
 	regionFolder:SetAttribute("ExternalSeamAnchorRegion", externalSeamAnchorRegion)
 	regionFolder:SetAttribute("ExternalSeamAttachmentName", externalSeamAttachmentName)
 	regionFolder:SetAttribute("ExternalSeamAnchorSource", externalSeamAnchorSource)
-	regionFolder:SetAttribute("HeadLockedToTorso", headLockedToTorso)
+	regionFolder:SetAttribute("HeadLockedToTorso", false)
 	regionFolder:SetAttribute("LiveAnchorWeldMode", "SolvedWeld")
-	regionFolder:SetAttribute(
-		"SeamSolveSource",
-		if placementMode == PLACEMENT_MODE_TORSO_JOINT
-			or placementMode == PLACEMENT_MODE_ARM_JOINT
-			or placementMode == PLACEMENT_MODE_LEG_JOINT
-			then "LiveRigChain"
-			else nil
-	)
-	regionFolder:SetAttribute("TorsoSeamSource", if placementMode == PLACEMENT_MODE_TORSO_JOINT then "LivePartPair" else nil)
+	regionFolder:SetAttribute("SeamSolveSource", nil)
+	regionFolder:SetAttribute("TorsoSeamSource", torsoSeamCorrectionSource)
 	regionFolder:SetAttribute("NativeRigPlacementReady", nativeRigPlacementReady)
 	regionFolder:SetAttribute("TransformRotationReady", transformRotationReady)
 	regionFolder:SetAttribute("RigAttachmentOrientationReady", rigAttachmentOrientationReady)
@@ -3246,6 +3230,7 @@ applyRegion = function(character: Model, region: string, regionRequest: ApplyReg
 		bundle = bundle,
 		scale = finalScale,
 		attachRules = cloneAttachRules(regionRequest.attachRules),
+		isNativeFallback = isNativeFallback,
 	})
 
 	return true, nil

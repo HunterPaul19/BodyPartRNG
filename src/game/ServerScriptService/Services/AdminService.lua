@@ -3,6 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local AdminConfig = require(script.Parent.AdminConfig)
+local AppraisalService = require(script.Parent.AppraisalService)
 local AuraService = require(script.Parent.AuraService)
 local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
@@ -354,6 +355,13 @@ local function handleTestDialogue()
 	})
 end
 
+local function handleShowAppraiser()
+	local appraisalState = AppraisalService:ForceAppear()
+	return response(true, "OK", "The appraiser has been forced onto the map.", {
+		appraisalState = appraisalState,
+	})
+end
+
 local function handleGetRuntimeState(player: Player)
 	return response(true, "OK", "Loaded body part runtime state.", BodyPartService:GetClientState(player))
 end
@@ -590,6 +598,10 @@ function AdminService:HandleAction(player: Player, request: any)
 
 	if tabId == "overview" and actionId == "test_dialogue" then
 		return handleTestDialogue()
+	end
+
+	if tabId == "overview" and actionId == "show_appraiser" then
+		return handleShowAppraiser()
 	end
 
 	if tabId == PLAYERS_TAB_ID and actionId == "inspect_player_profile" then
