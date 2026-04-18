@@ -1,6 +1,8 @@
 local PotionConfig = {}
 
-export type PotionFamilyId = "money" | "luck" | "rollSpeed"
+export type PotionFamilyId = "money" | "luck" | "rollSpeed" | "titanic" | "mutation"
+
+export type MutationChanceBonusById = { [string]: number }
 
 export type PotionConfigEntry = {
 	id: string,
@@ -16,13 +18,21 @@ export type PotionConfigEntry = {
 	passiveIncomeMultiplier: number?,
 	luckBonus: number?,
 	rollSpeedBonus: number?,
+	bodyPartScaleOverride: number?,
+	effectDescription: string?,
+	merchantDescription: string?,
+	mutationChanceBonusById: MutationChanceBonusById?,
+	merchantAppearanceChance: number?,
+	merchantPriceInTimeShards: number?,
+	merchantStockPerRefresh: number?,
 }
 
 type PotionFamilyDefinition = {
 	id: PotionFamilyId,
 	label: string,
-	assetPrefix: string,
 	sortOrder: number,
+	assetPrefix: string?,
+	defaultTierId: string?,
 }
 
 type PotionTierDefinition = {
@@ -59,6 +69,17 @@ local FAMILY_DEFINITIONS: { PotionFamilyDefinition } = {
 		label = "Roll Speed",
 		assetPrefix = "RollSpeed",
 		sortOrder = 3,
+		defaultTierId = "rollSpeed3",
+	},
+	{
+		id = "titanic",
+		label = "Titanic",
+		sortOrder = 4,
+	},
+	{
+		id = "mutation",
+		label = "Mutation",
+		sortOrder = 5,
 	},
 }
 
@@ -66,7 +87,7 @@ local TIER_DEFINITIONS: { PotionTierDefinition } = {
 	{
 		tier = 1,
 		tierLabel = "I",
-		buyPrice = 1000,
+		buyPrice = 20,
 		durationSeconds = 300,
 		passiveIncomeMultiplier = 1.25,
 		luckBonus = 0.25,
@@ -75,7 +96,7 @@ local TIER_DEFINITIONS: { PotionTierDefinition } = {
 	{
 		tier = 2,
 		tierLabel = "II",
-		buyPrice = 4000,
+		buyPrice = 45,
 		durationSeconds = 300,
 		passiveIncomeMultiplier = 1.50,
 		luckBonus = 0.50,
@@ -84,7 +105,7 @@ local TIER_DEFINITIONS: { PotionTierDefinition } = {
 	{
 		tier = 3,
 		tierLabel = "III",
-		buyPrice = 12000,
+		buyPrice = 100,
 		durationSeconds = 300,
 		passiveIncomeMultiplier = 2.00,
 		luckBonus = 1.00,
@@ -93,7 +114,7 @@ local TIER_DEFINITIONS: { PotionTierDefinition } = {
 	{
 		tier = 4,
 		tierLabel = "IV",
-		buyPrice = 40000,
+		buyPrice = 250,
 		durationSeconds = 300,
 		passiveIncomeMultiplier = 2.75,
 		luckBonus = 1.50,
@@ -102,7 +123,7 @@ local TIER_DEFINITIONS: { PotionTierDefinition } = {
 	{
 		tier = 5,
 		tierLabel = "V",
-		buyPrice = 125000,
+		buyPrice = 600,
 		durationSeconds = 300,
 		passiveIncomeMultiplier = 4.00,
 		luckBonus = 2.25,
@@ -110,9 +131,109 @@ local TIER_DEFINITIONS: { PotionTierDefinition } = {
 	},
 }
 
+local FIXED_ENTRIES: { PotionConfigEntry } = {
+	{
+		id = "titanic",
+		familyId = "titanic",
+		familyLabel = "Titanic",
+		tier = 1,
+		tierLabel = "Titanic",
+		label = "Titanic Potion",
+		assetModelName = "Titanic",
+		buyPrice = 2500,
+		durationSeconds = 600,
+		sortOrder = 16,
+		passiveIncomeMultiplier = 6.0,
+		luckBonus = 5.0,
+		bodyPartScaleOverride = 10.0,
+		effectDescription = "Effect: 10.0x limbs, x6 Passive Income, +500% Luck",
+		merchantDescription = "A contraband giant's brew that supersizes every equipped limb for a 10-minute progression spike.",
+		merchantAppearanceChance = 0.005,
+		merchantPriceInTimeShards = 2500,
+		merchantStockPerRefresh = 1,
+	},
+	{
+		id = "diamondPotion",
+		familyId = "mutation",
+		familyLabel = "Mutation",
+		tier = 4,
+		tierLabel = "Diamond",
+		label = "Diamond Potion",
+		assetModelName = "DiamondPotion",
+		buyPrice = 2000,
+		durationSeconds = 300,
+		sortOrder = 17,
+		effectDescription = "Increases Diamond mutation chance by 1% (works for appraisal)",
+		mutationChanceBonusById = {
+			diamond = 1.0,
+		},
+		merchantAppearanceChance = 0.05,
+		merchantPriceInTimeShards = 2000,
+		merchantStockPerRefresh = 1,
+	},
+	{
+		id = "magmaPotion",
+		familyId = "mutation",
+		familyLabel = "Mutation",
+		tier = 3,
+		tierLabel = "Magma",
+		label = "Magma Potion",
+		assetModelName = "MagmaPotion",
+		buyPrice = 2500,
+		durationSeconds = 300,
+		sortOrder = 18,
+		effectDescription = "Increases Magma mutation chance by 1% (works for appraisal)",
+		mutationChanceBonusById = {
+			magma = 1.0,
+		},
+		merchantAppearanceChance = 0.01,
+		merchantPriceInTimeShards = 2500,
+		merchantStockPerRefresh = 1,
+	},
+	{
+		id = "corruptedPotion",
+		familyId = "mutation",
+		familyLabel = "Mutation",
+		tier = 2,
+		tierLabel = "Corrupted",
+		label = "Corrupted Potion",
+		assetModelName = "CorruptedPotion",
+		buyPrice = 3000,
+		durationSeconds = 300,
+		sortOrder = 19,
+		effectDescription = "Increases Corrupted mutation chance by 1% (works for appraisal)",
+		mutationChanceBonusById = {
+			corrupted = 1.0,
+		},
+		merchantAppearanceChance = 0.005,
+		merchantPriceInTimeShards = 3000,
+		merchantStockPerRefresh = 1,
+	},
+	{
+		id = "prismaticPotion",
+		familyId = "mutation",
+		familyLabel = "Mutation",
+		tier = 1,
+		tierLabel = "Prismatic",
+		label = "Prismatic Potion",
+		assetModelName = "PrismaticPotion",
+		buyPrice = 3500,
+		durationSeconds = 300,
+		sortOrder = 20,
+		effectDescription = "Increases Prismatic mutation chance by 1% (works for appraisal)",
+		mutationChanceBonusById = {
+			prismatic = 1.0,
+		},
+		merchantAppearanceChance = 0.001,
+		merchantPriceInTimeShards = 3500,
+		merchantStockPerRefresh = 1,
+	},
+}
+
 local familyIds = table.create(#FAMILY_DEFINITIONS)
 local familyLabelsById: { [string]: string } = {}
 local familyEntriesById: { [string]: { PotionConfigEntry } } = {}
+local defaultTierIdsByFamilyId: { [string]: string } = {}
 local ENTRIES: { PotionConfigEntry } = {}
 local entriesById: { [string]: PotionConfigEntry } = {}
 
@@ -120,29 +241,45 @@ for familyIndex, family in ipairs(FAMILY_DEFINITIONS) do
 	familyIds[familyIndex] = family.id
 	familyLabelsById[family.id] = family.label
 	familyEntriesById[family.id] = {}
-
-	for _, tierDefinition in ipairs(TIER_DEFINITIONS) do
-		local entry: PotionConfigEntry = {
-			id = string.format("%s%d", family.id, tierDefinition.tier),
-			familyId = family.id,
-			familyLabel = family.label,
-			tier = tierDefinition.tier,
-			tierLabel = tierDefinition.tierLabel,
-			label = string.format("%s Potion %s", family.label, tierDefinition.tierLabel),
-			assetModelName = string.format("%s%d", family.assetPrefix, tierDefinition.tier),
-			buyPrice = tierDefinition.buyPrice,
-			durationSeconds = tierDefinition.durationSeconds,
-			sortOrder = ((family.sortOrder - 1) * #TIER_DEFINITIONS) + tierDefinition.tier,
-			passiveIncomeMultiplier = if family.id == "money" then tierDefinition.passiveIncomeMultiplier else nil,
-			luckBonus = if family.id == "luck" then tierDefinition.luckBonus else nil,
-			rollSpeedBonus = if family.id == "rollSpeed" then tierDefinition.rollSpeedBonus else nil,
-		}
-
-		local frozenEntry = table.freeze(entry)
-		table.insert(ENTRIES, frozenEntry)
-		table.insert(familyEntriesById[family.id], frozenEntry)
-		entriesById[string.lower(entry.id)] = frozenEntry
+	if family.defaultTierId ~= nil then
+		defaultTierIdsByFamilyId[family.id] = family.defaultTierId
 	end
+
+	if family.assetPrefix ~= nil then
+		for _, tierDefinition in ipairs(TIER_DEFINITIONS) do
+			local entry: PotionConfigEntry = {
+				id = string.format("%s%d", family.id, tierDefinition.tier),
+				familyId = family.id,
+				familyLabel = family.label,
+				tier = tierDefinition.tier,
+				tierLabel = tierDefinition.tierLabel,
+				label = string.format("%s Potion %s", family.label, tierDefinition.tierLabel),
+				assetModelName = string.format("%s%d", family.assetPrefix, tierDefinition.tier),
+				buyPrice = tierDefinition.buyPrice,
+				durationSeconds = tierDefinition.durationSeconds,
+				sortOrder = ((family.sortOrder - 1) * #TIER_DEFINITIONS) + tierDefinition.tier,
+				passiveIncomeMultiplier = if family.id == "money" then tierDefinition.passiveIncomeMultiplier else nil,
+				luckBonus = if family.id == "luck" then tierDefinition.luckBonus else nil,
+				rollSpeedBonus = if family.id == "rollSpeed" then tierDefinition.rollSpeedBonus else nil,
+			}
+
+			local frozenEntry = table.freeze(entry)
+			table.insert(ENTRIES, frozenEntry)
+			table.insert(familyEntriesById[family.id], frozenEntry)
+			entriesById[string.lower(entry.id)] = frozenEntry
+		end
+	end
+end
+
+for _, rawEntry in ipairs(FIXED_ENTRIES) do
+	local familyLabel = familyLabelsById[rawEntry.familyId] or rawEntry.familyLabel
+	local entry = table.clone(rawEntry)
+	entry.familyLabel = familyLabel
+
+	local frozenEntry = table.freeze(entry :: PotionConfigEntry)
+	table.insert(ENTRIES, frozenEntry)
+	table.insert(familyEntriesById[entry.familyId], frozenEntry)
+	entriesById[string.lower(entry.id)] = frozenEntry
 end
 
 local function trimAndLower(value: any): string?
@@ -243,7 +380,7 @@ function PotionConfig.GetDefaultTierIdForFamily(familyId: any): string?
 		return nil
 	end
 
-	return string.format("%s3", normalizedFamilyId)
+	return defaultTierIdsByFamilyId[normalizedFamilyId]
 end
 
 function PotionConfig.GetSellPrice(potionId: any): number

@@ -17,12 +17,16 @@ local LOCAL_PLAYER = Players.LocalPlayer
 local ACCESS_ATTRIBUTE = "CanUseAdminPanel"
 local OVERVIEW_TAB_ID = "overview"
 local PLAYERS_TAB_ID = "players"
+local PROGRESSION_TAB_ID = "progression"
 local BODY_PARTS_TAB_ID = "bodyParts"
 local WINDOW_NAME = "AdminPanel"
 local TOGGLE_KEY = Enum.KeyCode.P
 local SUCCESS_COLOR = Color3.fromRGB(120, 255, 178)
 local ERROR_COLOR = Color3.fromRGB(255, 141, 141)
 local DEFAULT_STATUS_COLOR = Color3.fromRGB(178, 187, 211)
+local NOTIFICATION_DEFAULT_DURATION = "4"
+local NOTIFICATION_MIN_DURATION = 1
+local NOTIFICATION_MAX_DURATION = 10
 local SANDBOX_CARD_COLOR = Color3.fromRGB(19, 25, 45)
 local SANDBOX_STROKE_COLOR = Color3.fromRGB(62, 74, 111)
 local SANDBOX_FIELD_COLOR = Color3.fromRGB(24, 31, 55)
@@ -67,6 +71,13 @@ function AdminPanelController:_ensureState()
 	self._playerStatsSelectedUserId = nil
 	self._playerStatsSummary = nil
 	self._playerStatsUi = {}
+	self._notificationTargetKey = "self"
+	self._notificationMessageText = ""
+	self._notificationDurationText = NOTIFICATION_DEFAULT_DURATION
+	self._notificationUi = {}
+	self._luckOverrideInputText = ""
+	self._luckOverrideState = nil
+	self._luckOverrideUi = {}
 end
 
 local function setTextStroke(label: TextLabel, transparency: number)
@@ -105,12 +116,31 @@ local function formatNumberish(value: number): string
 	return string.format("%.2f", numericValue):gsub("0+$", ""):gsub("%.$", "")
 end
 
+local function formatLuckMultiplier(value: number?): string
+	local numericValue = tonumber(value)
+	if numericValue == nil or numericValue ~= numericValue then
+		return "N/A"
+	end
+
+	return string.format("%sx", formatNumberish(numericValue))
+end
+
 local function formatPlayerDisplay(player: Player?): string
 	if not player then
 		return "No player selected"
 	end
 
 	return string.format("%s (@%s)", player.DisplayName, player.Name)
+end
+
+local function trimText(value: any): string
+	if typeof(value) ~= "string" then
+		return ""
+	end
+
+	local normalized = string.gsub(value, "\r\n", "\n")
+	normalized = string.gsub(normalized, "\r", "\n")
+	return string.match(normalized, "^%s*(.-)%s*$") or ""
 end
 
 local function setSandboxButtonEnabled(button: GuiButton?, enabled: boolean)
@@ -237,6 +267,11 @@ function AdminPanelController:_setTab(tabId: string)
 	elseif tabId == PLAYERS_TAB_ID then
 		self:_syncPlayerStatsUi()
 		self:_loadSelectedPlayerStats(true)
+	elseif tabId == PROGRESSION_TAB_ID then
+		self:_syncLuckOverrideUi()
+		self:_loadLuckOverrideState(true)
+	elseif tabId == OVERVIEW_TAB_ID then
+		self:_syncNotificationUi()
 	end
 end
 
@@ -410,6 +445,53 @@ function AdminPanelController:_createSandboxValueLabel(parent: Instance): TextLa
 	return valueLabel
 end
 
+function AdminPanelController:_createSandboxTextInput(
+	parent: Instance,
+	name: string,
+	initialText: string,
+	placeholderText: string,
+	height: number,
+	isMultiLine: boolean?
+): TextBox
+	local input = Instance.new("TextBox")
+	input.Name = name
+	input.BackgroundColor3 = Color3.fromRGB(15, 20, 39)
+	input.ClearTextOnFocus = false
+	input.MultiLine = isMultiLine == true
+	input.PlaceholderText = placeholderText
+	input.Size = UDim2.new(1, 0, 0, height)
+	input.Font = Enum.Font.GothamSemibold
+	input.Text = initialText
+	input.TextColor3 = Color3.fromRGB(245, 248, 255)
+	input.TextSize = if isMultiLine == true then 14 else 16
+	input.TextWrapped = isMultiLine == true
+	input.TextXAlignment = Enum.TextXAlignment.Left
+	input.TextYAlignment = if isMultiLine == true then Enum.TextYAlignment.Top else Enum.TextYAlignment.Center
+	input.Parent = parent
+	setGenerated(input)
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = input
+	setGenerated(corner)
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = SANDBOX_STROKE_COLOR
+	stroke.Transparency = 0.2
+	stroke.Parent = input
+	setGenerated(stroke)
+
+	local padding = Instance.new("UIPadding")
+	padding.PaddingLeft = UDim.new(0, 12)
+	padding.PaddingRight = UDim.new(0, 12)
+	padding.PaddingTop = UDim.new(0, if isMultiLine == true then 10 else 0)
+	padding.PaddingBottom = UDim.new(0, if isMultiLine == true then 10 else 0)
+	padding.Parent = input
+	setGenerated(padding)
+
+	return input
+end
+
 function AdminPanelController:_getPlayerStatsTargets(): { Player }
 	local targets = Players:GetPlayers()
 	table.sort(targets, function(a, b)
@@ -560,6 +642,559 @@ function AdminPanelController:_loadSelectedPlayerStats(forceRefresh: boolean?): 
 	self:_syncPlayerStatsUi()
 	self:_setStatus(tostring(result.message or "Loaded player stats."), SUCCESS_COLOR)
 	return true
+end
+
+function AdminPanelController:_getNotificationTargets(): { [number]: any }
+	local targets = {
+		{
+			key = "self",
+			targetKind = "self",
+			title = "Only Me",
+			description = "Send the notification only to your admin client.",
+		},
+		{
+			key = "all",
+			targetKind = "all",
+			title = "All Players",
+			description = string.format("Broadcast the notification to every connected player (%d online).", #Players:GetPlayers()),
+		},
+	}
+
+	for _, player in ipairs(self:_getPlayerStatsTargets()) do
+		if player ~= LOCAL_PLAYER then
+			table.insert(targets, {
+				key = string.format("player:%d", player.UserId),
+				targetKind = "player",
+				userId = player.UserId,
+				title = formatPlayerDisplay(player),
+				description = "Send the notification to one connected player.",
+			})
+		end
+	end
+
+	return targets
+end
+
+function AdminPanelController:_getSelectedNotificationTarget(): (any?, { [number]: any })
+	local targets = self:_getNotificationTargets()
+	if #targets == 0 then
+		self._notificationTargetKey = "self"
+		return nil, targets
+	end
+
+	for _, target in ipairs(targets) do
+		if target.key == self._notificationTargetKey then
+			return target, targets
+		end
+	end
+
+	self._notificationTargetKey = targets[1].key
+	return targets[1], targets
+end
+
+function AdminPanelController:_cycleNotificationTarget(direction: number)
+	local selectedTarget, targets = self:_getSelectedNotificationTarget()
+	if #targets == 0 then
+		self:_syncNotificationUi()
+		return
+	end
+
+	local currentIndex = 1
+	for index, target in ipairs(targets) do
+		if selectedTarget and target.key == selectedTarget.key then
+			currentIndex = index
+			break
+		end
+	end
+
+	local nextIndex = ((currentIndex - 1 + direction) % #targets) + 1
+	self._notificationTargetKey = targets[nextIndex].key
+	self:_syncNotificationUi()
+end
+
+function AdminPanelController:_getNotificationDuration(): number?
+	local ui = self._notificationUi
+	if ui.durationInput and ui.durationInput:IsA("TextBox") then
+		self._notificationDurationText = ui.durationInput.Text
+	end
+
+	local duration = tonumber(self._notificationDurationText)
+	if duration == nil or duration ~= duration then
+		return nil
+	end
+
+	if duration < NOTIFICATION_MIN_DURATION or duration > NOTIFICATION_MAX_DURATION then
+		return nil
+	end
+
+	return duration
+end
+
+function AdminPanelController:_syncNotificationUi()
+	local ui = self._notificationUi
+	if not ui or next(ui) == nil then
+		return
+	end
+
+	local selectedTarget, targets = self:_getSelectedNotificationTarget()
+
+	if ui.targetValue and ui.targetValue:IsA("TextLabel") then
+		if selectedTarget then
+			ui.targetValue.Text = string.format("%s\n%s", selectedTarget.title, selectedTarget.description)
+		else
+			ui.targetValue.Text = "No notification target is available."
+		end
+	end
+
+	if ui.messageInput and ui.messageInput:IsA("TextBox") and not ui.messageInput:IsFocused() then
+		ui.messageInput.Text = self._notificationMessageText
+	end
+
+	if ui.durationInput and ui.durationInput:IsA("TextBox") and not ui.durationInput:IsFocused() then
+		ui.durationInput.Text = self._notificationDurationText
+	end
+
+	setSandboxButtonEnabled(ui.targetPrevButton, #targets > 1)
+	setSandboxButtonEnabled(ui.targetNextButton, #targets > 1)
+	setSandboxButtonEnabled(ui.sendButton, selectedTarget ~= nil and trimText(self._notificationMessageText) ~= "")
+end
+
+function AdminPanelController:_sendNotification()
+	local ui = self._notificationUi
+	if ui.messageInput and ui.messageInput:IsA("TextBox") then
+		self._notificationMessageText = ui.messageInput.Text
+	end
+
+	local target = select(1, self:_getSelectedNotificationTarget())
+	if not target then
+		self:_setStatus("No notification target is currently available.", ERROR_COLOR)
+		return
+	end
+
+	local text = trimText(self._notificationMessageText)
+	if text == "" then
+		self:_setStatus("Enter notification text before sending.", ERROR_COLOR)
+		self:_syncNotificationUi()
+		return
+	end
+
+	local duration = self:_getNotificationDuration()
+	if not duration then
+		self:_setStatus(
+			string.format("Notification duration must be between %d and %d seconds.", NOTIFICATION_MIN_DURATION, NOTIFICATION_MAX_DURATION),
+			ERROR_COLOR
+		)
+		return
+	end
+
+	local ok, result = self:_invokeAdminRequest(OVERVIEW_TAB_ID, "send_notification", "Sending notification", {
+		targetKind = target.targetKind,
+		userId = target.userId,
+		text = text,
+		duration = duration,
+	})
+	if not ok or not result then
+		return
+	end
+
+	self:_setStatus(tostring(result.message or "No response message provided."), if result.ok then SUCCESS_COLOR else ERROR_COLOR)
+end
+
+function AdminPanelController:_createNotificationSection(parent: ScrollingFrame)
+	self:_createSectionHeader(parent, "Notifications", "Compose a live notification and send it to yourself, one connected player, or the entire server using the same shared notification system the game already uses.")
+
+	local card = Instance.new("Frame")
+	card.Name = "NotificationsCard"
+	card.BackgroundColor3 = SANDBOX_CARD_COLOR
+	card.AutomaticSize = Enum.AutomaticSize.Y
+	card.Size = UDim2.new(1, -4, 0, 0)
+	card.Parent = parent
+	setGenerated(card)
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 14)
+	corner.Parent = card
+	setGenerated(corner)
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = SANDBOX_STROKE_COLOR
+	stroke.Transparency = 0.14
+	stroke.Parent = card
+	setGenerated(stroke)
+
+	local padding = Instance.new("UIPadding")
+	padding.PaddingTop = UDim.new(0, 14)
+	padding.PaddingBottom = UDim.new(0, 14)
+	padding.PaddingLeft = UDim.new(0, 14)
+	padding.PaddingRight = UDim.new(0, 14)
+	padding.Parent = card
+	setGenerated(padding)
+
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Vertical
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+	layout.Padding = UDim.new(0, 10)
+	layout.Parent = card
+	setGenerated(layout)
+
+	local description = Instance.new("TextLabel")
+	description.Name = "DescriptionLabel"
+	description.BackgroundTransparency = 1
+	description.Size = UDim2.new(1, 0, 0, 34)
+	description.AutomaticSize = Enum.AutomaticSize.Y
+	description.Font = Enum.Font.Gotham
+	description.Text = "This sends the same in-game toast used by unlocks, receipts, and shared admin notices. Toasts show the message only and use the admin notification color."
+	description.TextWrapped = true
+	description.TextSize = 14
+	description.TextXAlignment = Enum.TextXAlignment.Left
+	description.TextYAlignment = Enum.TextYAlignment.Top
+	description.TextColor3 = Color3.fromRGB(184, 196, 227)
+	description.Parent = card
+	setGenerated(description)
+
+	local targetField = self:_createSandboxField(card, "Target")
+	local targetRow = Instance.new("Frame")
+	targetRow.Name = "ValueRow"
+	targetRow.BackgroundTransparency = 1
+	targetRow.Size = UDim2.new(1, 0, 0, 70)
+	targetRow.Parent = targetField
+	setGenerated(targetRow)
+
+	local targetPrevButton = self:_createSandboxButton(targetRow, "PrevButton", "<", UDim2.fromOffset(38, 36), function()
+		self:_cycleNotificationTarget(-1)
+	end)
+
+	local targetValue = Instance.new("TextLabel")
+	targetValue.Name = "ValueLabel"
+	targetValue.BackgroundTransparency = 1
+	targetValue.Position = UDim2.fromOffset(48, 0)
+	targetValue.Size = UDim2.new(1, -96, 1, 0)
+	targetValue.Font = Enum.Font.GothamSemibold
+	targetValue.TextColor3 = Color3.fromRGB(244, 247, 255)
+	targetValue.TextSize = 14
+	targetValue.TextWrapped = true
+	targetValue.TextXAlignment = Enum.TextXAlignment.Left
+	targetValue.TextYAlignment = Enum.TextYAlignment.Top
+	targetValue.Parent = targetRow
+	setGenerated(targetValue)
+
+	local targetNextButton = self:_createSandboxButton(targetRow, "NextButton", ">", UDim2.fromOffset(38, 36), function()
+		self:_cycleNotificationTarget(1)
+	end)
+	targetNextButton.Position = UDim2.new(1, -38, 0, 0)
+
+	local messageField = self:_createSandboxField(card, "Message")
+	local messageInput = self:_createSandboxTextInput(
+		messageField,
+		"MessageInput",
+		self._notificationMessageText,
+		"Type the notification text here.",
+		96,
+		true
+	)
+	messageInput.FocusLost:Connect(function()
+		self._notificationMessageText = messageInput.Text
+		self:_syncNotificationUi()
+	end)
+	messageInput:GetPropertyChangedSignal("Text"):Connect(function()
+		self._notificationMessageText = messageInput.Text
+		self:_syncNotificationUi()
+	end)
+
+	local durationField = self:_createSandboxField(card, "Duration (Seconds)")
+	local durationInput = self:_createSandboxTextInput(
+		durationField,
+		"DurationInput",
+		self._notificationDurationText,
+		NOTIFICATION_DEFAULT_DURATION,
+		38
+	)
+	durationInput.FocusLost:Connect(function()
+		self._notificationDurationText = durationInput.Text
+		self:_syncNotificationUi()
+	end)
+	durationInput:GetPropertyChangedSignal("Text"):Connect(function()
+		self._notificationDurationText = durationInput.Text
+	end)
+
+	local sendButton = self:_createSandboxButton(card, "SendButton", "Send Notification", UDim2.new(1, 0, 0, 40), function()
+		self:_sendNotification()
+	end)
+
+	self._notificationUi = {
+		targetPrevButton = targetPrevButton,
+		targetNextButton = targetNextButton,
+		targetValue = targetValue,
+		messageInput = messageInput,
+		durationInput = durationInput,
+		sendButton = sendButton,
+	}
+
+	self:_syncNotificationUi()
+end
+
+function AdminPanelController:_syncLuckOverrideUi()
+	local ui = self._luckOverrideUi
+	if not ui or next(ui) == nil then
+		return
+	end
+
+	local state = self._luckOverrideState
+	local hasOverride = typeof(state) == "table" and state.hasOverride == true
+	local overrideLuck = if hasOverride then tonumber(state.overrideLuck) else nil
+	local effectiveLuck = if typeof(state) == "table" then tonumber(state.effectiveLuck) else nil
+	local computedLuck = if typeof(state) == "table" then tonumber(state.computedLuckWithoutOverride) else nil
+
+	if ui.overrideInput and ui.overrideInput:IsA("TextBox") and not ui.overrideInput:IsFocused() then
+		ui.overrideInput.Text = self._luckOverrideInputText
+	end
+
+	if ui.currentValue and ui.currentValue:IsA("TextLabel") then
+		local lines = {
+			string.format("Current Effective Luck: %s", formatLuckMultiplier(effectiveLuck)),
+			string.format(
+				"Admin Override: %s",
+				if hasOverride and overrideLuck ~= nil then formatLuckMultiplier(overrideLuck) else "Off"
+			),
+			string.format(
+				"Computed Luck Without Override: %s",
+				formatLuckMultiplier(computedLuck)
+			),
+		}
+		ui.currentValue.Text = table.concat(lines, "\n")
+	end
+
+	if ui.breakdownValue and ui.breakdownValue:IsA("TextLabel") then
+		local rollTypeName = if typeof(state) == "table" and typeof(state.rollTypeDisplayName) == "string" and state.rollTypeDisplayName ~= ""
+			then state.rollTypeDisplayName
+			else "Unknown"
+		local lines = {
+			string.format("Roll Type: %s", rollTypeName),
+			string.format("Base Luck: %s", formatLuckMultiplier(if typeof(state) == "table" then tonumber(state.baseLuck) else nil)),
+			string.format("Bonus Roll Luck: %s", formatLuckMultiplier(if typeof(state) == "table" then tonumber(state.bonusLuck) else nil)),
+			string.format("VIP Luck: %s", formatLuckMultiplier(if typeof(state) == "table" then tonumber(state.vipLuck) else nil)),
+			string.format(
+				"Equipped Luck Multiplier: %s",
+				formatLuckMultiplier(if typeof(state) == "table" then tonumber(state.equippedLuckMultiplier) else nil)
+			),
+			string.format(
+				"Potion Luck Bonus: %s",
+				formatSignedPercent(if typeof(state) == "table" then tonumber(state.potionLuckBonus) or 0 else 0)
+			),
+			string.format(
+				"Pity Roll Ready: %s",
+				if typeof(state) == "table" and state.useBonusRoll == true then "Yes" else "No"
+			),
+			string.format(
+				"VIP Owned: %s",
+				if typeof(state) == "table" and state.isVipOwned == true then "Yes" else "No"
+			),
+		}
+		ui.breakdownValue.Text = table.concat(lines, "\n")
+	end
+
+	local trimmedInput = trimText(self._luckOverrideInputText)
+	local parsedInput = tonumber(trimmedInput)
+	local canApply = trimmedInput ~= "" and parsedInput ~= nil and parsedInput == parsedInput
+
+	setSandboxButtonEnabled(ui.refreshButton, true)
+	setSandboxButtonEnabled(ui.applyButton, canApply)
+	setSandboxButtonEnabled(ui.clearButton, hasOverride)
+end
+
+function AdminPanelController:_loadLuckOverrideState(forceRefresh: boolean?): boolean
+	if not forceRefresh and self._luckOverrideState ~= nil then
+		self:_syncLuckOverrideUi()
+		return true
+	end
+
+	local ok, result = self:_invokeAdminRequest(PROGRESSION_TAB_ID, "get_luck_override", "Loading current luck override", {})
+	if not ok or not result then
+		self._luckOverrideState = nil
+		self:_syncLuckOverrideUi()
+		return false
+	end
+
+	if result.ok ~= true or typeof(result.data) ~= "table" then
+		self._luckOverrideState = nil
+		self:_syncLuckOverrideUi()
+		self:_setStatus(tostring(result.message or "Failed to load the current luck override."), ERROR_COLOR)
+		return false
+	end
+
+	self._luckOverrideState = result.data
+	if result.data.hasOverride == true then
+		self._luckOverrideInputText = formatNumberish(tonumber(result.data.overrideLuck) or 0)
+	elseif trimText(self._luckOverrideInputText) == "" then
+		self._luckOverrideInputText = ""
+	end
+
+	self:_syncLuckOverrideUi()
+	self:_setStatus(tostring(result.message or "Loaded current luck override."), SUCCESS_COLOR)
+	return true
+end
+
+function AdminPanelController:_applyLuckOverride()
+	local ui = self._luckOverrideUi
+	if ui.overrideInput and ui.overrideInput:IsA("TextBox") then
+		self._luckOverrideInputText = ui.overrideInput.Text
+	end
+
+	local rawText = trimText(self._luckOverrideInputText)
+	local totalLuck = tonumber(rawText)
+	if rawText == "" or totalLuck == nil or totalLuck ~= totalLuck then
+		self:_setStatus("Enter a numeric total luck value before applying the override.", ERROR_COLOR)
+		self:_syncLuckOverrideUi()
+		return
+	end
+
+	local ok, result = self:_invokeAdminRequest(PROGRESSION_TAB_ID, "set_luck_override", "Applying luck override", {
+		totalLuck = totalLuck,
+	})
+	if not ok or not result then
+		return
+	end
+
+	if result.ok == true and typeof(result.data) == "table" then
+		self._luckOverrideState = result.data
+		if result.data.hasOverride == true then
+			self._luckOverrideInputText = formatNumberish(tonumber(result.data.overrideLuck) or totalLuck)
+		end
+	end
+
+	self:_syncLuckOverrideUi()
+	self:_setStatus(tostring(result.message or "No response message provided."), if result.ok then SUCCESS_COLOR else ERROR_COLOR)
+end
+
+function AdminPanelController:_clearLuckOverride()
+	local ok, result = self:_invokeAdminRequest(PROGRESSION_TAB_ID, "clear_luck_override", "Clearing luck override", {})
+	if not ok or not result then
+		return
+	end
+
+	if result.ok == true and typeof(result.data) == "table" then
+		self._luckOverrideState = result.data
+		self._luckOverrideInputText = ""
+	end
+
+	self:_syncLuckOverrideUi()
+	self:_setStatus(tostring(result.message or "No response message provided."), if result.ok then SUCCESS_COLOR else ERROR_COLOR)
+end
+
+function AdminPanelController:_createLuckOverrideSection(parent: ScrollingFrame)
+	self:_createSectionHeader(parent, "Luck Override", "Set an admin-only total luck override for your own rolls. This replaces the final effective luck used by the roll table after equipment, potions, pity, and VIP are applied.")
+
+	local card = Instance.new("Frame")
+	card.Name = "LuckOverrideCard"
+	card.BackgroundColor3 = SANDBOX_CARD_COLOR
+	card.AutomaticSize = Enum.AutomaticSize.Y
+	card.Size = UDim2.new(1, -4, 0, 0)
+	card.Parent = parent
+	setGenerated(card)
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 14)
+	corner.Parent = card
+	setGenerated(corner)
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = SANDBOX_STROKE_COLOR
+	stroke.Transparency = 0.14
+	stroke.Parent = card
+	setGenerated(stroke)
+
+	local padding = Instance.new("UIPadding")
+	padding.PaddingTop = UDim.new(0, 14)
+	padding.PaddingBottom = UDim.new(0, 14)
+	padding.PaddingLeft = UDim.new(0, 14)
+	padding.PaddingRight = UDim.new(0, 14)
+	padding.Parent = card
+	setGenerated(padding)
+
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Vertical
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+	layout.Padding = UDim.new(0, 10)
+	layout.Parent = card
+	setGenerated(layout)
+
+	local description = Instance.new("TextLabel")
+	description.Name = "DescriptionLabel"
+	description.BackgroundTransparency = 1
+	description.Size = UDim2.new(1, 0, 0, 34)
+	description.AutomaticSize = Enum.AutomaticSize.Y
+	description.Font = Enum.Font.Gotham
+	description.Text = "Use whole numbers or decimals like 25 or 25.5. Leaving the override off returns your luck to the normal machine, gear, potion, pity, and VIP calculation."
+	description.TextWrapped = true
+	description.TextSize = 14
+	description.TextXAlignment = Enum.TextXAlignment.Left
+	description.TextYAlignment = Enum.TextYAlignment.Top
+	description.TextColor3 = Color3.fromRGB(184, 196, 227)
+	description.Parent = card
+	setGenerated(description)
+
+	local currentField = self:_createSandboxField(card, "Current State")
+	local currentValue = self:_createSandboxValueLabel(currentField)
+
+	local breakdownField = self:_createSandboxField(card, "Breakdown")
+	local breakdownValue = self:_createSandboxValueLabel(breakdownField)
+
+	local overrideField = self:_createSandboxField(card, "Override Total Luck")
+	local overrideInput = self:_createSandboxTextInput(
+		overrideField,
+		"OverrideInput",
+		self._luckOverrideInputText,
+		"Example: 50",
+		38
+	)
+	overrideInput.FocusLost:Connect(function()
+		self._luckOverrideInputText = overrideInput.Text
+		self:_syncLuckOverrideUi()
+	end)
+	overrideInput:GetPropertyChangedSignal("Text"):Connect(function()
+		self._luckOverrideInputText = overrideInput.Text
+		self:_syncLuckOverrideUi()
+	end)
+
+	local actionRow = Instance.new("Frame")
+	actionRow.Name = "ActionRow"
+	actionRow.BackgroundTransparency = 1
+	actionRow.AutomaticSize = Enum.AutomaticSize.Y
+	actionRow.Size = UDim2.new(1, 0, 0, 0)
+	actionRow.Parent = card
+	setGenerated(actionRow)
+
+	local actionLayout = Instance.new("UIGridLayout")
+	actionLayout.CellPadding = UDim2.fromOffset(10, 10)
+	actionLayout.CellSize = UDim2.new(1 / 3, -7, 0, 40)
+	actionLayout.FillDirectionMaxCells = 3
+	actionLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+	actionLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	actionLayout.Parent = actionRow
+	setGenerated(actionLayout)
+
+	local refreshButton = self:_createSandboxButton(actionRow, "RefreshButton", "Refresh", UDim2.new(0, 0, 0, 40), function()
+		self:_loadLuckOverrideState(true)
+	end)
+
+	local applyButton = self:_createSandboxButton(actionRow, "ApplyButton", "Apply Override", UDim2.new(0, 0, 0, 40), function()
+		self:_applyLuckOverride()
+	end)
+
+	local clearButton = self:_createSandboxButton(actionRow, "ClearButton", "Clear Override", UDim2.new(0, 0, 0, 40), function()
+		self:_clearLuckOverride()
+	end)
+
+	self._luckOverrideUi = {
+		currentValue = currentValue,
+		breakdownValue = breakdownValue,
+		overrideInput = overrideInput,
+		refreshButton = refreshButton,
+		applyButton = applyButton,
+		clearButton = clearButton,
+	}
+
+	self:_syncLuckOverrideUi()
 end
 
 function AdminPanelController:_syncVisualSandboxUi()
@@ -1999,8 +2634,18 @@ function AdminPanelController:_buildPage(tabDefinition: any, page: ScrollingFram
 		return
 	end
 
+	if tabDefinition.id == OVERVIEW_TAB_ID then
+		self:_createNotificationSection(page)
+		self:_createSpacer(page, 8)
+	end
+
 	if tabDefinition.id == PLAYERS_TAB_ID then
 		self:_createPlayerStatsInspectorSection(page)
+		self:_createSpacer(page, 8)
+	end
+
+	if tabDefinition.id == PROGRESSION_TAB_ID then
+		self:_createLuckOverrideSection(page)
 		self:_createSpacer(page, 8)
 	end
 

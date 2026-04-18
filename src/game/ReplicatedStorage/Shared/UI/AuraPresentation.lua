@@ -3,6 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local AuraConfig = require(ReplicatedStorage.Shared.Config.AuraConfig)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
 
 local AuraPresentation = {}
 
@@ -38,6 +39,15 @@ local function formatMultiplier(value: number?): string
 	end
 
 	return string.format("%.2f", numericValue):gsub("0+$", ""):gsub("%.$", "")
+end
+
+local function escapeRichText(text: any): string
+	return tostring(text)
+		:gsub("&", "&amp;")
+		:gsub("<", "&lt;")
+		:gsub(">", "&gt;")
+		:gsub('"', "&quot;")
+		:gsub("'", "&apos;")
 end
 
 local function getAurasFolder(): Folder?
@@ -144,39 +154,57 @@ function AuraPresentation.BuildPreviewPresentation(payload: any)
 		return nil
 	end
 
+	local setConfig = BodyPartsCatalog.GetSet(auraConfig.setId)
+	local setRarityLabel = if setConfig and setConfig.rollDisplay and typeof(setConfig.rollDisplay.rarity) == "string"
+		then setConfig.rollDisplay.rarity
+		else auraConfig.tierLabel
+	local tierLabel = if setConfig and setConfig.rollDisplay and typeof(setConfig.rollDisplay.rarity) == "string"
+		then string.format("%s Aura", setConfig.rollDisplay.rarity)
+		else auraConfig.tierLabel
+	local rarityStyle = BodyPartPresentation.ResolveSetRarityStyle(setConfig, setRarityLabel, auraConfig.displayColor)
 	local serialNumber = tonumber(record and record.serialNumber)
-	local serialSuffix = if serialNumber
-		then string.format(" (#%s)", NumberFormatter.Format(math.max(1, math.floor(serialNumber))))
-		else ""
-	local displayColor = auraConfig.displayColor
+	local serialDisplay = if serialNumber
+		then NumberFormatter.Format(math.max(1, math.floor(serialNumber)))
+		else nil
+	local displayColor = rarityStyle.textColor
+	local labelText = escapeRichText(auraConfig.label)
+	local tierText = escapeRichText(tierLabel)
 
 	return {
 		itemType = "aura",
 		auraId = auraConfig.id,
 		auraConfig = auraConfig,
-		cardUsageText = if serialNumber
-			then string.format("#%s", NumberFormatter.Format(math.max(1, math.floor(serialNumber))))
-			else auraConfig.tierLabel,
-		cardNameText = auraConfig.label,
+		cardUsageText = "",
+		cardNameText = labelText,
 		bundleText = string.format(
-			'Aura: <font color="%s">%s</font>%s',
+			'Aura: <font color="%s">%s</font>',
 			toRichTextColor(displayColor),
-			auraConfig.label,
-			serialSuffix
+			labelText
+		),
+		inventoryBundleText = string.format(
+			'Aura: <font color="%s">%s</font>',
+			toRichTextColor(displayColor),
+			labelText
 		),
 		partText = buildUnlockText(auraConfig),
 		rarityText = string.format(
 			'Tier: <font color="%s">%s</font>',
 			toRichTextColor(displayColor),
-			auraConfig.tierLabel
+			tierText
 		),
 		mutationText = string.format("Luck Bonus: %s", formatPercentDelta(auraConfig.bonuses.luckBonus)),
 		sizeText = string.format("Roll Speed Bonus: %s", formatPercentDelta(auraConfig.bonuses.rollSpeedBonus)),
 		cashText = string.format("Money Multiplier: x%s", formatMultiplier(auraConfig.bonuses.moneyMultiplier)),
 		chanceText = string.format(
-			"Passive Bonus: +%s/s",
+			"Passive Income Bonus: +%s/s",
 			formatNumberish(math.max(0, tonumber(auraConfig.bonuses.passiveIncomePerSecondBonus) or 0))
 		),
+		inventoryEverRolledText = if serialDisplay then string.format("#%s", serialDisplay) else nil,
+		bundleFontFace = rarityStyle.fontFace,
+		rarityFontFace = rarityStyle.fontFace,
+		cardAccentColor = rarityStyle.accentColor,
+		baseFillColor = rarityStyle.baseFillColor,
+		selectedFillColor = rarityStyle.selectedFillColor,
 		bundleModel = AuraPresentation.GetBundleModel(auraConfig),
 		iconTexture = AuraConfig.ResolveIconTexture(auraConfig),
 	}

@@ -127,7 +127,7 @@ function OverheadTitleController:_renderBillboard(player: Player)
 		return
 	end
 
-	local richPrefix = TitleUtil.BuildRichTextPrefix(player:GetAttribute("VIP") == true, player:GetAttribute("EquippedTitleId"))
+	local richPrefix = TitleUtil.BuildRichTextPrefix(player:GetAttribute("PremiumTag"), player:GetAttribute("EquippedTitleId"))
 	prefixLabel.Visible = richPrefix ~= ""
 	prefixLabel.Text = richPrefix
 	nameLabel.Position = if richPrefix ~= "" then UDim2.fromScale(0, 0.42) else UDim2.fromScale(0, 0.2)
@@ -161,7 +161,7 @@ function OverheadTitleController:_trackPlayer(player: Player)
 	local state = self:_getPlayerState(player)
 	disconnectConnections(state.playerConnections)
 
-	table.insert(state.playerConnections, player:GetAttributeChangedSignal("VIP"):Connect(function()
+	table.insert(state.playerConnections, player:GetAttributeChangedSignal("PremiumTag"):Connect(function()
 		self:_renderBillboard(player)
 	end))
 	table.insert(state.playerConnections, player:GetAttributeChangedSignal("EquippedTitleId"):Connect(function()

@@ -3,6 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local Signal = require(ReplicatedStorage.Common.Signal)
+local PotionRuntimeBonuses = require(ReplicatedStorage.Shared.Character.PotionRuntimeBonuses)
 local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
 local DataService = require(script.Parent.DataService)
 
@@ -141,42 +142,24 @@ local function getRuntimeState(player: Player): { [string]: number }
 	return activeByPotionId
 end
 
-local function buildResolvedActiveByFamily(activeByPotionId: { [string]: number }?, now: number): { [string]: { potionId: string, expiresAt: number } }
-	local resolved = {}
+local function buildNormalizedActiveByPotionId(activeByPotionId: { [string]: number }?, now: number): { [string]: number }
+	local normalized = {}
 	if typeof(activeByPotionId) ~= "table" then
-		return resolved
+		return normalized
 	end
 
 	for potionId, expiresAt in pairs(activeByPotionId) do
+		local normalizedPotionId = PotionConfig.NormalizeId(potionId)
 		local resolvedExpiresAt = tonumber(expiresAt)
-		local config = PotionConfig.Get(potionId)
-		if resolvedExpiresAt and config and resolvedExpiresAt > now then
-			local current = resolved[config.familyId]
-			local currentConfig = if current then PotionConfig.Get(current.potionId) else nil
-			local shouldReplace = current == nil
-				or resolvedExpiresAt > current.expiresAt
-				or (
-					resolvedExpiresAt == current.expiresAt
-					and (tonumber(config.tier) or 0) > (tonumber(currentConfig and currentConfig.tier) or 0)
-				)
-
-			if shouldReplace then
-				resolved[config.familyId] = {
-					potionId = config.id,
-					expiresAt = resolvedExpiresAt,
-				}
-			end
+		local config = PotionConfig.Get(normalizedPotionId)
+		if normalizedPotionId and resolvedExpiresAt and config and resolvedExpiresAt > now then
+			normalized[normalizedPotionId] = math.max(
+				resolvedExpiresAt,
+				tonumber(normalized[normalizedPotionId]) or 0
+			)
 		end
 	end
 
-	return resolved
-end
-
-local function buildNormalizedActiveByPotionId(activeByPotionId: { [string]: number }?, now: number): { [string]: number }
-	local normalized = {}
-	for _, entry in pairs(buildResolvedActiveByFamily(activeByPotionId, now)) do
-		normalized[entry.potionId] = entry.expiresAt
-	end
 	return normalized
 end
 
@@ -256,21 +239,13 @@ local function clearExpiredPotionsForPlayer(player: Player): boolean
 end
 
 function PotionService:GetRuntimeBonuses(player: Player)
-	local bonuses = {
-		passiveIncomeMultiplier = 1,
-		luckBonus = 0,
-		rollSpeedBonus = 0,
-	}
+	local bonuses = PotionRuntimeBonuses.CreateEmpty()
 
 	local now = getServerTimeNow()
-	for _, entry in pairs(buildResolvedActiveByFamily(runtimeActiveByPlayer[player], now)) do
-		local config = PotionConfig.Get(entry.potionId)
+	for potionId in pairs(buildNormalizedActiveByPotionId(runtimeActiveByPlayer[player], now)) do
+		local config = PotionConfig.Get(potionId)
 		if config then
-			if tonumber(config.passiveIncomeMultiplier) and config.passiveIncomeMultiplier > 1 then
-				bonuses.passiveIncomeMultiplier *= config.passiveIncomeMultiplier
-			end
-			bonuses.luckBonus += tonumber(config.luckBonus) or 0
-			bonuses.rollSpeedBonus += tonumber(config.rollSpeedBonus) or 0
+			PotionRuntimeBonuses.ApplyConfigBonuses(bonuses, config)
 		end
 	end
 
@@ -305,6 +280,60 @@ function PotionService:GrantPotionUses(player: Player, potionId: string, amount:
 	return true, string.format('Granted %d %s use(s).', math.max(1, math.floor(amount)), config.label)
 end
 
+function PotionService:GrantAllPotionUses(player: Player, amountPerPotion: number?): (boolean, string, { [string]: any }?)
+	local potionEntries = PotionConfig.GetAll()
+	if #potionEntries == 0 then
+		return false, "No potions are configured.", nil
+	end
+
+	local resolvedAmount = math.max(1, math.floor(tonumber(amountPerPotion) or 1))
+	local grantedPotionIds = table.create(#potionEntries)
+
+	for _, config in ipairs(potionEntries) do
+		local updatedRecord, err = DataService:AddOwnedPotionUses(player, config.id, resolvedAmount)
+		if not updatedRecord then
+			return false, err or string.format("Failed to grant %s.", config.label), nil
+		end
+
+		table.insert(grantedPotionIds, config.id)
+	end
+
+	local message = string.format(
+		"Granted %d use(s) for all %d configured potions.",
+		resolvedAmount,
+		#grantedPotionIds
+	)
+	self:NotifyClient(player, message)
+
+	return true, message, {
+		grantedPotionIds = grantedPotionIds,
+		amountPerPotion = resolvedAmount,
+		potionCount = #grantedPotionIds,
+		state = self:GetPotionState(player, message),
+	}
+end
+
+function PotionService:ClearActivePotions(player: Player): (boolean, string, { [string]: any }?)
+	local activeByPotionId = buildNormalizedActiveByPotionId(runtimeActiveByPlayer[player], getServerTimeNow())
+	local clearedPotionCount = 0
+	for _ in pairs(activeByPotionId) do
+		clearedPotionCount += 1
+	end
+
+	setRuntimeState(player, {})
+	DataService:SetPotionActiveRemainingMap(player, {})
+
+	local message = if clearedPotionCount > 0
+		then string.format("Removed %d active potion effect(s).", clearedPotionCount)
+		else "No potion effects were active."
+	self:NotifyClient(player, message)
+
+	return true, message, {
+		clearedPotionCount = clearedPotionCount,
+		state = self:GetPotionState(player, message),
+	}
+end
+
 function PotionService:UsePotion(player: Player, potionId: string): (boolean, string)
 	local config = PotionConfig.Get(potionId)
 	if not config then
@@ -323,15 +352,9 @@ function PotionService:UsePotion(player: Player, potionId: string): (boolean, st
 	end
 
 	local now = getServerTimeNow()
-	local activeByPotionId = table.clone(getRuntimeState(player))
-	for activePotionId in pairs(activeByPotionId) do
-		local activeConfig = PotionConfig.Get(activePotionId)
-		if activeConfig and activeConfig.familyId == config.familyId then
-			activeByPotionId[activePotionId] = nil
-		end
-	end
-
-	local nextExpiresAt = now + config.durationSeconds
+	local activeByPotionId = buildNormalizedActiveByPotionId(getRuntimeState(player), now)
+	local currentExpiresAt = tonumber(activeByPotionId[config.id]) or 0
+	local nextExpiresAt = math.max(currentExpiresAt, now) + config.durationSeconds
 	activeByPotionId[config.id] = nextExpiresAt
 	setRuntimeState(player, activeByPotionId)
 	persistRuntimeRemaining(player)

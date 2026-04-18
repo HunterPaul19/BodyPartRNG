@@ -1,7 +1,6 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
 
 local Globals = require(ReplicatedStorage.Lists.Globals)
 local MerchantShopConfig = require(ReplicatedStorage.Shared.Config.MerchantShopConfig)
@@ -20,8 +19,11 @@ local PURCHASE_SHOP_ITEM_REMOTE_NAME = "PurchaseShopItem"
 local SHOP_FRAME_NAME = "ShopUI"
 
 type MerchantShopState = {
-	cycleId: number,
-	refreshesAt: number,
+	windowId: number,
+	isActive: boolean,
+	appearsAt: number,
+	departsAt: number,
+	nextAppearsAt: number,
 	stockByPotionId: { [string]: number },
 }
 
@@ -53,10 +55,26 @@ local MerchantShopController = {
 	_isShopOpen = false,
 	_refreshConnection = nil :: RBXScriptConnection?,
 	_suppressAmountFocus = false,
+	_lastCountdownSecond = -1,
 }
 
 local function normalizeWhole(value: any): number
 	return math.max(0, math.floor(tonumber(value) or 0))
+end
+
+local function getUtcNowSeconds(): number
+	return math.floor(DateTime.now().UnixTimestampMillis / 1000)
+end
+
+local function formatCountdown(targetTimestamp: number): string
+	local remainingSeconds = math.max(0, math.floor(tonumber(targetTimestamp) or 0) - getUtcNowSeconds())
+	local minutes = math.floor(remainingSeconds / 60)
+	local seconds = remainingSeconds % 60
+	return string.format("%02d:%02d", minutes, seconds)
+end
+
+local function formatTimeShards(value: any): string
+	return string.format("%s Time Shards", Globals.formatNumber(value))
 end
 
 local function buildEmptyState(): MerchantShopState
@@ -66,8 +84,11 @@ local function buildEmptyState(): MerchantShopState
 	end
 
 	return {
-		cycleId = -1,
-		refreshesAt = 0,
+		windowId = -1,
+		isActive = false,
+		appearsAt = 0,
+		departsAt = 0,
+		nextAppearsAt = 0,
 		stockByPotionId = stockByPotionId,
 	}
 end
@@ -212,8 +233,11 @@ function MerchantShopController:_cloneShopState(shopState: any): MerchantShopSta
 		return cloned
 	end
 
-	cloned.cycleId = math.floor(tonumber(shopState.cycleId) or cloned.cycleId)
-	cloned.refreshesAt = tonumber(shopState.refreshesAt) or cloned.refreshesAt
+	cloned.windowId = math.floor(tonumber(shopState.windowId or shopState.cycleId) or cloned.windowId)
+	cloned.isActive = shopState.isActive == true
+	cloned.appearsAt = math.floor(tonumber(shopState.appearsAt) or cloned.appearsAt)
+	cloned.departsAt = math.floor(tonumber(shopState.departsAt) or cloned.departsAt)
+	cloned.nextAppearsAt = math.floor(tonumber(shopState.nextAppearsAt) or cloned.nextAppearsAt)
 
 	if typeof(shopState.stockByPotionId) == "table" then
 		for _, entry in ipairs(MerchantShopConfig.GetAll()) do
@@ -231,6 +255,10 @@ end
 function MerchantShopController:_getVisibleEntries(): { MerchantShopConfig.MerchantShopEntry }
 	local results = {}
 	local shopState = self._shopState or buildEmptyState()
+	if not shopState.isActive then
+		return results
+	end
+
 	for _, entry in ipairs(MerchantShopConfig.GetAll()) do
 		if normalizeWhole(shopState.stockByPotionId[entry.potionId]) > 0 then
 			table.insert(results, entry)
@@ -255,7 +283,7 @@ end
 function MerchantShopController:_getSelectedStock(): number
 	local entry = self:_getSelectedEntry()
 	local shopState = self._shopState or buildEmptyState()
-	if not entry then
+	if not entry or not shopState.isActive then
 		return 0
 	end
 
@@ -341,19 +369,33 @@ end
 
 function MerchantShopController:_refreshText()
 	local ui = self:_ensureUi()
+	local shopState = self._shopState or buildEmptyState()
+	if not shopState.isActive then
+		ui.itemName.Text = "Merchant Unavailable"
+		ui.itemDescLabel.Text = if shopState.nextAppearsAt > 0
+			then string.format("The merchant returns in %s.", formatCountdown(shopState.nextAppearsAt))
+			else "The merchant isn't here right now."
+		ui.stocksLabel.Text = "[Returns Soon]"
+		ui.priceLabel.Text = "0 Time Shards total"
+		self:_setPurchaseEnabled(false)
+		return
+	end
+
 	local entry = self:_getSelectedEntry()
-	local potionConfig = self:_getSelectedPotionConfig()
 	local stock = self:_getSelectedStock()
 	local amount = self:_sanitizeAmountText()
-	local totalPrice = if potionConfig then math.max(0, potionConfig.buyPrice) * amount else 0
+	local totalPrice = if entry then MerchantShopConfig.GetPriceInTimeShards(entry.potionId) * amount else 0
 	local stockCap = if entry then MerchantShopConfig.GetMaxStockForPotionId(entry.potionId) else 0
+	local departureText = formatCountdown(shopState.departsAt)
 
 	ui.itemName.Text = if entry then entry.shopLabel else "Merchant Stock Empty"
 	ui.itemDescLabel.Text = if entry
 		then entry.description
-		else "Out of stock until refresh."
-	ui.stocksLabel.Text = string.format("[Stock: %d/%d]", stock, stockCap)
-	ui.priceLabel.Text = string.format("%s$ in total", Globals.formatNumber(totalPrice))
+		else string.format("Nothing is left this visit. The merchant leaves in %s.", departureText)
+	ui.stocksLabel.Text = if entry
+		then string.format("[Stock: %d/%d] [Leaves in %s]", stock, stockCap, departureText)
+		else string.format("[Leaves in %s]", departureText)
+	ui.priceLabel.Text = string.format("%s total", formatTimeShards(totalPrice))
 	self:_setPurchaseEnabled(entry ~= nil and stock > 0)
 end
 
@@ -371,7 +413,7 @@ function MerchantShopController:_refreshVisibleButtons()
 	for _, entry in ipairs(MerchantShopConfig.GetAll()) do
 		local button = self._runtimeButtonsByPotionId[entry.potionId]
 		if button then
-			local isVisible = normalizeWhole(shopState.stockByPotionId[entry.potionId]) > 0
+			local isVisible = shopState.isActive and normalizeWhole(shopState.stockByPotionId[entry.potionId]) > 0
 			button.Visible = isVisible
 			button.Active = isVisible
 			button.AutoButtonColor = false
@@ -421,7 +463,26 @@ function MerchantShopController:_applySoldOutState()
 	self._suppressAmountFocus = false
 
 	self:_refreshText()
-	self:_showMessage("Out of Stock", "Out of stock until refresh.")
+	self:_showMessage("Out of Stock", "Nothing else is left before the merchant departs.")
+end
+
+function MerchantShopController:_applyInactiveState()
+	local ui = self:_ensureUi()
+	self._selectedPotionId = nil
+	self:_refreshVisibleButtons()
+	self:_clearViewport()
+
+	self._suppressAmountFocus = true
+	ui.amountBox.Text = "0"
+	self._suppressAmountFocus = false
+
+	self:_refreshText()
+	self:_showMessage(
+		"Merchant Unavailable",
+		if (self._shopState or buildEmptyState()).nextAppearsAt > 0
+			then string.format("The merchant returns in %s.", formatCountdown((self._shopState or buildEmptyState()).nextAppearsAt))
+			else "The merchant isn't here right now."
+	)
 end
 
 function MerchantShopController:_applySelection(potionId: string)
@@ -453,6 +514,11 @@ end
 function MerchantShopController:_applyShopState(shopState: any, preferredPotionId: string?)
 	self._shopState = self:_cloneShopState(shopState)
 	self:_refreshVisibleButtons()
+
+	if not self._shopState.isActive then
+		self:_applyInactiveState()
+		return
+	end
 
 	local entry = self:_findSelectableEntry(preferredPotionId)
 	if entry then
@@ -518,7 +584,11 @@ function MerchantShopController:_purchaseSelectedItem()
 
 	local entry = self:_getSelectedEntry()
 	if not entry then
-		self:_applySoldOutState()
+		if (self._shopState or buildEmptyState()).isActive then
+			self:_applySoldOutState()
+		else
+			self:_applyInactiveState()
+		end
 		return
 	end
 
@@ -587,12 +657,19 @@ function MerchantShopController:_startRefreshWatcher()
 			return
 		end
 
+		local now = getUtcNowSeconds()
+		if self._lastCountdownSecond ~= now then
+			self._lastCountdownSecond = now
+			self:_refreshText()
+		end
+
 		local shopState = self._shopState
-		if not shopState or shopState.refreshesAt <= 0 then
+		if not shopState then
 			return
 		end
 
-		if Workspace:GetServerTimeNow() < shopState.refreshesAt then
+		local transitionAt = if shopState.isActive then shopState.departsAt else shopState.nextAppearsAt
+		if transitionAt <= 0 or now < transitionAt then
 			return
 		end
 
@@ -613,6 +690,7 @@ function MerchantShopController:_handleShopPrepared(frameName: string, root: Gui
 	end
 
 	self._isShopOpen = true
+	self._lastCountdownSecond = -1
 	self:_hideMessage()
 	if not self:_requestShopState() then
 		self:_applyShopState(buildEmptyState())
@@ -627,6 +705,7 @@ function MerchantShopController:_handleShopClosed(frameName: string)
 	end
 
 	self._isShopOpen = false
+	self._lastCountdownSecond = -1
 	self:_stopRefreshWatcher()
 	self:_hideMessage()
 	self:_clearViewport()

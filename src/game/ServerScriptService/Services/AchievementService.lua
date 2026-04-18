@@ -58,7 +58,7 @@ local function notifyUnlocks(player: Player, unlockedAchievementIds: { string })
 		local title = TitleConfig.GetByAchievementId(achievementId)
 		if title then
 			Notify.Send(player, string.format('Unlocked title "%s".', title.label), {
-				title = "Titles",
+				channel = "titles",
 				duration = 5,
 			})
 		end

@@ -1,6 +1,8 @@
 local HttpService = game:GetService("HttpService")
 local ServerStorage = game:GetService("ServerStorage")
 
+local AccessoryScaleUtils = require(script.Parent.AccessoryScaleUtils)
+local AppearanceRegionRules = require(script.Parent.AppearanceRegionRules)
 local BodyPartRegions = require(script.Parent.BodyPartRegions)
 
 local CharacterAppearanceHostApplier = {}
@@ -36,40 +38,8 @@ local ALL_RIG_PARTS = {
 	"RightFoot",
 }
 
-local CLOTHING_CLASS_NAMES = {
-	Shirt = true,
-	Pants = true,
-	ShirtGraphic = true,
-	BodyColors = true,
-}
-
-local REGION_CLOTHING_CLASSES = {
-	Head = {
-		BodyColors = true,
-	},
-	Torso = {
-		Shirt = true,
-		Pants = true,
-		ShirtGraphic = true,
-		BodyColors = true,
-	},
-	LeftArm = {
-		Shirt = true,
-		BodyColors = true,
-	},
-	RightArm = {
-		Shirt = true,
-		BodyColors = true,
-	},
-	LeftLeg = {
-		Pants = true,
-		BodyColors = true,
-	},
-	RightLeg = {
-		Pants = true,
-		BodyColors = true,
-	},
-}
+local CLOTHING_CLASS_NAMES = AppearanceRegionRules.ClothingClassNames
+local REGION_CLOTHING_CLASSES = AppearanceRegionRules.RegionClothingClasses
 
 local ATTACHMENT_REGION_LOOKUP = {
 	HairAttachment = "Head",
@@ -84,6 +54,11 @@ local ATTACHMENT_REGION_LOOKUP = {
 	WaistFrontAttachment = "Torso",
 	WaistCenterAttachment = "Torso",
 	WaistBackAttachment = "Torso",
+}
+
+local REGION_VISUAL_PART_ORDER = {
+	Head = { "Head" },
+	Torso = { "UpperTorso", "LowerTorso" },
 }
 
 local function isManagedClone(instance: Instance): boolean
@@ -244,6 +219,107 @@ local function buildVisualPartLookup(character: Model): { [string]: BasePart }
 	return partsByName
 end
 
+local function findDirectAttachment(part: BasePart, attachmentName: string): Attachment?
+	for _, child in ipairs(part:GetChildren()) do
+		if child:IsA("Attachment") and child.Name == attachmentName then
+			return child
+		end
+	end
+
+	return nil
+end
+
+local function findNativeCharacterPartForAttachment(character: Model, attachmentName: string): BasePart?
+	for _, partName in ipairs(ALL_RIG_PARTS) do
+		local part = character:FindFirstChild(partName)
+		if part and part:IsA("BasePart") and findDirectAttachment(part, attachmentName) then
+			return part
+		end
+	end
+
+	return nil
+end
+
+local function findCompatibleVisualAttachment(
+	visualPartsByName: { [string]: BasePart },
+	attachmentName: string,
+	region: string?
+): (BasePart?, Attachment?)
+	local preferredPartNames = if region then REGION_VISUAL_PART_ORDER[region] else nil
+	if preferredPartNames ~= nil then
+		for _, partName in ipairs(preferredPartNames) do
+			local visualPart = visualPartsByName[partName]
+			if visualPart then
+				local attachment = findDirectAttachment(visualPart, attachmentName)
+				if attachment then
+					return visualPart, attachment
+				end
+			end
+		end
+	end
+
+	for _, partName in ipairs(ALL_RIG_PARTS) do
+		local visualPart = visualPartsByName[partName]
+		if visualPart then
+			local attachment = findDirectAttachment(visualPart, attachmentName)
+			if attachment then
+				return visualPart, attachment
+			end
+		end
+	end
+
+	return nil, nil
+end
+
+local function configureAccessoryHandle(handle: BasePart)
+	handle.Anchored = false
+	handle.Massless = true
+	handle.CanCollide = false
+	handle.CanQuery = false
+	handle.CanTouch = false
+end
+
+local function clearAccessoryHandleWelds(handle: BasePart)
+	for _, child in ipairs(handle:GetChildren()) do
+		if (child:IsA("Weld") or child:IsA("WeldConstraint")) and child.Name == "AccessoryWeld" then
+			child:Destroy()
+		end
+	end
+end
+
+local function alignAccessoryClone(accessory: Accessory, targetPart: BasePart, targetAttachment: Attachment): (boolean, string?)
+	local handle = accessory:FindFirstChild("Handle")
+	if not (handle and handle:IsA("BasePart")) then
+		return false, string.format("Accessory %s is missing a Handle.", accessory.Name)
+	end
+
+	local accessoryAttachment = nil
+	for _, child in ipairs(handle:GetChildren()) do
+		if child:IsA("Attachment") then
+			if accessoryAttachment ~= nil then
+				return false, string.format("Accessory %s must have exactly one handle attachment.", accessory.Name)
+			end
+			accessoryAttachment = child
+		end
+	end
+
+	if accessoryAttachment == nil then
+		return false, string.format("Accessory %s is missing a handle attachment.", accessory.Name)
+	end
+
+	clearAccessoryHandleWelds(handle)
+	configureAccessoryHandle(handle)
+	handle.CFrame = targetAttachment.WorldCFrame * accessoryAttachment.CFrame:Inverse()
+
+	local weld = Instance.new("WeldConstraint")
+	weld.Name = "AccessoryWeld"
+	weld.Part0 = targetPart
+	weld.Part1 = handle
+	weld.Parent = handle
+
+	return true, nil
+end
+
 local function hideNativeInstance(hiddenFolder: Folder, instance: Instance, reason: string)
 	if not instance or instance.Parent == hiddenFolder then
 		return
@@ -327,10 +403,13 @@ end
 
 local function applyAccessories(
 	character: Model,
+	accessoriesFolder: Folder,
 	hiddenFolder: Folder,
-	equippedState: { [string]: any }?
+	equippedState: { [string]: any }?,
+	visualPartsByName: { [string]: BasePart }
 ): (number, number)
 	local accessories = {}
+	local accessoriesClonedCount = 0
 	for _, child in ipairs(character:GetChildren()) do
 		if child:IsA("Accessory") and not isManagedClone(child) then
 			accessories[#accessories + 1] = child
@@ -338,23 +417,37 @@ local function applyAccessories(
 	end
 
 	for _, accessory in ipairs(accessories) do
-		local _, handleAttachment, attachmentReason = getHandleAndSingleAttachment(accessory)
-		if handleAttachment then
-			if shouldHideAccessoryForEquippedRegion(accessory, handleAttachment.Name, equippedState) then
-				local region = resolveConflictRegion(accessory, handleAttachment.Name)
-				hideNativeInstance(
-					hiddenFolder,
-					accessory,
-					string.format("EquippedRegionOverride:%s:%s", tostring(region), handleAttachment.Name)
-				)
+		local _, handleAttachment = getHandleAndSingleAttachment(accessory)
+		if handleAttachment ~= nil then
+			local region = resolveConflictRegion(accessory, handleAttachment.Name)
+			local isEquippedRegion = region ~= nil and equippedState and equippedState[region] ~= nil
+			if isEquippedRegion then
+				local targetPart, targetAttachment = findCompatibleVisualAttachment(visualPartsByName, handleAttachment.Name, region)
+				local sourcePart = findNativeCharacterPartForAttachment(character, handleAttachment.Name)
+				if targetPart and targetAttachment and sourcePart then
+					local accessoryClone = accessory:Clone()
+					setDebugAttributes(accessoryClone, accessory.Name, true, string.format("AppliedAccessoryClone:%s", handleAttachment.Name))
+					accessoryClone.Parent = accessoriesFolder
+
+					local scaleSuccess =
+						select(1, AccessoryScaleUtils.ScaleAccessoryToPartSize(accessoryClone, sourcePart.Size, targetPart.Size))
+					local alignSuccess = scaleSuccess and alignAccessoryClone(accessoryClone, targetPart, targetAttachment)
+					if alignSuccess then
+						hideNativeInstance(
+							hiddenFolder,
+							accessory,
+							string.format("EquippedRegionOverride:%s:%s", tostring(region), handleAttachment.Name)
+						)
+						accessoriesClonedCount += 1
+					else
+						accessoryClone:Destroy()
+					end
+				end
 			end
-		elseif shouldHideAccessoryForEquippedRegion(accessory, nil, equippedState) then
-			local region = resolveConflictRegion(accessory, nil)
-			hideNativeInstance(hiddenFolder, accessory, string.format("EquippedRegionOverride:%s:%s", tostring(region), attachmentReason))
 		end
 	end
 
-	return #accessories, 0
+	return #accessories, accessoriesClonedCount
 end
 
 local function getSnapshotSourceInstances(character: Model): (Folder, Humanoid?)
@@ -576,7 +669,13 @@ function CharacterAppearanceHostApplier.ApplyCharacter(
 	local hostCount, humanoidCount, clothingCount = applyRegionAppearanceHosts(character, snapshotSource, equippedState)
 
 	local visualPartsByName = buildVisualPartLookup(character)
-	local accessoriesSeenCount, accessoriesClonedCount = applyAccessories(character, hiddenFolder, equippedState)
+	local accessoriesSeenCount, accessoriesClonedCount = applyAccessories(
+		character,
+		accessoriesFolder,
+		hiddenFolder,
+		equippedState,
+		visualPartsByName
+	)
 
 	local visualPartCount = 0
 	for _ in pairs(visualPartsByName) do

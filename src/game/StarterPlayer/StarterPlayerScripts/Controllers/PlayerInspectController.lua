@@ -7,7 +7,6 @@ local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegio
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local AuraPresentation = require(ReplicatedStorage.Shared.UI.AuraPresentation)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
-local PlayerStatsPresentation = require(ReplicatedStorage.Shared.UI.PlayerStatsPresentation)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 local FrameController = require(script.Parent.FrameController)
 local SlotCardRenderer = require(script.Parent.SlotCardRenderer)
@@ -21,9 +20,11 @@ local AURAS_REMOTES_FOLDER_NAME = "Auras"
 local GET_PLAYER_INSPECT_SUMMARY_REMOTE_NAME = "GetPlayerInspectSummary"
 local GET_EXISTENCE_REMOTE_NAME = "GetTotalInExistenceForPiece"
 local GET_AURA_EXISTENCE_REMOTE_NAME = "GetTotalInExistenceForAura"
+local INSPECT_REFRESH_INTERVAL = 1.0
 local SELECTED_COLOR = Color3.fromRGB(116, 192, 255)
 local DEFAULT_OUTLINE_COLOR = Color3.fromRGB(255, 255, 255)
 local PART_INFO_TWEEN = TweenInfo.new(0.16, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local DEFAULT_SELECT_TEXT = "Select a body part"
 
 type InspectEntry = {
 	ownedId: string?,
@@ -86,6 +87,18 @@ local function createHighlight(): Highlight
 	highlight.Enabled = false
 	highlight.Parent = workspace
 	return highlight
+end
+
+local function extractTrailingLabelText(templateText: any, fallback: string): string
+	local normalized = if typeof(templateText) == "string" then string.match(templateText, "^%s*(.-)%s*$") or "" else ""
+	local remainder = string.match(normalized, "^%S+%s+(.+)$")
+	if typeof(remainder) == "string" and remainder ~= "" then
+		return remainder
+	end
+	if normalized ~= "" then
+		return normalized
+	end
+	return fallback
 end
 
 local function getPlayerFromInstance(target: Instance?): Player?
@@ -294,6 +307,8 @@ function PlayerInspectController:_ensureState()
 	self._slotPlaceholderDefaults = {}
 	self._ui = nil
 	self._partInfoLabelFontFaces = nil
+	self._partInfoEverRolledNativeText = nil
+	self._partInfoEverRolledSuffixText = nil
 end
 
 function PlayerInspectController:_getRemotesFolder(): Folder?
@@ -365,6 +380,56 @@ function PlayerInspectController:_ensureAuraExistenceRemote(): boolean
 
 	self._remotes.getAuraExistence = getAuraExistence
 	return true
+end
+
+function PlayerInspectController:_requestInspectSummary(userId: number): InspectSummary?
+	if not self:_ensureRemotes() then
+		return nil
+	end
+
+	local ok, result = pcall(function()
+		return self._remotes.getInspectSummary:InvokeServer({
+			userId = userId,
+		})
+	end)
+	if not ok or typeof(result) ~= "table" or result.ok ~= true or typeof(result.summary) ~= "table" then
+		return nil
+	end
+
+	return result.summary
+end
+
+function PlayerInspectController:_canRefreshSummary(requestToken: number, userId: number): boolean
+	if requestToken ~= self._requestToken then
+		return false
+	end
+	if self._inspectedUserId ~= userId then
+		return false
+	end
+	if not self._ui or not FrameController:IsOpen(WINDOW_NAME) then
+		return false
+	end
+
+	return Players:GetPlayerByUserId(userId) ~= nil
+end
+
+function PlayerInspectController:_startSummaryRefreshLoop(requestToken: number, userId: number)
+	task.spawn(function()
+		while self:_canRefreshSummary(requestToken, userId) do
+			task.wait(INSPECT_REFRESH_INTERVAL)
+			if not self:_canRefreshSummary(requestToken, userId) then
+				break
+			end
+
+			local summary = self:_requestInspectSummary(userId)
+			if summary and self:_canRefreshSummary(requestToken, userId) then
+				local player = Players:GetPlayerByUserId(userId)
+				if player then
+					self:_applySummary(player, summary, true)
+				end
+			end
+		end
+	end)
 end
 
 function PlayerInspectController:_getEquippedEntries(): { [string]: InspectEntry }
@@ -439,6 +504,25 @@ function PlayerInspectController:_setExistingText(text: string)
 	end
 end
 
+function PlayerInspectController:_setEverRolledText(leadingText: string?)
+	local ui = self._ui
+	local everRolledLabel = ui and ui.partInfoLabels.EverRolled
+	if not (everRolledLabel and everRolledLabel:IsA("TextLabel")) then
+		return
+	end
+
+	if typeof(leadingText) ~= "string" or leadingText == "" then
+		everRolledLabel.Text = self._partInfoEverRolledNativeText or everRolledLabel.Text
+		return
+	end
+
+	local suffixText = self._partInfoEverRolledSuffixText
+		or extractTrailingLabelText(self._partInfoEverRolledNativeText, "Ever Rolled")
+	everRolledLabel.Text = if suffixText ~= ""
+		then string.format("%s %s", leadingText, suffixText)
+		else leadingText
+end
+
 function PlayerInspectController:_syncHeader()
 	local ui = self._ui
 	local summary = self._summary
@@ -496,6 +580,7 @@ function PlayerInspectController:_syncRegionButtons()
 				local previewPresentation = BodyPartPresentation.BuildPreviewPresentation({
 					record = entry,
 					scale = entry.scale,
+					appearanceUserId = self._inspectedUserId,
 				})
 				local mountedButton = if previewPresentation and regionFrame and self._slotCardRenderer
 					then self._slotCardRenderer:Render(
@@ -577,6 +662,9 @@ function PlayerInspectController:_syncAuraButton()
 		nameText = if previewPresentation then previewPresentation.cardNameText else entry.label,
 		usageText = if previewPresentation then previewPresentation.cardUsageText else "",
 		bundleModel = if previewPresentation then previewPresentation.bundleModel else nil,
+		cardAccentColor = if previewPresentation then previewPresentation.cardAccentColor else nil,
+		baseFillColor = if previewPresentation then previewPresentation.baseFillColor else nil,
+		selectedFillColor = if previewPresentation then previewPresentation.selectedFillColor else nil,
 		iconTexture = if previewPresentation then previewPresentation.iconTexture else nil,
 		preferIconOverViewport = true,
 	})
@@ -596,6 +684,7 @@ function PlayerInspectController:_clearPreviewLabels()
 	for _, label in pairs(ui.partInfoLabels) do
 		label.Text = ""
 	end
+	self:_setEverRolledText(nil)
 	self:_applyPartInfoLabelStyles(nil)
 end
 
@@ -737,6 +826,7 @@ function PlayerInspectController:_syncPartInfo()
 			previewPresentation = BodyPartPresentation.BuildPreviewPresentation({
 				record = entry,
 				scale = entry.scale,
+				appearanceUserId = self._inspectedUserId,
 			})
 			existingLookupKey = previewPresentation and previewPresentation.pieceId or entry.pieceId
 		end
@@ -750,7 +840,7 @@ function PlayerInspectController:_syncPartInfo()
 
 	self:_applyPartInfoLabelStyles(previewPresentation)
 	ui.partInfoLabels.Bundle.Text = previewPresentation.bundleText
-	ui.partInfoLabels.Part.Text = previewPresentation.partText
+	self:_setEverRolledText(previewPresentation.inventoryEverRolledText)
 	ui.partInfoLabels.Rarity.Text = previewPresentation.rarityText
 	ui.partInfoLabels.Mutation.Text = previewPresentation.mutationText
 	ui.partInfoLabels.Content.Text = previewPresentation.sizeText
@@ -777,8 +867,7 @@ function PlayerInspectController:_syncModalContents()
 
 	local equippedEntries = self:_getEquippedEntries()
 	local equippedAura = self:_getEquippedAuraEntry()
-	local hasAnyEquipped = next(equippedEntries) ~= nil or equippedAura ~= nil
-	local baseText = "Select a body part or aura."
+	local baseText = DEFAULT_SELECT_TEXT
 	if self._selectedAura then
 		if equippedAura then
 			baseText = tostring(equippedAura.label or "Aura")
@@ -796,13 +885,9 @@ function PlayerInspectController:_syncModalContents()
 
 	if self._selectedAura == false and self._selectedRegion == nil and self._hoveredAura and equippedAura then
 		baseText = tostring(equippedAura.label or "Aura")
-	elseif self._selectedAura == false and self._selectedRegion == nil and self._hoveredRegion then
-		baseText = BodyPartPresentation.GetRegionLabel(self._hoveredRegion)
-	elseif self._selectedAura == false and self._selectedRegion == nil and not hasAnyEquipped then
-		baseText = "This player has no equipped body parts or aura."
 	end
 
-	self:_setSelectText(PlayerStatsPresentation.BuildInspectStatusText(baseText, self._summary))
+	self:_setSelectText(baseText)
 	self:_syncPartInfo()
 end
 
@@ -826,7 +911,7 @@ function PlayerInspectController:_clearState()
 		self:_syncAuraButton()
 		self:_clearPreviewLabels()
 		self:_setPartInfoVisible(false)
-		self:_setSelectText("Select a body part or aura.")
+		self:_setSelectText(DEFAULT_SELECT_TEXT)
 	end
 end
 
@@ -875,7 +960,7 @@ function PlayerInspectController:_syncCharacterViewport()
 	return
 end
 
-function PlayerInspectController:_applySummary(player: Player, summary: InspectSummary)
+function PlayerInspectController:_applySummary(player: Player, summary: InspectSummary, preserveViewState: boolean?)
 	if not self._ui or not FrameController:IsOpen(WINDOW_NAME) then
 		return
 	end
@@ -883,11 +968,13 @@ function PlayerInspectController:_applySummary(player: Player, summary: InspectS
 	self._inspectedPlayer = player
 	self._inspectedUserId = summary.userId
 	self._summary = summary
-	self._existingCounts = {}
-	self._pendingExistingCounts = {}
-	self._existingRequestToken += 1
-	self._selectedRegion = nil
-	self._selectedAura = false
+	if preserveViewState ~= true then
+		self._existingCounts = {}
+		self._pendingExistingCounts = {}
+		self._existingRequestToken += 1
+		self._selectedRegion = nil
+		self._selectedAura = false
+	end
 	self:_prefetchExistingCounts()
 	self:_syncModalContents()
 	self:_syncCharacterViewport()
@@ -907,28 +994,24 @@ function PlayerInspectController:_openForPlayer(player: Player)
 	self:_setSelectText("Loading...")
 	self:_syncCharacterViewport()
 
-	if not self:_ensureRemotes() then
-		return
-	end
-
 	task.spawn(function()
-		local ok, result = pcall(function()
-			return self._remotes.getInspectSummary:InvokeServer({
-				userId = player.UserId,
-			})
-		end)
-
 		if requestToken ~= self._requestToken then
 			return
 		end
 
-		if not ok or typeof(result) ~= "table" or result.ok ~= true or typeof(result.summary) ~= "table" then
+		local summary = self:_requestInspectSummary(player.UserId)
+		if requestToken ~= self._requestToken then
+			return
+		end
+
+		if not summary then
 			FrameController:CloseFrame(WINDOW_NAME)
 			self:_clearState()
 			return
 		end
 
-		self:_applySummary(player, result.summary)
+		self:_applySummary(player, summary)
+		self:_startSummaryRefreshLoop(requestToken, player.UserId)
 	end)
 end
 
@@ -1062,7 +1145,7 @@ function PlayerInspectController:_cacheUi(playerGui: PlayerGui)
 		partInfoScale = partInfoScale,
 		partInfoLabels = {
 			Bundle = partInfoFrame:WaitForChild("Bundle", 30),
-			Part = partInfoFrame:WaitForChild("Part", 30),
+			EverRolled = partInfoFrame:WaitForChild("EverRolled", 30),
 			Rarity = partInfoFrame:WaitForChild("Rarity", 30),
 			Mutation = partInfoFrame:WaitForChild("Mutation", 30),
 			Content = partInfoFrame:WaitForChild("Content", 30),
@@ -1088,6 +1171,8 @@ function PlayerInspectController:_cacheUi(playerGui: PlayerGui)
 		Bundle = self._ui.partInfoLabels.Bundle.FontFace,
 		Rarity = self._ui.partInfoLabels.Rarity.FontFace,
 	}
+	self._partInfoEverRolledNativeText = self._ui.partInfoLabels.EverRolled.Text
+	self._partInfoEverRolledSuffixText = extractTrailingLabelText(self._partInfoEverRolledNativeText, "Ever Rolled")
 
 	playerInfoRoot.Visible = false
 	partInfo.Visible = false

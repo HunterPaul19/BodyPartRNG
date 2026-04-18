@@ -16,8 +16,10 @@ local REMOTES_FOLDER_NAME = "Remotes"
 local PLAY_CLIENT_SOUND_REMOTE_NAME = "PlayClientSound"
 local MARKETPLACE_FOLDER_NAME = "Marketplace"
 local GET_OFFER_INFO_REMOTE_NAME = "GetOfferInfo"
+local GET_OFFER_PRESENTATIONS_REMOTE_NAME = "GetOfferPresentations"
 local PROMPT_OFFER_PURCHASE_REMOTE_NAME = "PromptOfferPurchase"
 local PROMPT_GIFT_PURCHASE_REMOTE_NAME = "PromptGiftPurchase"
+local MARKETPLACE_UPDATED_REMOTE_NAME = "Updated"
 
 local PurchaseReceipt = {}
 
@@ -33,8 +35,10 @@ local remotesFolder: Folder? = nil
 local playClientSoundRemote: RemoteEvent? = nil
 local marketplaceRemotesFolder: Folder? = nil
 local getOfferInfoRemote: RemoteFunction? = nil
+local getOfferPresentationsRemote: RemoteFunction? = nil
 local promptOfferPurchaseRemote: RemoteFunction? = nil
 local promptGiftPurchaseRemote: RemoteFunction? = nil
+local marketplaceUpdatedRemote: RemoteEvent? = nil
 local ownedOfferCache: { [Player]: { [string]: boolean } } = {}
 local invalidPassWarnings: { [string]: boolean } = {}
 
@@ -124,6 +128,26 @@ local function ensureMarketplaceRemoteFunction(cachedRemote: RemoteFunction?, re
 	return remote
 end
 
+local function ensureMarketplaceRemoteEvent(cachedRemote: RemoteEvent?, remoteName: string): RemoteEvent
+	local folder = ensureMarketplaceRemotesFolder()
+	if cachedRemote and cachedRemote.Parent == folder then
+		return cachedRemote
+	end
+
+	local existing = folder:FindFirstChild(remoteName)
+	if existing and existing:IsA("RemoteEvent") then
+		return existing
+	end
+	if existing then
+		existing:Destroy()
+	end
+
+	local remote = Instance.new("RemoteEvent")
+	remote.Name = remoteName
+	remote.Parent = folder
+	return remote
+end
+
 local function sendClientSound(player: Player, soundName: string)
 	if typeof(soundName) ~= "string" or soundName == "" then
 		return
@@ -153,6 +177,17 @@ local function getOfferDisplayName(offerKey: string?): string
 	local offer = if typeof(offerKey) == "string" then getOffer(offerKey) else nil
 	local displayName = offer and offer.displayName or offerKey or "purchase"
 	return normalizeString(displayName) ~= "" and tostring(displayName) or "purchase"
+end
+
+local function warnInvalidGiftRecipient(player: Player, offerKey: string, recipientUserId: any, reason: string)
+	warn(string.format(
+		"[PurchaseReceipt] Gift recipient rejected (%s): sender=%s(%d), recipient=%s, offer=%s",
+		tostring(reason),
+		player.Name,
+		player.UserId,
+		tostring(recipientUserId),
+		tostring(offerKey)
+	))
 end
 
 local function buildOfferClientPayload(offer: any): any
@@ -453,13 +488,17 @@ end
 local function sendPurchaseThanks(player: Player, offerKey: string, source: string, purchaseKind: string)
 	if purchaseKind == "gift" then
 		if source == "gift_delivery" then
-			Notify.Send(player, string.format("You received %s as a gift!", getOfferDisplayName(offerKey)), { color = "Green" })
+			Notify.Send(player, string.format("You received %s as a gift!", getOfferDisplayName(offerKey)), {
+				channel = "marketplace",
+			})
 		end
 		return
 	end
 
 	if source == "prompt" or source == "receipt" then
-		Notify.Send(player, string.format("Thanks for purchasing %s!", getOfferDisplayName(offerKey)), { color = "Green" })
+		Notify.Send(player, string.format("Thanks for purchasing %s!", getOfferDisplayName(offerKey)), {
+			channel = "marketplace",
+		})
 	end
 end
 
@@ -505,6 +544,28 @@ local function ownsOffer(player: Player, offer: any): boolean
 	end
 
 	return false
+end
+
+local function buildOfferPresentationPayload(player: Player, offer: any): any
+	if typeof(player) ~= "Instance" or not player:IsA("Player") then
+		return nil
+	end
+	if typeof(offer) ~= "table" then
+		return nil
+	end
+
+	local selfPurchase = offer.selfPurchase
+	local saleKind = if typeof(selfPurchase) == "table" then normalizeString(selfPurchase.saleKind) else ""
+	local saleRobloxId = if typeof(selfPurchase) == "table" then tonumber(selfPurchase.robloxId) else nil
+
+	return {
+		offerKey = offer.offerKey,
+		exists = true,
+		selfConfigured = saleKind ~= "" and saleRobloxId ~= nil,
+		saleKind = saleKind,
+		saleRobloxId = if saleRobloxId ~= nil then math.floor(saleRobloxId) else nil,
+		isOwned = ownsOffer(player, offer),
+	}
 end
 
 local function hasDuplicateGiftOwnership(recipientUserId: number, offer: any): boolean
@@ -553,6 +614,10 @@ end
 local function emitOwnedEvents(player: Player)
 	PurchaseReceipt.OwnedPassesReady:Fire(player, filterPassOwnedKeys(player))
 	PurchaseReceipt.OwnedEntitlementsReady:Fire(player, table.freeze(getOwnedOffers(player)))
+
+	if marketplaceUpdatedRemote then
+		marketplaceUpdatedRemote:FireClient(player)
+	end
 end
 
 local function reconcileOwnedOffersOnJoin(player: Player)
@@ -747,7 +812,9 @@ local function processProductReceipt(receiptInfo)
 			PurchaseReceipt.GiftSent:Fire(player, offer.offerKey, senderContext)
 		end
 
-		Notify.Send(player, string.format("Sent %s as a gift.", getOfferDisplayName(offer.offerKey)), { color = "Green" })
+		Notify.Send(player, string.format("Sent %s as a gift.", getOfferDisplayName(offer.offerKey)), {
+			channel = "marketplace",
+		})
 		return Enum.ProductPurchaseDecision.PurchaseGranted
 	end
 
@@ -822,8 +889,11 @@ end
 function PurchaseReceipt:OnStart()
 	ensurePlayClientSoundRemote()
 	getOfferInfoRemote = ensureMarketplaceRemoteFunction(getOfferInfoRemote, GET_OFFER_INFO_REMOTE_NAME)
+	getOfferPresentationsRemote =
+		ensureMarketplaceRemoteFunction(getOfferPresentationsRemote, GET_OFFER_PRESENTATIONS_REMOTE_NAME)
 	promptOfferPurchaseRemote = ensureMarketplaceRemoteFunction(promptOfferPurchaseRemote, PROMPT_OFFER_PURCHASE_REMOTE_NAME)
 	promptGiftPurchaseRemote = ensureMarketplaceRemoteFunction(promptGiftPurchaseRemote, PROMPT_GIFT_PURCHASE_REMOTE_NAME)
+	marketplaceUpdatedRemote = ensureMarketplaceRemoteEvent(marketplaceUpdatedRemote, MARKETPLACE_UPDATED_REMOTE_NAME)
 	MarketplaceService.ProcessReceipt = processProductReceipt
 	MarketplaceService.PromptGamePassPurchaseFinished:Connect(onPromptGamePassFinished)
 	getOfferInfoRemote.OnServerInvoke = function(_player: Player, offerKey: string)
@@ -838,6 +908,12 @@ function PurchaseReceipt:OnStart()
 		return {
 			ok = false,
 			message = "That offer does not exist.",
+		}
+	end
+	getOfferPresentationsRemote.OnServerInvoke = function(player: Player, offerKeys: any)
+		return {
+			ok = true,
+			offers = self:GetOfferPresentations(player, offerKeys),
 		}
 	end
 	promptOfferPurchaseRemote.OnServerInvoke = function(player: Player, offerKey: string)
@@ -883,6 +959,40 @@ end
 
 function PurchaseReceipt:GetOfferClientView(offerKey: string)
 	return buildOfferClientPayload(getOffer(offerKey))
+end
+
+function PurchaseReceipt:GetOfferPresentations(player: Player, offerKeys: any)
+	if typeof(player) ~= "Instance" or not player:IsA("Player") then
+		return {}
+	end
+
+	local presentations = {}
+	if typeof(offerKeys) ~= "table" then
+		return presentations
+	end
+
+	local seenOfferKeys = {}
+	for _, offerKeyValue in ipairs(offerKeys) do
+		local offerKey = normalizeString(offerKeyValue)
+		if offerKey ~= "" and not seenOfferKeys[offerKey] then
+			seenOfferKeys[offerKey] = true
+			local offer = getOffer(offerKey)
+			if offer then
+				presentations[offerKey] = buildOfferPresentationPayload(player, offer)
+			else
+				presentations[offerKey] = {
+					offerKey = offerKey,
+					exists = false,
+					selfConfigured = false,
+					saleKind = "",
+					saleRobloxId = nil,
+					isOwned = false,
+				}
+			end
+		end
+	end
+
+	return presentations
 end
 
 function PurchaseReceipt:GetOwnedEntitlements(player: Player)
@@ -979,10 +1089,16 @@ function PurchaseReceipt:PromptGiftPurchase(player: Player, offerKey: string, re
 
 	local resolvedRecipientUserId = tonumber(recipientUserId)
 	if resolvedRecipientUserId == nil then
+		warnInvalidGiftRecipient(player, offerKey, recipientUserId, "invalid_recipient")
 		return false, "A valid recipient userId is required."
 	end
 	resolvedRecipientUserId = math.floor(resolvedRecipientUserId)
-	if resolvedRecipientUserId <= 0 or resolvedRecipientUserId == player.UserId then
+	if resolvedRecipientUserId <= 0 then
+		warnInvalidGiftRecipient(player, offerKey, resolvedRecipientUserId, "invalid_recipient")
+		return false, "A valid recipient userId is required."
+	end
+	if resolvedRecipientUserId == player.UserId then
+		warnInvalidGiftRecipient(player, offerKey, resolvedRecipientUserId, "self_recipient")
 		return false, "Pick a different player to receive that gift."
 	end
 

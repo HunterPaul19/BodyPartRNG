@@ -1,6 +1,4 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local ServerStorage = game:GetService("ServerStorage")
-local Workspace = game:GetService("Workspace")
 
 local AppraisalPricing = require(ReplicatedStorage.Shared.Character.AppraisalPricing)
 local AppraisalState = require(ReplicatedStorage.Shared.Character.AppraisalState)
@@ -13,14 +11,13 @@ local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local RollMath = require(ReplicatedStorage.Shared.Rolling.RollMath)
 local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
+local PotionService = require(script.Parent.PotionService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local APPRAISAL_FOLDER_NAME = "Appraisal"
 local GET_STATE_REMOTE_NAME = "GetState"
 local PERFORM_APPRAISAL_REMOTE_NAME = "PerformAppraisal"
 local UPDATED_REMOTE_NAME = "Updated"
-local PARKING_FOLDER_NAME = "AppraisalNpcParking"
-local APPRAISER_MODEL_NAME = "Appraiser"
 
 local remotesFolder: Folder? = nil
 local appraisalFolder: Folder? = nil
@@ -31,11 +28,6 @@ local updatedRemote: RemoteEvent? = nil
 local AppraisalService = {
 	_started = false,
 	_state = AppraisalState.CreateEmptyState(),
-	_cycleId = -1,
-	_stockRemaining = AppraisalConfig.stockPerSpawn,
-	_forcedActiveUntil = 0,
-	_appraiserModel = nil :: Model?,
-	_workspaceParent = nil :: Instance?,
 }
 
 local function response(ok: boolean, message: string, appraisalState: any?, appraisalResult: any?, code: string?)
@@ -133,45 +125,27 @@ local function ensureUpdatedRemote(): RemoteEvent
 	return remote
 end
 
-local function ensureParkingFolder(): Folder
-	local existing = ServerStorage:FindFirstChild(PARKING_FOLDER_NAME)
-	if existing and existing:IsA("Folder") then
-		return existing
-	end
-	if existing then
-		existing:Destroy()
-	end
-
-	local folder = Instance.new("Folder")
-	folder.Name = PARKING_FOLDER_NAME
-	folder.Parent = ServerStorage
-	return folder
-end
-
 local function chooseWeightedEntry(randomSource: Random, entries: { any })
 	return RollMath.ChooseWeighted(randomSource, entries, function(entry)
 		return entry.weight
 	end)
 end
 
-local function buildCycleState(now: number, stockRemaining: number, forcedActiveUntil: number?)
-	local cycleInterval = AppraisalConfig.cycleIntervalSeconds
-	local activeDuration = AppraisalConfig.activeDurationSeconds
-	local cycleId = math.floor(now / cycleInterval)
-	local cycleStartsAt = cycleId * cycleInterval
-	local departsAt = cycleStartsAt + activeDuration
-	local forcedDeparture = math.max(0, math.floor(tonumber(forcedActiveUntil) or 0))
-	local isForcedActive = forcedDeparture > now
-	local resolvedDepartsAt = if isForcedActive then math.max(departsAt, forcedDeparture) else departsAt
+local function getAdjustedMutationWeights(player: Player): { any }
+	local potionBonuses = PotionService:GetRuntimeBonuses(player)
+	local mutationChanceBonusById = if typeof(potionBonuses) == "table"
+		then potionBonuses.mutationChanceBonusById
+		else nil
 
-	return {
-		cycleId = cycleId,
-		isActive = isForcedActive or now < departsAt,
-		stockRemaining = math.clamp(math.floor(tonumber(stockRemaining) or 0), 0, AppraisalConfig.stockPerSpawn),
-		stockPerSpawn = AppraisalConfig.stockPerSpawn,
-		departsAt = resolvedDepartsAt,
-		nextAppearsAt = (cycleId + 1) * cycleInterval,
-	}
+	if typeof(mutationChanceBonusById) ~= "table" or next(mutationChanceBonusById) == nil then
+		return AppraisalConfig.mutationWeights
+	end
+
+	return RollMath.ApplyFlatWeightBonuses(
+		AppraisalConfig.mutationWeights,
+		mutationChanceBonusById,
+		MutationConfig.GetDefault().id
+	)
 end
 
 local function buildAppraisalSnapshot(record: any, piece: any)
@@ -184,74 +158,16 @@ local function buildAppraisalSnapshot(record: any, piece: any)
 	}
 end
 
-function AppraisalService:_ensureNpcResolved()
-	if self._appraiserModel and self._appraiserModel.Parent then
-		return
-	end
-
-	local parkingFolder = ensureParkingFolder()
-	local workspaceModel = Workspace:FindFirstChild(APPRAISER_MODEL_NAME)
-	local parkedModel = parkingFolder:FindFirstChild(APPRAISER_MODEL_NAME)
-	local model = nil
-
-	if workspaceModel and workspaceModel:IsA("Model") then
-		model = workspaceModel
-		self._workspaceParent = workspaceModel.Parent
-	elseif parkedModel and parkedModel:IsA("Model") then
-		model = parkedModel
-	end
-
-	if not self._workspaceParent then
-		self._workspaceParent = Workspace
-	end
-
-	self._appraiserModel = model
-end
-
-function AppraisalService:_setNpcActive(isActive: boolean)
-	self:_ensureNpcResolved()
-
-	local appraiserModel = self._appraiserModel
-	if not (appraiserModel and appraiserModel.Parent) then
-		return
-	end
-
-	if isActive then
-		local targetParent = self._workspaceParent or Workspace
-		if appraiserModel.Parent ~= targetParent then
-			appraiserModel.Parent = targetParent
-		end
-		return
-	end
-
-	local parkingFolder = ensureParkingFolder()
-	if appraiserModel.Parent ~= parkingFolder then
-		appraiserModel.Parent = parkingFolder
-	end
-end
-
 function AppraisalService:_broadcastState()
 	ensureUpdatedRemote():FireAllClients(AppraisalState.CloneState(self._state))
 end
 
-function AppraisalService:_reconcileState(shouldBroadcast: boolean?): any
-	self:_ensureNpcResolved()
-
-	local now = Workspace:GetServerTimeNow()
-	if self._forcedActiveUntil > 0 and now >= self._forcedActiveUntil then
-		self._forcedActiveUntil = 0
-	end
-
-	local nextCycleId = math.floor(now / AppraisalConfig.cycleIntervalSeconds)
-	if self._cycleId ~= nextCycleId then
-		self._cycleId = nextCycleId
-		self._stockRemaining = AppraisalConfig.stockPerSpawn
-	end
-
-	local nextState = AppraisalState.CloneState(buildCycleState(now, self._stockRemaining, self._forcedActiveUntil))
+function AppraisalService:_setAvailability(isAvailable: boolean, shouldBroadcast: boolean?): AppraisalState.AppraisalStateValue
+	local nextState = AppraisalState.CloneState({
+		isAvailable = isAvailable,
+	})
 	local changed = not AppraisalState.AreEqual(self._state, nextState)
 	self._state = nextState
-	self:_setNpcActive(nextState.isActive)
 
 	if changed and shouldBroadcast ~= false then
 		self:_broadcastState()
@@ -260,24 +176,14 @@ function AppraisalService:_reconcileState(shouldBroadcast: boolean?): any
 	return self._state
 end
 
-function AppraisalService:ForceAppear(durationSeconds: number?)
-	local now = Workspace:GetServerTimeNow()
-	local resolvedDuration = math.max(1, math.floor(tonumber(durationSeconds) or AppraisalConfig.activeDurationSeconds))
-	self._forcedActiveUntil = math.max(self._forcedActiveUntil or 0, now + resolvedDuration)
-	return self:_reconcileState(true)
-end
-
 function AppraisalService:GetState(_player: Player)
-	return response(true, "Loaded appraisal state.", self:_reconcileState(false))
+	return response(true, "Loaded appraisal state.", self._state)
 end
 
 function AppraisalService:PerformAppraisal(player: Player, payload: any)
-	local state = self:_reconcileState(false)
-	if not state.isActive then
+	local state = self._state
+	if not state.isAvailable then
 		return response(false, "The appraiser is unavailable right now.", state)
-	end
-	if state.stockRemaining <= 0 then
-		return response(false, "The appraiser is out of service stock.", state)
 	end
 	if typeof(payload) ~= "table" then
 		return response(false, "Appraisal payload must be a table.", state)
@@ -341,7 +247,7 @@ function AppraisalService:PerformAppraisal(player: Player, payload: any)
 	}
 
 	local randomSource = Random.new()
-	local mutationRoll = chooseWeightedEntry(randomSource, AppraisalConfig.mutationWeights)
+	local mutationRoll = chooseWeightedEntry(randomSource, getAdjustedMutationWeights(player))
 	local mutationData = MutationConfig.Get(if mutationRoll then mutationRoll.id else nil) or MutationConfig.GetDefault()
 	local sizeRoll = chooseWeightedEntry(randomSource, AppraisalConfig.sizeWeights)
 	local sizeData = SizeConfig.Get(if sizeRoll then sizeRoll.id else nil) or SizeConfig.GetDefault()
@@ -371,10 +277,7 @@ function AppraisalService:PerformAppraisal(player: Player, payload: any)
 		return response(false, refreshMessage or "The body part visuals could not be refreshed.", state)
 	end
 
-	self._stockRemaining = math.max(0, self._stockRemaining - 1)
-	local nextState = self:_reconcileState(true)
-
-	return response(true, "Appraisal complete.", nextState, {
+	return response(true, "Appraisal complete.", state, {
 		ownedId = ownedId,
 		region = region,
 		pieceId = piece.id,
@@ -401,14 +304,7 @@ function AppraisalService:OnStart()
 		return self:PerformAppraisal(player, payload)
 	end
 
-	self:_reconcileState(false)
-
-	task.spawn(function()
-		while true do
-			self:_reconcileState(true)
-			task.wait(1)
-		end
-	end)
+	self:_setAvailability(true, false)
 end
 
 return AppraisalService

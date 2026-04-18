@@ -17,15 +17,14 @@ local PANEL_TWEEN_INFO = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDi
 local LeaderboardController = {}
 
 local function getRichDisplayName(player: Player): string
-	return TitleUtil.BuildRichTextDisplayName(
-		player:GetAttribute("VIP") == true,
-		player:GetAttribute("EquippedTitleId"),
+	return TitleUtil.BuildLeaderboardRichTextDisplayName(
+		player:GetAttribute("PremiumTag"),
 		player.DisplayName
 	)
 end
 
 local function getRichTitlePrefix(player: Player): string
-	return TitleUtil.BuildRichTextPrefix(player:GetAttribute("VIP") == true, player:GetAttribute("EquippedTitleId"))
+	return TitleUtil.BuildLeaderboardRichTextPrefix(player:GetAttribute("PremiumTag"))
 end
 
 local function formatRollCount(value: number): string
@@ -333,13 +332,7 @@ function LeaderboardController:_trackPlayer(player: Player)
 	local playerConnections = {}
 	self._playerConnections[player] = playerConnections
 	self:_watchLeaderstats(player, playerConnections)
-	table.insert(playerConnections, player:GetAttributeChangedSignal("VIP"):Connect(function()
-		self:_scheduleRefresh()
-		if self._selectedPlayer == player then
-			self:_syncSelectedPlayerInfo()
-		end
-	end))
-	table.insert(playerConnections, player:GetAttributeChangedSignal("EquippedTitleId"):Connect(function()
+	table.insert(playerConnections, player:GetAttributeChangedSignal("PremiumTag"):Connect(function()
 		self:_scheduleRefresh()
 		if self._selectedPlayer == player then
 			self:_syncSelectedPlayerInfo()
@@ -457,12 +450,12 @@ function LeaderboardController:_syncSelectedPlayerInfo()
 	ui.usernameLabel.Text = "@" .. selectedPlayer.Name
 	ui.rollInfoContext.Text = self:_getSelectedRollCount()
 	if ui.titleInfoTitle and ui.titleInfoTitle:IsA("TextLabel") then
-		ui.titleInfoTitle.Text = "Title"
+		ui.titleInfoTitle.Text = "Premium"
 	end
 	if ui.titleInfoContext and ui.titleInfoContext:IsA("TextLabel") then
 		local richPrefix = getRichTitlePrefix(selectedPlayer)
 		ui.titleInfoContext.RichText = true
-		ui.titleInfoContext.Text = if richPrefix ~= "" then richPrefix else "No title equipped"
+		ui.titleInfoContext.Text = if richPrefix ~= "" then richPrefix else "No premium tag"
 	end
 	self:_syncActionButtons()
 end

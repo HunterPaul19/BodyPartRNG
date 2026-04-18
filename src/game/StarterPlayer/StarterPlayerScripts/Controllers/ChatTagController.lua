@@ -16,7 +16,7 @@ function ChatTagController:OnStart()
 		local player = Players:GetPlayerByUserId(textSource.UserId)
 		if player then
 			local richPrefix = TitleUtil.BuildRichTextPrefix(
-				player:GetAttribute("VIP") == true,
+				player:GetAttribute("PremiumTag"),
 				player:GetAttribute("EquippedTitleId")
 			)
 			if richPrefix ~= "" then

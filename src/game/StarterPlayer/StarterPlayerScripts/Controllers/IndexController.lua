@@ -1,10 +1,14 @@
+local MarketplaceService = game:GetService("MarketplaceService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local BodyPartCollection = require(ReplicatedStorage.Shared.Character.BodyPartCollection)
+local PreviewAppearanceRegistry = require(ReplicatedStorage.Shared.Character.PreviewAppearanceRegistry)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
 local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
+local ConfirmationWarning = require(ReplicatedStorage.Shared.UI.ConfirmationWarning)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 local DataController = require(script.Parent.DataController)
 local FrameController = require(script.Parent.FrameController)
@@ -48,6 +52,8 @@ local BUTTON_NAME_TO_REGION = {
 	RightLeg = "RightLeg",
 	RightLegs = "RightLeg",
 }
+
+local BUY_BUNDLE_WARNING_TEXT = "This purchase will not grant ANYTHING in OUR game"
 
 type OwnedBodyPartsState = OwnedBodyParts.OwnedBodyPartsState
 type SetSummary = BodyPartCollection.SetSummary
@@ -339,6 +345,25 @@ function IndexController:_getSelectedPieceId(summary: SetSummary?): string?
 	return nil
 end
 
+function IndexController:_getSelectedBundleId(): number?
+	local selectedSummary = self:_getSelectedSummary()
+	if not selectedSummary then
+		return nil
+	end
+
+	local setConfig = selectedSummary.setConfig
+	local bundleId = setConfig and setConfig.bundleId or nil
+	if typeof(bundleId) ~= "number" or bundleId <= 0 then
+		return nil
+	end
+
+	return math.floor(bundleId)
+end
+
+function IndexController:_buildBuyBundleConfirmationMessage(): string
+	return string.format("%s. Continue?", BUY_BUNDLE_WARNING_TEXT)
+end
+
 function IndexController:_applyRarityLabel(row: GuiButton, rarity: string)
 	local rarityLabel = row:FindFirstChild("Rarity")
 	local rarityTemplates = self:_getRarityTemplatesFolder()
@@ -608,12 +633,27 @@ function IndexController:_renderViewportForPiece(pieceId: string?)
 		return
 	end
 
-	local bundleModel = BodyPartsCatalog.ResolveBundleModel(pieceId)
-	if not bundleModel then
+	local previewPresentation = BodyPartPresentation.BuildPreviewPresentation({
+		pieceId = pieceId,
+		appearanceUserId = LOCAL_PLAYER.UserId,
+	})
+	if not previewPresentation or not (previewPresentation.bundleModel and previewPresentation.bundleModel:IsA("Model")) then
 		return
 	end
 
-	ViewportModelRenderer.RenderBundle(viewportFrame, bundleModel)
+	local appearanceSnapshot = PreviewAppearanceRegistry.GetSnapshotForUserId(previewPresentation.appearanceUserId)
+	if appearanceSnapshot then
+		ViewportModelRenderer.RenderBodyPartPreview(
+			viewportFrame,
+			previewPresentation.bundleModel,
+			previewPresentation.region,
+			appearanceSnapshot,
+			previewPresentation.previewScale
+		)
+		return
+	end
+
+	ViewportModelRenderer.RenderBundle(viewportFrame, previewPresentation.bundleModel)
 end
 
 function IndexController:_syncDetailPanel()
@@ -679,18 +719,22 @@ function IndexController:_syncBuyBundleButton()
 		return
 	end
 
-	buyBundleButton.Active = false
+	local bundleId = self:_getSelectedBundleId()
+	local hasBundleId = bundleId ~= nil
+
+	buyBundleButton.Visible = hasBundleId
+	buyBundleButton.Active = hasBundleId
 	buyBundleButton.AutoButtonColor = false
 
 	local textLabel = buyBundleButton:FindFirstChild("TextLabel")
 	if textLabel and textLabel:IsA("TextLabel") then
 		textLabel.Text = "Buy Bundle"
-		textLabel.TextTransparency = 0.35
+		textLabel.TextTransparency = if hasBundleId then 0 else 0.35
 	end
 
 	for _, child in ipairs(buyBundleButton:GetChildren()) do
 		if child:IsA("ImageLabel") then
-			child.ImageTransparency = if child.Name == "Rays" then 0.45 else 0.25
+			child.ImageTransparency = if hasBundleId then 0 else if child.Name == "Rays" then 0.45 else 0.25
 		end
 	end
 end
@@ -893,6 +937,26 @@ function IndexController:_bindRegionButtons()
 	end
 end
 
+function IndexController:_bindBuyBundleButton()
+	local buyBundleButton = self._ui.buyBundleButton
+	if not buyBundleButton then
+		return
+	end
+
+	UIController:CreateButton(buyBundleButton, function()
+		local bundleId = self:_getSelectedBundleId()
+		if not bundleId then
+			return
+		end
+
+		if ConfirmationWarning.Prompt(self:_buildBuyBundleConfirmationMessage()) ~= true then
+			return
+		end
+
+		MarketplaceService:PromptBundlePurchase(LOCAL_PLAYER, bundleId)
+	end)
+end
+
 function IndexController:OnStart()
 	self:_ensureState()
 
@@ -901,6 +965,7 @@ function IndexController:OnStart()
 
 	self:_bindOpenButton(self._ui.openButton)
 	self:_bindRegionButtons()
+	self:_bindBuyBundleButton()
 
 	if self._ui.searchBox then
 		self._ui.searchBox:GetPropertyChangedSignal("Text"):Connect(function()

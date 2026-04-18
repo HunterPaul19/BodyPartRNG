@@ -5,7 +5,7 @@ local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegio
 local RollTargetRegions = {}
 
 RollTargetRegions.FullBody = "FullBody"
-RollTargetRegions.Default = "RightArm"
+RollTargetRegions.Default = RollTargetRegions.FullBody
 
 RollTargetRegions.Order = {
 	"Head",

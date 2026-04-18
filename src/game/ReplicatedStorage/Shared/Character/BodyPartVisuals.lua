@@ -1,6 +1,7 @@
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local AccessoryScaleUtils = require(script.Parent.AccessoryScaleUtils)
 local BodyPartRegions = require(script.Parent.BodyPartRegions)
 local CharacterAppearanceHostApplier = require(script.Parent.CharacterAppearanceHostApplier)
 local PerfStats = require(ReplicatedStorage.Shared.Diagnostics.PerfStats)
@@ -73,6 +74,14 @@ local REGION_PARTS = {
 	LeftLeg = { "LeftUpperLeg", "LeftLowerLeg", "LeftFoot" },
 	RightLeg = { "RightUpperLeg", "RightLowerLeg", "RightFoot" },
 }
+
+local PART_NAME_TO_REGION = {}
+for region, partNames in pairs(REGION_PARTS) do
+	for _, partName in ipairs(partNames) do
+		PART_NAME_TO_REGION[partName] = region
+	end
+end
+table.freeze(PART_NAME_TO_REGION)
 
 local ALL_RIG_PARTS = {
 	"Head",
@@ -155,6 +164,8 @@ local PLACEMENT_MODE_ARM_JOINT = "ArmJointChainPlacement"
 local PLACEMENT_MODE_LEG_JOINT = "LegJointChainPlacement"
 local TRANSFORM_ROTATION_TOLERANCE = math.rad(1)
 local RIG_ATTACHMENT_ROTATION_TOLERANCE = math.rad(1)
+local FOOTING_SETTLE_MAX_PASSES = 3
+local FOOTING_SETTLE_TOLERANCE = 0.01
 
 local REGION_NATIVE_RIG_ATTACHMENT_SPECS = {
 	Head = {
@@ -501,7 +512,11 @@ local function scaleNumberSequenceByRatio(sequence: NumberSequence, ratio: numbe
 	return NumberSequence.new(keypoints)
 end
 
-local function scaleAuraCloneTree(cloneRoot: BasePart, baseSize: Vector3, targetSize: Vector3)
+local function scaleNumberByRatio(value: number, ratio: number): number
+	return value * ratio
+end
+
+local function scaleMutationCloneTree(cloneRoot: BasePart, baseSize: Vector3, targetSize: Vector3)
 	local scalarRatio = getScalarSizeRatio(baseSize, targetSize)
 	if scalarRatio == 1 and baseSize == targetSize then
 		return
@@ -519,6 +534,35 @@ local function scaleAuraCloneTree(cloneRoot: BasePart, baseSize: Vector3, target
 			descendant.WidthScale = scaleNumberSequenceByRatio(descendant.WidthScale, scalarRatio)
 		elseif descendant:IsA("SpecialMesh") then
 			descendant.Scale = scaleVectorBySizeRatio(descendant.Scale, baseSize, targetSize)
+		end
+	end
+end
+
+local function scaleAuraCloneTree(cloneRoot: BasePart, requestedScale: number)
+	if requestedScale == 1 then
+		return
+	end
+
+	for _, descendant in ipairs(cloneRoot:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			descendant.Size = descendant.Size * requestedScale
+		elseif descendant:IsA("Attachment") then
+			descendant.Position = descendant.Position * requestedScale
+		elseif descendant:IsA("ParticleEmitter") then
+			descendant.Size = scaleNumberSequenceByRatio(descendant.Size, requestedScale)
+		elseif descendant:IsA("Beam") then
+			descendant.Width0 = scaleNumberByRatio(descendant.Width0, requestedScale)
+			descendant.Width1 = scaleNumberByRatio(descendant.Width1, requestedScale)
+			descendant.CurveSize0 = scaleNumberByRatio(descendant.CurveSize0, requestedScale)
+			descendant.CurveSize1 = scaleNumberByRatio(descendant.CurveSize1, requestedScale)
+			descendant.TextureLength = scaleNumberByRatio(descendant.TextureLength, requestedScale)
+		elseif descendant:IsA("Trail") then
+			descendant.WidthScale = scaleNumberSequenceByRatio(descendant.WidthScale, requestedScale)
+		elseif descendant:IsA("SpecialMesh") then
+			descendant.Scale = descendant.Scale * requestedScale
+			descendant.Offset = descendant.Offset * requestedScale
+		elseif descendant:IsA("PointLight") or descendant:IsA("SpotLight") then
+			descendant.Range = scaleNumberByRatio(descendant.Range, requestedScale)
 		end
 	end
 end
@@ -571,6 +615,24 @@ end
 
 local function isFinitePositiveNumber(value: any): boolean
 	return typeof(value) == "number" and value == value and value > 0 and value < math.huge and value > -math.huge
+end
+
+local function isKorbloxDeathspeakerTorsoBundle(bundle: Model?): boolean
+	if not (bundle and bundle:IsA("Model")) then
+		return false
+	end
+
+	local bundleGroup = bundle.Parent
+	return bundle.Name == "Deathspeaker" and bundleGroup ~= nil and bundleGroup.Name == "Korblox"
+end
+
+local function getBodyPartTargetSize(bundle: Model?, partName: string, bodyPart: BasePart, scale: number): Vector3
+	local targetSize = bodyPart.Size * scale
+	if partName == "UpperTorso" and isKorbloxDeathspeakerTorsoBundle(bundle) then
+		return Vector3.new(targetSize.X, 3 * scale, targetSize.Z)
+	end
+
+	return targetSize
 end
 
 local function getFinalScale(request: ApplyRegionRequest): number
@@ -1128,14 +1190,16 @@ local function configureVisualPart(part: BasePart)
 	part.BottomSurface = Enum.SurfaceType.Smooth
 end
 
-local function scaleVisualPart(part: BasePart, scale: number)
-	part.Size = part.Size * scale
+local function scaleVisualPart(part: BasePart, scale: number, targetSizeOverride: Vector3?)
+	local baseSize = part.Size
+	local targetSize = if typeof(targetSizeOverride) == "Vector3" then targetSizeOverride else (baseSize * scale)
+	part.Size = targetSize
 
 	for _, descendant in ipairs(part:GetDescendants()) do
 		if descendant:IsA("SpecialMesh") then
-			descendant.Scale = descendant.Scale * scale
+			descendant.Scale = scaleVectorBySizeRatio(descendant.Scale, baseSize, targetSize)
 		elseif descendant:IsA("Attachment") then
-			descendant.Position = descendant.Position * scale
+			descendant.Position = scaleVectorBySizeRatio(descendant.Position, baseSize, targetSize)
 		end
 	end
 end
@@ -1212,6 +1276,16 @@ local function getStoredLoadoutEntry(character: Model, region: string): ApplyReg
 	end
 
 	return cloneRegionRequest(requests[region])
+end
+
+local function getAuraRequestedScale(character: Model, partName: string): number
+	local region = PART_NAME_TO_REGION[partName]
+	if region == nil then
+		return 1
+	end
+
+	local regionRequest = getStoredLoadoutEntry(character, region)
+	return getFinalScale(regionRequest)
 end
 
 local function getAppliedRegionPart(character: Model, region: string, partName: string): BasePart?
@@ -1357,6 +1431,18 @@ local function findAttachmentInVisualParts(visualPartsByName: { [string]: BasePa
 	return nil, nil
 end
 
+local function findBundleSourcePartForAttachment(bundle: Instance, region: string, attachmentName: string): BasePart?
+	local bundlePartsByName = buildBundlePartLookup(bundle, region)
+	for _, partName in ipairs(getRigPartNames(region) or ALL_RIG_PARTS) do
+		local part = bundlePartsByName[partName]
+		if part and findDirectAttachment(part, attachmentName) then
+			return part
+		end
+	end
+
+	return nil
+end
+
 local function buildCloneMap(source: Instance, clone: Instance, sourceToClone: { [Instance]: Instance })
 	sourceToClone[source] = clone
 
@@ -1432,6 +1518,7 @@ local function buildAuraRuntimePlan(character: Model, auraRequest: ApplyAuraRequ
 			table.insert(sourceParts, {
 				sourcePart = descendant,
 				targetPart = targetPart,
+				requestedScale = getAuraRequestedScale(character, descendant.Name),
 			})
 
 			for _, nestedDescendant in ipairs(descendant:GetDescendants()) do
@@ -1483,6 +1570,7 @@ local function applyAuraRuntime(character: Model, auraRequest: ApplyAuraRequest)
 	for _, sourcePartEntry in ipairs(runtimePlan.sourceParts) do
 		local sourcePart = sourcePartEntry.sourcePart
 		local targetPart = sourcePartEntry.targetPart
+		local requestedScale = sourcePartEntry.requestedScale
 		local sourceClone = sourcePart:Clone()
 		local sourceToClone = {}
 		local cloneToSource = {}
@@ -1491,7 +1579,7 @@ local function applyAuraRuntime(character: Model, auraRequest: ApplyAuraRequest)
 		for sourceInstance, cloneInstance in pairs(sourceToClone) do
 			cloneToSource[cloneInstance] = sourceInstance
 		end
-		scaleAuraCloneTree(sourceClone, sourcePart.Size, targetPart.Size)
+		scaleAuraCloneTree(sourceClone, requestedScale)
 
 		for _, sourceDescendant in ipairs(sourcePart:GetDescendants()) do
 			if sourceDescendant:IsA("Attachment") then
@@ -1678,7 +1766,7 @@ local function applyMutationRuntime(
 		for sourceInstance, cloneInstance in pairs(sourceToClone) do
 			cloneToSource[cloneInstance] = sourceInstance
 		end
-		scaleAuraCloneTree(sourceClone, sourcePart.Size, targetPart.Size)
+		scaleMutationCloneTree(sourceClone, sourcePart.Size, targetPart.Size)
 
 		for _, sourceDescendant in ipairs(sourcePart:GetDescendants()) do
 			if sourceDescendant:IsA("Attachment") then
@@ -1776,14 +1864,6 @@ local function applyMutationRuntime(
 	return true, nil
 end
 
-local function scaleAccessory(accessory: Accessory, scale: number)
-	local handle = accessory:FindFirstChild("Handle")
-	if handle and handle:IsA("BasePart") then
-		configureAccessoryHandle(handle)
-		scaleVisualPart(handle, scale)
-	end
-end
-
 local function alignAccessoryToAttachment(accessory: Accessory, targetPart: BasePart, targetAttachment: Attachment): (boolean, string?)
 	local handle = accessory:FindFirstChild("Handle")
 	if not (handle and handle:IsA("BasePart")) then
@@ -1806,13 +1886,15 @@ local function alignAccessoryToAttachment(accessory: Accessory, targetPart: Base
 	return true, nil
 end
 
-local function applyBundleAccessories(regionFolder: Model, bundle: Model, visualPartsByName: { [string]: BasePart }, finalScale: number): (boolean, string?)
+local function applyBundleAccessories(
+	regionFolder: Model,
+	bundle: Instance,
+	region: string,
+	visualPartsByName: { [string]: BasePart }
+): (boolean, string?)
 	for _, child in ipairs(bundle:GetChildren()) do
 		if child:IsA("Accessory") then
 			local accessoryClone = child:Clone()
-			scaleAccessory(accessoryClone, finalScale)
-			accessoryClone.Parent = regionFolder
-
 			local accessoryAttachment = findFirstAttachmentInAccessory(accessoryClone)
 			if not accessoryAttachment then
 				accessoryClone:Destroy()
@@ -1825,6 +1907,25 @@ local function applyBundleAccessories(regionFolder: Model, bundle: Model, visual
 				return false, string.format("Accessory %s could not find a matching visual attachment named %s.", child.Name, accessoryAttachment.Name)
 			end
 
+			local sourcePart = findBundleSourcePartForAttachment(bundle, region, accessoryAttachment.Name)
+			if not sourcePart then
+				accessoryClone:Destroy()
+				return false, string.format("Accessory %s could not resolve a matching source part for attachment %s.", child.Name, accessoryAttachment.Name)
+			end
+
+			local handle = accessoryClone:FindFirstChild("Handle")
+			if handle and handle:IsA("BasePart") then
+				configureAccessoryHandle(handle)
+			end
+
+			local scaled, scaleError =
+				AccessoryScaleUtils.ScaleAccessoryToPartSize(accessoryClone, sourcePart.Size, targetPart.Size)
+			if not scaled then
+				accessoryClone:Destroy()
+				return false, scaleError
+			end
+
+			accessoryClone.Parent = regionFolder
 			local success, accessoryError = alignAccessoryToAttachment(accessoryClone, targetPart, targetAttachment)
 			if not success then
 				accessoryClone:Destroy()
@@ -1891,6 +1992,23 @@ local function captureAttachmentData(character: Model)
 	return attachments
 end
 
+local function computeLowestPointYForPart(part: BasePart): number
+	local halfSize = part.Size * 0.5
+	local cframe = part.CFrame
+	local lowestY = math.huge
+
+	for xSign = -1, 1, 2 do
+		for ySign = -1, 1, 2 do
+			for zSign = -1, 1, 2 do
+				local corner = cframe * Vector3.new(halfSize.X * xSign, halfSize.Y * ySign, halfSize.Z * zSign)
+				lowestY = math.min(lowestY, corner.Y)
+			end
+		end
+	end
+
+	return lowestY
+end
+
 local function computeLowestFootBottomY(character: Model): number?
 	local lowestBottom = math.huge
 
@@ -1899,7 +2017,7 @@ local function computeLowestFootBottomY(character: Model): number?
 		if not (part and part:IsA("BasePart")) then
 			return nil
 		end
-		lowestBottom = math.min(lowestBottom, part.Position.Y - part.Size.Y * 0.5)
+		lowestBottom = math.min(lowestBottom, computeLowestPointYForPart(part))
 	end
 
 	if lowestBottom == math.huge then
@@ -1919,6 +2037,18 @@ local function computeFootSupportDistance(character: Model): number?
 	return rootPart.Position.Y - lowestFootBottomY
 end
 
+local function setHipHeightFromSupportDistance(character: Model, supportDistance: number?): number?
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not (humanoid and rootPart and rootPart:IsA("BasePart") and supportDistance) then
+		return nil
+	end
+
+	local hipHeight = math.max(0, supportDistance - rootPart.Size.Y * 0.5)
+	humanoid.HipHeight = hipHeight
+	return hipHeight
+end
+
 local function captureRuntimeState(character: Model)
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	local rootPart = character:FindFirstChild("HumanoidRootPart")
@@ -1930,7 +2060,6 @@ local function captureRuntimeState(character: Model)
 		parts = {
 			HumanoidRootPart = rootPart.Size,
 		},
-		hipHeight = humanoid.HipHeight,
 	}
 
 	for _, partName in ipairs(ALL_RIG_PARTS) do
@@ -1969,7 +2098,6 @@ local function captureBaseline(character: Model)
 		parts = runtimeState.parts,
 		motors = captureMotorData(character),
 		attachments = attachmentData,
-		hipHeight = runtimeState.hipHeight,
 		supportDistance = supportDistance,
 	}
 
@@ -2017,37 +2145,37 @@ local function applyMotorScaling(snapshot, targetSizes: { [string]: Vector3 })
 	end
 end
 
-local function updateHipHeight(character: Model)
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
+local function settleCharacterFooting(character: Model, previousLowestFootBottomY: number?): number?
 	local rootPart = character:FindFirstChild("HumanoidRootPart")
-	local supportDistance = computeFootSupportDistance(character)
-	if not (humanoid and rootPart and rootPart:IsA("BasePart") and supportDistance) then
-		return
+	if not (rootPart and rootPart:IsA("BasePart")) then
+		return nil
 	end
 
-	humanoid.HipHeight = math.max(0, supportDistance - rootPart.Size.Y * 0.5)
-end
+	local finalHipHeight = nil
 
-local function finalizeHipHeight(character: Model)
-	RunService.Heartbeat:Wait()
-	updateHipHeight(character)
-end
+	for _ = 1, FOOTING_SETTLE_MAX_PASSES do
+		RunService.Heartbeat:Wait()
 
-local function shiftCharacterToPreserveFooting(character: Model, previousLowestFootBottomY: number?)
-	if not previousLowestFootBottomY then
-		return
+		local currentLowestFootBottomY = computeLowestFootBottomY(character)
+		if previousLowestFootBottomY and currentLowestFootBottomY then
+			local delta = previousLowestFootBottomY - currentLowestFootBottomY
+			if math.abs(delta) > FOOTING_SETTLE_TOLERANCE then
+				rootPart.CFrame = rootPart.CFrame + Vector3.new(0, delta, 0)
+			end
+		end
+
+		finalHipHeight = setHipHeightFromSupportDistance(character, computeFootSupportDistance(character))
+
+		if not previousLowestFootBottomY or not currentLowestFootBottomY then
+			break
+		end
+
+		if math.abs(previousLowestFootBottomY - currentLowestFootBottomY) <= FOOTING_SETTLE_TOLERANCE then
+			break
+		end
 	end
 
-	local rootPart = character:FindFirstChild("HumanoidRootPart")
-	local newLowestFootBottomY = computeLowestFootBottomY(character)
-	if not (rootPart and rootPart:IsA("BasePart") and newLowestFootBottomY) then
-		return
-	end
-
-	local delta = previousLowestFootBottomY - newLowestFootBottomY
-	if math.abs(delta) > 0.0001 then
-		rootPart.CFrame = rootPart.CFrame + Vector3.new(0, delta, 0)
-	end
+	return finalHipHeight
 end
 
 local function findRegionPart(model: Model, partName: string): BasePart?
@@ -2102,7 +2230,7 @@ local function buildTargetSizes(baseRig: Model, request: ApplyRequest): ({ [stri
 					return nil, string.format("Bundle %s is missing %s for %s.", bundle.Name, partName, region)
 				end
 
-				targetSizes[partName] = bundlePart.Size * scale
+				targetSizes[partName] = getBodyPartTargetSize(bundle, partName, bundlePart, scale)
 			end
 		end
 	end
@@ -3073,7 +3201,11 @@ applyRegion = function(character: Model, region: string, regionRequest: ApplyReg
 		sanitizeVisualPartChildren(visualPart, allowedAnimationConstraintNames)
 		configureVisualPart(visualPart)
 		templateCFramesByName[bodyPartName] = visualPart.CFrame
-		scaleVisualPart(visualPart, finalScale)
+		if not isNativeFallback and region == "Torso" and bodyPartName == "UpperTorso" then
+			scaleVisualPart(visualPart, finalScale, getBodyPartTargetSize(bundle, bodyPartName, source, finalScale))
+		else
+			scaleVisualPart(visualPart, finalScale)
+		end
 		visualPart.Parent = regionFolder
 
 		visualPartsByName[bodyPartName] = visualPart
@@ -3081,7 +3213,7 @@ applyRegion = function(character: Model, region: string, regionRequest: ApplyReg
 	end
 
 	if not isNativeFallback then
-		local accessoriesApplied, accessoryError = applyBundleAccessories(regionFolder, bundle, visualPartsByName, finalScale)
+		local accessoriesApplied, accessoryError = applyBundleAccessories(regionFolder, bundle, region, visualPartsByName)
 		if not accessoriesApplied then
 			clearRegionInternal(character, region)
 			return false, accessoryError
@@ -3252,9 +3384,7 @@ local function applyRig(character: Model, baseRig: Model, request: ApplyRequest)
 	applyAttachmentScaling(snapshot, targetSizes)
 	applyMotorScaling(snapshot, targetSizes)
 
-	RunService.Heartbeat:Wait()
-	shiftCharacterToPreserveFooting(character, previousLowestFootBottomY)
-
+	settleCharacterFooting(character, previousLowestFootBottomY)
 	return true, nil
 end
 
@@ -3266,6 +3396,34 @@ local function buildResult(success: boolean, errors: { string }, appliedRegions:
 		appliedRegions = appliedRegions,
 		hipHeight = if humanoid then humanoid.HipHeight else nil,
 	}
+end
+
+local function hasAnyRequestedRegions(regionRequests: { [string]: ApplyRegionRequest? }?): boolean
+	if typeof(regionRequests) ~= "table" then
+		return false
+	end
+
+	for _, region in ipairs(FULL_LOADOUT_REGION_ORDER) do
+		if regionRequests[region] ~= nil then
+			return true
+		end
+	end
+
+	return false
+end
+
+function BodyPartVisuals.RefreshAppearance(character: Model, request: ApplyRequest?): (boolean, string?)
+	if not (character and character:IsA("Model")) then
+		return false, "Character must be a Model."
+	end
+
+	local regionRequests = if typeof(request) == "table" then request.regions else nil
+	if hasAnyRequestedRegions(regionRequests) then
+		return CharacterAppearanceHostApplier.ApplyCharacter(character, regionRequests)
+	end
+
+	CharacterAppearanceHostApplier.ClearCharacter(character)
+	return true, nil
 end
 
 function BodyPartVisuals.Apply(character: Model, request: ApplyRequest): ApplyResult
@@ -3339,14 +3497,9 @@ function BodyPartVisuals.Apply(character: Model, request: ApplyRequest): ApplyRe
 		end
 
 		if #errors == 0 then
-			local hasAnyAppliedRegions = #appliedRegions > 0
-			if hasAnyAppliedRegions then
-				local appearanceSuccess, appearanceError = CharacterAppearanceHostApplier.ApplyCharacter(character, request.regions)
-				if not appearanceSuccess and appearanceError then
-					warn(string.format("[CharacterAppearanceHostApplier] %s", tostring(appearanceError)))
-				end
-			else
-				CharacterAppearanceHostApplier.ClearCharacter(character)
+			local appearanceSuccess, appearanceError = BodyPartVisuals.RefreshAppearance(character, request)
+			if not appearanceSuccess and appearanceError then
+				warn(string.format("[CharacterAppearanceHostApplier] %s", tostring(appearanceError)))
 			end
 
 			for _, region in ipairs(FULL_LOADOUT_REGION_ORDER) do
@@ -3373,7 +3526,8 @@ function BodyPartVisuals.Apply(character: Model, request: ApplyRequest): ApplyRe
 			end
 
 			if #errors == 0 then
-				finalizeHipHeight(character)
+				local previousLowestFootBottomY = computeLowestFootBottomY(character)
+				settleCharacterFooting(character, previousLowestFootBottomY)
 			end
 		end
 
@@ -3431,14 +3585,7 @@ function BodyPartVisuals.Reset(character: Model, _baseRig: Model?): ApplyResult
 		applyAttachmentScaling(snapshot, snapshot.parts)
 		applyMotorScaling(snapshot, snapshot.parts)
 
-		RunService.Heartbeat:Wait()
-		shiftCharacterToPreserveFooting(character, previousLowestFootBottomY)
-		RunService.Heartbeat:Wait()
-
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-		if humanoid then
-			humanoid.HipHeight = snapshot.hipHeight
-		end
+		settleCharacterFooting(character, previousLowestFootBottomY)
 
 		local appearanceSuccess, appearanceError = CharacterAppearanceHostApplier.RestoreNativeCharacterAppearance(character)
 		if not appearanceSuccess and appearanceError then

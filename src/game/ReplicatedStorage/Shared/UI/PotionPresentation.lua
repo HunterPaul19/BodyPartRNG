@@ -31,6 +31,13 @@ local function formatDuration(seconds: number?): string
 	return string.format("%02d:%02d", minutes, remainingSeconds)
 end
 
+local function escapeRichText(value: string): string
+	local escaped = string.gsub(value, "&", "&amp;")
+	escaped = string.gsub(escaped, "<", "&lt;")
+	escaped = string.gsub(escaped, ">", "&gt;")
+	return escaped
+end
+
 local function getPotionsFolder(): Folder?
 	local gameAssets = ReplicatedStorage:FindFirstChild("GameAssets")
 	if not (gameAssets and gameAssets:IsA("Folder")) then
@@ -81,6 +88,9 @@ local function createFallbackModel(config: PotionConfig.PotionConfigEntry): Mode
 end
 
 local function buildEffectText(config: PotionConfig.PotionConfigEntry): string
+	if typeof(config.effectDescription) == "string" and config.effectDescription ~= "" then
+		return config.effectDescription
+	end
 	if tonumber(config.passiveIncomeMultiplier) and config.passiveIncomeMultiplier > 1 then
 		return string.format("Effect: x%s Passive Income", formatDecimal(config.passiveIncomeMultiplier))
 	end
@@ -143,8 +153,8 @@ function PotionPresentation.BuildPreviewPresentation(payload: any)
 		rarityText = string.format("Duration: %s", formatDuration(config.durationSeconds)),
 		mutationText = string.format("Owned: x%s", formatWholeNumber(ownedAmount)),
 		sizeText = if isActive
-			then "Use: Replaces same-family tier"
-			else string.format("Use: Starts a %s timer", formatDuration(config.durationSeconds)),
+			then string.format("Use: Adds another %s to this timer", formatDuration(config.durationSeconds))
+			else string.format("Use: Starts a %s timer and stacks", formatDuration(config.durationSeconds)),
 		existingText = if isActive
 			then string.format("Active: %s remaining", formatDuration(remainingSeconds))
 			else "Active: Inactive",
@@ -152,6 +162,43 @@ function PotionPresentation.BuildPreviewPresentation(payload: any)
 		chanceText = string.format("Buy: %s each", formatMoney(config.buyPrice)),
 		cardUsageText = string.format("x%s", formatWholeNumber(ownedAmount)),
 		bundleModel = PotionPresentation.GetBundleModel(config),
+	}
+end
+
+function PotionPresentation.GetEffectDescription(configOrId: PotionConfig.PotionConfigEntry | string): string
+	local config = if typeof(configOrId) == "string" then PotionConfig.Get(configOrId) else configOrId
+	if not config then
+		return "Effect: None"
+	end
+
+	return buildEffectText(config)
+end
+
+function PotionPresentation.BuildStatusHoverPresentation(payload: any)
+	local source = if typeof(payload) == "table" then payload else {}
+	local config = source.config
+	if config == nil and source.potionId ~= nil then
+		config = PotionConfig.Get(source.potionId)
+	end
+	if not config then
+		return nil
+	end
+
+	local remainingSeconds = math.max(0, math.floor(tonumber(source.remainingSeconds) or 0))
+	local descriptionText = PotionPresentation.GetEffectDescription(config)
+	local durationText = string.format("Duration: %s", formatDuration(config.durationSeconds))
+	local remainingText = string.format("Remaining: %s", formatDuration(remainingSeconds))
+
+	return {
+		titleText = config.label,
+		descriptionText = descriptionText,
+		durationText = durationText,
+		remainingText = remainingText,
+		bodyText = table.concat({
+			escapeRichText(descriptionText),
+			escapeRichText(durationText),
+			escapeRichText(remainingText),
+		}, "\n"),
 	}
 end
 

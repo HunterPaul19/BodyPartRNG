@@ -8,6 +8,7 @@ export type MutationEntry = {
 	weight: number,
 	multiplier: number,
 	color: Color3,
+	screenEffectPresetName: string?,
 }
 
 local ORDERED: { MutationEntry } = {
@@ -17,6 +18,7 @@ local ORDERED: { MutationEntry } = {
 		weight = 88,
 		multiplier = 1.0,
 		color = Color3.fromRGB(170, 170, 170),
+		screenEffectPresetName = nil,
 	},
 	{
 		id = "diamond",
@@ -24,6 +26,7 @@ local ORDERED: { MutationEntry } = {
 		weight = 6,
 		multiplier = 1.5,
 		color = Color3.fromRGB(94, 234, 255),
+		screenEffectPresetName = "Diamond",
 	},
 	{
 		id = "magma",
@@ -31,6 +34,7 @@ local ORDERED: { MutationEntry } = {
 		weight = 4,
 		multiplier = 2.0,
 		color = Color3.fromRGB(255, 122, 54),
+		screenEffectPresetName = "Magma",
 	},
 	{
 		id = "corrupted",
@@ -38,6 +42,7 @@ local ORDERED: { MutationEntry } = {
 		weight = 1.5,
 		multiplier = 3.0,
 		color = Color3.fromRGB(214, 46, 113),
+		screenEffectPresetName = "Corrupted",
 	},
 	{
 		id = "prismatic",
@@ -45,6 +50,7 @@ local ORDERED: { MutationEntry } = {
 		weight = 0.5,
 		multiplier = 5.0,
 		color = Color3.fromRGB(180, 98, 255),
+		screenEffectPresetName = "Prismatic",
 	},
 }
 
@@ -159,6 +165,15 @@ end
 function MutationConfig.GetColor(id: any): Color3
 	local entry = BY_ID[MutationConfig.NormalizeId(id)] or MutationConfig.GetDefault()
 	return entry.color
+end
+
+function MutationConfig.GetScreenEffectPreset(id: any): string?
+	local entry = BY_ID[MutationConfig.NormalizeId(id)] or MutationConfig.GetDefault()
+	if typeof(entry.screenEffectPresetName) == "string" and entry.screenEffectPresetName ~= "" then
+		return entry.screenEffectPresetName
+	end
+
+	return nil
 end
 
 function MutationConfig.GetVisual(name: string)

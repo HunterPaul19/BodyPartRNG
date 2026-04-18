@@ -21,6 +21,9 @@ local PULSE_IN_TWEEN = TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDire
 local SERVER_START_TIME_ATTRIBUTE = "DayNightServerStartTime"
 local INITIAL_NORMALIZED_TIME_ATTRIBUTE = "DayNightInitialNormalizedTime"
 local LOOP_DURATION_ATTRIBUTE = "DayNightLoopDuration"
+local RUNTIME_PLACE_VERSION_ATTRIBUTE = "RuntimePlaceVersion"
+local LOCAL_PLAYER = Players.LocalPlayer
+local DEFAULT_GAME_VERSION_TEXT = "v0.00"
 
 local DayNightCycleController = {}
 
@@ -84,25 +87,66 @@ local function ensureScale(label: TextLabel): UIScale
 	return scale
 end
 
-function DayNightCycleController:_getLabel(): TextLabel?
-	if self._label and self._label.Parent then
-		return self._label
+local function getGameVersionText(): string
+	local placeVersion = tonumber(Lighting:GetAttribute(RUNTIME_PLACE_VERSION_ATTRIBUTE))
+	if placeVersion and placeVersion > 0 then
+		return string.format("v%.2f", placeVersion / 100)
 	end
 
-	for _, container in { Players.LocalPlayer:FindFirstChildOfClass("PlayerGui"), StarterGui } do
-		if container then
-			local mainInterface = container:FindFirstChild("MainInterface")
-			if mainInterface then
-				local label = mainInterface:FindFirstChild("CurrentTime", true)
-				if label and label:IsA("TextLabel") then
-					self._label = label
-					self._scale = ensureScale(label)
-					return label
-				end
+	return DEFAULT_GAME_VERSION_TEXT
+end
+
+local function applyGameVersionText(label: TextLabel?)
+	if not label then
+		return
+	end
+
+	local gameVersionLabel = label:FindFirstChild("GameVersion")
+	local gameVersionText = getGameVersionText()
+	if gameVersionLabel and gameVersionLabel:IsA("TextLabel") and gameVersionLabel.Text ~= gameVersionText then
+		gameVersionLabel.Text = gameVersionText
+	end
+end
+
+function DayNightCycleController:_getLabel(): TextLabel?
+	local playerGui = LOCAL_PLAYER:FindFirstChildOfClass("PlayerGui")
+
+	if self._label then
+		if self._label.Parent == nil or playerGui == nil or not self._label:IsDescendantOf(playerGui) then
+			self:_cancelTweens()
+			self._label = nil
+			self._scale = nil
+		else
+			self._scale = ensureScale(self._label)
+			applyGameVersionText(self._label)
+			return self._label
+		end
+	end
+
+	if playerGui then
+		local mainInterface = playerGui:FindFirstChild("MainInterface")
+		if mainInterface then
+			local label = mainInterface:FindFirstChild("CurrentTime", true)
+			if label and label:IsA("TextLabel") then
+				self._label = label
+				self._scale = ensureScale(label)
+				applyGameVersionText(label)
+				return label
 			end
 		end
 	end
 
+	local starterMainInterface = StarterGui:FindFirstChild("MainInterface")
+	if starterMainInterface then
+		local label = starterMainInterface:FindFirstChild("CurrentTime", true)
+		if label and label:IsA("TextLabel") then
+			self._scale = ensureScale(label)
+			applyGameVersionText(label)
+			return label
+		end
+	end
+
+	self._scale = nil
 	return nil
 end
 
@@ -186,7 +230,12 @@ end
 
 function DayNightCycleController:_refreshFromLighting(animate: boolean)
 	local presentation = DayNightCycleConfig.GetLabelPresentationForClockTime(Lighting.ClockTime)
-	if self._currentPhase == presentation.Phase and self._label then
+	local label = self:_getLabel()
+	if not label then
+		return
+	end
+
+	if self._currentPhase == presentation.Phase and self._label == label then
 		return
 	end
 

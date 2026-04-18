@@ -1,13 +1,17 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local AppearanceRegionRules = require(ReplicatedStorage.Shared.Character.AppearanceRegionRules)
+local PreviewAppearanceSnapshot = require(ReplicatedStorage.Shared.Character.PreviewAppearanceSnapshot)
+local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+
 local ViewportModelRenderer = {}
 
 local MINIMUM_EXTENT = 2
 local DEFAULT_FIELD_OF_VIEW = 35
 local POTION_MARGIN_SCALE = 1.5
 local POTION_FOCUS_Y_SCALE = -0.02
-local POTION_SIDE_OFFSET_SCALE = 0.18
-local POTION_HEIGHT_OFFSET_SCALE = 0.08
-local POTION_BACKDROP_TRANSPARENCY = 0.45
-local POTION_BACKDROP_COLOR = Color3.fromRGB(42, 42, 42)
+local POTION_CAMERA_BACK_OFFSET = 2
+local POTION_CAMERA_UP_OFFSET = 2
 local DIALOGUE_PORTRAIT_MIN_HEIGHT = 2.6
 local DIALOGUE_PORTRAIT_MARGIN_SCALE = 1.08
 local VIEWPORT_AMBIENT = Color3.fromRGB(255, 255, 255)
@@ -15,6 +19,16 @@ local VIEWPORT_LIGHT_COLOR = Color3.fromRGB(255, 255, 255)
 local VIEWPORT_LIGHT_DIRECTION = Vector3.new(-1, -0.6, -0.8)
 local CACHE_KEY_ATTRIBUTE = "ViewportModelRenderer_CacheKey"
 local rollPreviewSessions = setmetatable({}, { __mode = "k" })
+local bodyPartPreviewSourceModels: { [string]: Model } = {}
+
+local BODY_COLOR3_PROPERTY_BY_REGION = table.freeze({
+	Head = "HeadColor3",
+	Torso = "TorsoColor3",
+	LeftArm = "LeftArmColor3",
+	RightArm = "RightArmColor3",
+	LeftLeg = "LeftLegColor3",
+	RightLeg = "RightLegColor3",
+})
 
 local function applyViewportLighting(viewportFrame: ViewportFrame, camera: Camera)
 	viewportFrame.CurrentCamera = camera
@@ -106,6 +120,28 @@ local function createPreviewClone(sourceModel: Model, name: string, shouldFaceVi
 	return previewModel
 end
 
+local function cloneSourceModel(sourceModel: Model, name: string): Model?
+	local ok, previewModel = pcall(function()
+		return sourceModel:Clone()
+	end)
+	if not ok or not previewModel then
+		return nil
+	end
+
+	previewModel.Name = name
+	return previewModel
+end
+
+local function buildShortCacheToken(value: string): string
+	local hash = 2166136261
+	for index = 1, #value do
+		hash = bit32.bxor(hash, string.byte(value, index))
+		hash = (hash * 16777619) % 4294967296
+	end
+
+	return string.format("%08x", hash)
+end
+
 local function getModelCacheToken(model: Model?): string
 	if not (model and model:IsA("Model")) then
 		return "nil"
@@ -119,6 +155,100 @@ local function getModelCacheToken(model: Model?): string
 	end
 
 	return model.Name
+end
+
+local function createPreviewHumanoid(): Humanoid
+	local baseRig = BodyPartsCatalog.GetDefaultBaseRig()
+	local sourceHumanoid = baseRig and baseRig:FindFirstChildOfClass("Humanoid")
+	local humanoid = if sourceHumanoid then sourceHumanoid:Clone() else Instance.new("Humanoid")
+
+	pcall(function()
+		humanoid.EvaluateStateMachine = false
+	end)
+
+	return humanoid
+end
+
+local function applyPreviewBodyColors(previewModel: Model, snapshot: any)
+	local bodyColors = Instance.new("BodyColors")
+	bodyColors.Name = "PreviewBodyColors"
+
+	for region, propertyName in pairs(BODY_COLOR3_PROPERTY_BY_REGION) do
+		bodyColors[propertyName] = PreviewAppearanceSnapshot.DecodeColor(snapshot.bodyColors, region)
+	end
+
+	bodyColors.Parent = previewModel
+end
+
+local function addPreviewClothing(previewModel: Model, snapshot: any, region: string)
+	local relevantClasses = AppearanceRegionRules.GetRelevantClasses(region)
+	if relevantClasses.BodyColors then
+		applyPreviewBodyColors(previewModel, snapshot)
+	end
+
+	if relevantClasses.Shirt and typeof(snapshot.shirtTemplate) == "string" and snapshot.shirtTemplate ~= "" then
+		local shirt = Instance.new("Shirt")
+		shirt.Name = "PreviewShirt"
+		shirt.ShirtTemplate = snapshot.shirtTemplate
+		shirt.Parent = previewModel
+	end
+
+	if relevantClasses.Pants and typeof(snapshot.pantsTemplate) == "string" and snapshot.pantsTemplate ~= "" then
+		local pants = Instance.new("Pants")
+		pants.Name = "PreviewPants"
+		pants.PantsTemplate = snapshot.pantsTemplate
+		pants.Parent = previewModel
+	end
+
+	if relevantClasses.ShirtGraphic and typeof(snapshot.shirtGraphic) == "string" and snapshot.shirtGraphic ~= "" then
+		local shirtGraphic = Instance.new("ShirtGraphic")
+		shirtGraphic.Name = "PreviewShirtGraphic"
+		shirtGraphic.Graphic = snapshot.shirtGraphic
+		shirtGraphic.Parent = previewModel
+	end
+end
+
+local function buildBodyPartPreviewCacheKey(
+	bundleModel: Model,
+	region: string,
+	snapshot: any,
+	scale: number?
+): string
+	local normalizedScale = tonumber(scale) or 1
+	return table.concat({
+		"bodyPartPreview",
+		getModelCacheToken(bundleModel),
+		tostring(region),
+		snapshot.cacheKey,
+		string.format("%.4f", normalizedScale),
+	}, "|")
+end
+
+local function buildBodyPartPreviewSourceModel(
+	bundleModel: Model,
+	region: string,
+	snapshot: any,
+	scale: number?
+): Model?
+	local cacheKey = buildBodyPartPreviewCacheKey(bundleModel, region, snapshot, scale)
+	local cachedModel = bodyPartPreviewSourceModels[cacheKey]
+	if cachedModel then
+		return cachedModel
+	end
+
+	local previewModel = cloneSourceModel(bundleModel, cacheKey)
+	if not previewModel then
+		return nil
+	end
+	previewModel.Name = string.format("BodyPartPreview_%s", buildShortCacheToken(cacheKey))
+
+	local humanoid = createPreviewHumanoid()
+	humanoid.Name = "PreviewHumanoid"
+	humanoid.Parent = previewModel
+	addPreviewClothing(previewModel, snapshot, region)
+
+	bodyPartPreviewSourceModels[cacheKey] = previewModel
+	return previewModel
 end
 
 local function getBundleCameraCFrame(previewModel: Model, framingPreviewModel: Model?): CFrame
@@ -149,12 +279,6 @@ local function getPotionCameraCFrame(viewportFrame: ViewportFrame, previewModel:
 	local boundingBoxCFrame, boundingBoxSize = previewModel:GetBoundingBox()
 	local focusPoint = boundingBoxCFrame.Position + Vector3.new(0, boundingBoxSize.Y * POTION_FOCUS_Y_SCALE, 0)
 	local frontVector = getPreviewFrontVector(previewModel)
-	local rightVector = Vector3.yAxis:Cross(frontVector)
-	if rightVector.Magnitude <= 0.001 then
-		rightVector = Vector3.xAxis
-	else
-		rightVector = rightVector.Unit
-	end
 	local verticalHalfExtent = math.max(boundingBoxSize.Y * 0.5, MINIMUM_EXTENT * 0.5) * POTION_MARGIN_SCALE
 	local viewportSize = viewportFrame.AbsoluteSize
 	local aspectRatio = if viewportSize.Y > 0 then viewportSize.X / viewportSize.Y else 1
@@ -164,10 +288,10 @@ local function getPotionCameraCFrame(viewportFrame: ViewportFrame, previewModel:
 	local verticalDistance = verticalHalfExtent / math.tan(verticalFov * 0.5)
 	local horizontalDistance = horizontalHalfExtent / math.tan(horizontalFov * 0.5)
 	local distance = math.max(verticalDistance, horizontalDistance)
-	local cameraPosition = focusPoint
-		+ frontVector * distance
-		+ rightVector * (distance * POTION_SIDE_OFFSET_SCALE)
-		+ Vector3.yAxis * (distance * POTION_HEIGHT_OFFSET_SCALE)
+	local baseCameraPosition = focusPoint + frontVector * distance
+	local cameraPosition = baseCameraPosition
+		+ frontVector * POTION_CAMERA_BACK_OFFSET
+		+ Vector3.yAxis * POTION_CAMERA_UP_OFFSET
 
 	return CFrame.lookAt(cameraPosition, focusPoint, Vector3.yAxis)
 end
@@ -178,32 +302,6 @@ local function optimizePotionPreview(previewModel: Model)
 			descendant.Transparency = math.min(descendant.Transparency, 0.28)
 		end
 	end
-end
-
-local function addPotionBackdrop(worldModel: WorldModel, previewModel: Model, cameraCFrame: CFrame)
-	local boundingBoxCFrame, boundingBoxSize = previewModel:GetBoundingBox()
-	local viewDirection = cameraCFrame.LookVector
-	local backdrop = Instance.new("Part")
-	backdrop.Name = "PotionBackdrop"
-	backdrop.Anchored = true
-	backdrop.CanCollide = false
-	backdrop.CanQuery = false
-	backdrop.CanTouch = false
-	backdrop.CastShadow = false
-	backdrop.Material = Enum.Material.SmoothPlastic
-	backdrop.Color = POTION_BACKDROP_COLOR
-	backdrop.Transparency = POTION_BACKDROP_TRANSPARENCY
-	backdrop.Size = Vector3.new(
-		math.max(boundingBoxSize.X, boundingBoxSize.Z) * 1.3,
-		boundingBoxSize.Y * 1.15,
-		0.05
-	)
-	backdrop.CFrame = CFrame.lookAt(
-		boundingBoxCFrame.Position - viewDirection * (math.max(boundingBoxSize.X, boundingBoxSize.Z) * 0.9),
-		cameraCFrame.Position,
-		Vector3.yAxis
-	)
-	backdrop.Parent = worldModel
 end
 
 local function createRollPreviewSession(viewportFrame: ViewportFrame, sessionToken: any)
@@ -472,7 +570,6 @@ local function renderPotion(viewportFrame: ViewportFrame, sourceModel: Model?): 
 	camera.FieldOfView = DEFAULT_FIELD_OF_VIEW
 	camera.Parent = viewportFrame
 	camera.CFrame = getPotionCameraCFrame(viewportFrame, previewModel)
-	addPotionBackdrop(worldModel, previewModel, camera.CFrame)
 
 	applyViewportLighting(viewportFrame, camera)
 	viewportFrame:SetAttribute(CACHE_KEY_ATTRIBUTE, cacheKey)
@@ -536,6 +633,47 @@ function ViewportModelRenderer.RenderRollPreview(viewportFrame: ViewportFrame, s
 	sessionState.activeCacheKey = cacheKey
 
 	return true
+end
+
+function ViewportModelRenderer.RenderBodyPartPreview(
+	viewportFrame: ViewportFrame,
+	bundleModel: Model?,
+	region: string?,
+	appearanceSnapshot: any,
+	scale: number?,
+	sessionToken: any?
+): boolean
+	if not (bundleModel and bundleModel:IsA("Model") and typeof(region) == "string" and region ~= "") then
+		if sessionToken ~= nil then
+			return ViewportModelRenderer.RenderRollPreview(viewportFrame, bundleModel, sessionToken)
+		end
+
+		return renderModel(viewportFrame, bundleModel, nil)
+	end
+
+	if appearanceSnapshot == nil then
+		if sessionToken ~= nil then
+			return ViewportModelRenderer.RenderRollPreview(viewportFrame, bundleModel, sessionToken)
+		end
+
+		return renderModel(viewportFrame, bundleModel, nil)
+	end
+
+	local snapshot = PreviewAppearanceSnapshot.Normalize(appearanceSnapshot)
+	local previewModel = buildBodyPartPreviewSourceModel(bundleModel, region, snapshot, scale)
+	if not previewModel then
+		if sessionToken ~= nil then
+			return ViewportModelRenderer.RenderRollPreview(viewportFrame, bundleModel, sessionToken)
+		end
+
+		return renderModel(viewportFrame, bundleModel, nil)
+	end
+
+	if sessionToken ~= nil then
+		return ViewportModelRenderer.RenderRollPreview(viewportFrame, previewModel, sessionToken)
+	end
+
+	return renderModel(viewportFrame, previewModel, nil)
 end
 
 function ViewportModelRenderer.RenderBundle(viewportFrame: ViewportFrame, bundleModel: Model?): boolean

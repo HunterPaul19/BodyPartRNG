@@ -13,10 +13,12 @@ local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts
 local OwnedPotions = require(ReplicatedStorage.Shared.Character.OwnedPotions)
 local OwnedRollTypes = require(ReplicatedStorage.Shared.Character.OwnedRollTypes)
 local RollTargetRegions = require(ReplicatedStorage.Shared.Character.RollTargetRegions)
+local TimeShardState = require(ReplicatedStorage.Shared.Character.TimeShardState)
 local PlayerStats = require(ReplicatedStorage.Shared.Stats.PlayerStats)
 local AchievementState = require(ReplicatedStorage.Shared.Titles.AchievementState)
 local AuraConfig = require(ReplicatedStorage.Shared.Config.AuraConfig)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local BodyPartLegacyIds = require(ReplicatedStorage.Shared.Config.BodyParts.LegacyIds)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
 local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
@@ -38,6 +40,7 @@ local LEGACY_CASH_KEY = "cash"
 local LEGACY_OWNED_ROLL_TYPES_KEY = "ownedRollTypes"
 local MONEY_KEY = Schema.Money and Schema.Money.key or nil
 local TIME_PLAYED_KEY = Schema.TimePlayed and Schema.TimePlayed.key or nil
+local TIME_SHARDS_KEY = Schema.TimeShards and Schema.TimeShards.key or nil
 local DIAGNOSTICS_KEY = Schema.Diagnostics and Schema.Diagnostics.key or nil
 local STATS_KEY = Schema.Stats and Schema.Stats.key or nil
 local BODY_PARTS_KEY = Schema.BodyParts and Schema.BodyParts.key or nil
@@ -417,8 +420,9 @@ local function normalizeOwnedBodyPartRecord(record: any, fallbackOwnedId: string
 		return nil
 	end
 
-	local pieceId = record.pieceId
-	if typeof(pieceId) ~= "string" or pieceId == "" then
+	local originalPieceId = if typeof(record.pieceId) == "string" then record.pieceId else nil
+	local pieceId = BodyPartLegacyIds.NormalizePieceId(record.pieceId)
+	if pieceId == nil then
 		return nil
 	end
 
@@ -428,6 +432,15 @@ local function normalizeOwnedBodyPartRecord(record: any, fallbackOwnedId: string
 	end
 
 	local setConfig = BodyPartsCatalog.GetSetForPiece(pieceId)
+	local didMigratePieceId = originalPieceId ~= nil and pieceId ~= originalPieceId
+	local legacyRolledSetId = if typeof(record.rolledSetId) == "string" and record.rolledSetId ~= ""
+		then record.rolledSetId
+		else nil
+	local normalizedRolledSetId = BodyPartLegacyIds.NormalizeSetId(legacyRolledSetId)
+	local refreshRolledSetMetadata = didMigratePieceId or normalizedRolledSetId ~= legacyRolledSetId
+	local rolledSetDisplayName = if typeof(record.rolledSetDisplayName) == "string" and record.rolledSetDisplayName ~= ""
+		then record.rolledSetDisplayName
+		else nil
 	local mutationId, mutationDisplayName, mutationMultiplier = normalizeMutationSnapshot(record)
 	local sizeId, sizeMultiplier, sizeMoneyMultiplier = normalizeSizeSnapshot(record)
 	local displayOddsDenominator = math.max(
@@ -439,21 +452,22 @@ local function normalizeOwnedBodyPartRecord(record: any, fallbackOwnedId: string
 		variantMultiplier = mutationMultiplier + sizeMoneyMultiplier - 1
 	end
 
-	local finalPassiveIncomePerSecond = tonumber(record.finalPassiveIncomePerSecond)
-	if finalPassiveIncomePerSecond == nil or finalPassiveIncomePerSecond < 0 then
-		finalPassiveIncomePerSecond = (tonumber(piece.passiveIncomePerSecond) or 0) * variantMultiplier
-	end
+	local finalPassiveIncomePerSecond = (tonumber(piece.passiveIncomePerSecond) or 0) * variantMultiplier
 
 	return {
 		ownedId = if typeof(record.ownedId) == "string" and record.ownedId ~= "" then record.ownedId else (fallbackOwnedId or ""),
 		pieceId = pieceId,
 		rarityDenominator = math.max(1, clampWholeNumber(record.rarityDenominator or displayOddsDenominator, 1)),
-		rolledSetId = if typeof(record.rolledSetId) == "string" and record.rolledSetId ~= ""
-			then record.rolledSetId
-			else if setConfig then setConfig.id else nil,
-		rolledSetDisplayName = if typeof(record.rolledSetDisplayName) == "string" and record.rolledSetDisplayName ~= ""
-			then record.rolledSetDisplayName
-			else if setConfig then setConfig.rollDisplay.displayName else nil,
+		rolledSetId = if refreshRolledSetMetadata and setConfig
+			then setConfig.id
+			else if normalizedRolledSetId ~= nil
+				then normalizedRolledSetId
+				else if setConfig then setConfig.id else nil,
+		rolledSetDisplayName = if refreshRolledSetMetadata and setConfig
+			then setConfig.rollDisplay.displayName
+			else if rolledSetDisplayName ~= nil
+				then rolledSetDisplayName
+				else if setConfig then setConfig.rollDisplay.displayName else nil,
 		displayOddsDenominator = displayOddsDenominator,
 		displayRarity = if typeof(record.displayRarity) == "string" and record.displayRarity ~= ""
 			then record.displayRarity
@@ -491,6 +505,7 @@ end
 local function cloneOwnedBodyPartsState(state: OwnedBodyParts.OwnedBodyPartsState?): OwnedBodyParts.OwnedBodyPartsState
 	local ownedById = {}
 	local discoveredPieceIds = {}
+	local seenCutsceneSetIds = {}
 	local nextOwnedId = 1
 
 	if typeof(state) == "table" then
@@ -506,8 +521,18 @@ local function cloneOwnedBodyPartsState(state: OwnedBodyParts.OwnedBodyPartsStat
 
 		if typeof(state.discoveredPieceIds) == "table" then
 			for pieceId, isDiscovered in pairs(state.discoveredPieceIds) do
-				if isDiscovered == true and typeof(pieceId) == "string" and BodyPartsCatalog.GetPiece(pieceId) then
-					discoveredPieceIds[pieceId] = true
+				local normalizedPieceId = BodyPartLegacyIds.NormalizePieceId(pieceId)
+				if isDiscovered == true and normalizedPieceId and BodyPartsCatalog.GetPiece(normalizedPieceId) then
+					discoveredPieceIds[normalizedPieceId] = true
+				end
+			end
+		end
+
+		if typeof(state.seenCutsceneSetIds) == "table" then
+			for setId, hasSeenCutscene in pairs(state.seenCutsceneSetIds) do
+				local normalizedSetId = BodyPartLegacyIds.NormalizeSetId(setId)
+				if hasSeenCutscene == true and normalizedSetId and BodyPartsCatalog.GetSet(normalizedSetId) then
+					seenCutsceneSetIds[normalizedSetId] = true
 				end
 			end
 		end
@@ -520,6 +545,7 @@ local function cloneOwnedBodyPartsState(state: OwnedBodyParts.OwnedBodyPartsStat
 	return {
 		ownedById = ownedById,
 		discoveredPieceIds = discoveredPieceIds,
+		seenCutsceneSetIds = seenCutsceneSetIds,
 		nextOwnedId = nextOwnedId,
 	}
 end
@@ -577,7 +603,6 @@ end
 local function cloneOwnedPotionsState(state: OwnedPotions.OwnedPotionsState?): OwnedPotions.OwnedPotionsState
 	local ownedByPotionId = {}
 	local activeByPotionId = {}
-	local activePotionIdByFamilyId = {}
 
 	if typeof(state) == "table" then
 		if typeof(state.ownedByPotionId) == "table" then
@@ -600,32 +625,10 @@ local function cloneOwnedPotionsState(state: OwnedPotions.OwnedPotionsState?): O
 				local normalizedPotionId = PotionConfig.NormalizeId(potionId)
 				local resolvedRemainingSeconds = math.max(0, clampWholeNumber(remainingSeconds, 0))
 				if normalizedPotionId and resolvedRemainingSeconds > 0 then
-					local familyId = PotionConfig.GetFamilyId(normalizedPotionId)
-					if familyId then
-						local selectedPotionId = activePotionIdByFamilyId[familyId]
-						local selectedRemainingSeconds = if selectedPotionId then activeByPotionId[selectedPotionId] else nil
-						local selectedConfig = if selectedPotionId then PotionConfig.Get(selectedPotionId) else nil
-						local nextConfig = PotionConfig.Get(normalizedPotionId)
-						local shouldReplace = selectedPotionId == nil
-							or resolvedRemainingSeconds > (selectedRemainingSeconds or 0)
-							or (
-								resolvedRemainingSeconds == (selectedRemainingSeconds or 0)
-								and (tonumber(nextConfig and nextConfig.tier) or 0) > (tonumber(selectedConfig and selectedConfig.tier) or 0)
-							)
-
-						if shouldReplace then
-							if selectedPotionId ~= nil then
-								activeByPotionId[selectedPotionId] = nil
-							end
-							activePotionIdByFamilyId[familyId] = normalizedPotionId
-							activeByPotionId[normalizedPotionId] = resolvedRemainingSeconds
-						end
-					else
-						activeByPotionId[normalizedPotionId] = math.max(
-							resolvedRemainingSeconds,
-							tonumber(activeByPotionId[normalizedPotionId]) or 0
-						)
-					end
+					activeByPotionId[normalizedPotionId] = math.max(
+						resolvedRemainingSeconds,
+						tonumber(activeByPotionId[normalizedPotionId]) or 0
+					)
 				end
 			end
 		end
@@ -652,6 +655,12 @@ local function normalizeProfileData(profile: any)
 			data[LEGACY_CASH_KEY] = nil
 		end
 		data[MONEY_KEY] = moneyValue
+	end
+	if TIME_PLAYED_KEY then
+		data[TIME_PLAYED_KEY] = math.max(0, clampWholeNumber(data[TIME_PLAYED_KEY], 0))
+	end
+	if TIME_SHARDS_KEY then
+		data[TIME_SHARDS_KEY] = TimeShardState.Normalize(data[TIME_SHARDS_KEY])
 	end
 
 	data[LEGACY_OWNED_ROLL_TYPES_KEY] = nil
@@ -770,6 +779,7 @@ end
 DataService.ProfileStore = profileStore
 
 function DataService:OnStart()
+	Leaderboards.connect(self)
 	Leaderboards.start(self)
 	startTimePlayedLoop()
 end
@@ -902,13 +912,48 @@ function DataService:HasDiscoveredBodyPartPiece(player: Player, pieceId: string)
 	if not BODY_PARTS_KEY then
 		return false
 	end
-	if typeof(pieceId) ~= "string" or pieceId == "" then
+	local normalizedPieceId = BodyPartLegacyIds.NormalizePieceId(pieceId)
+	if normalizedPieceId == nil then
 		return false
 	end
 
 	local bodyPartsState = getReplicaValue(player, BODY_PARTS_KEY)
 	local discoveredPieceIds = if typeof(bodyPartsState) == "table" then bodyPartsState.discoveredPieceIds else nil
-	return typeof(discoveredPieceIds) == "table" and discoveredPieceIds[pieceId] == true
+	return typeof(discoveredPieceIds) == "table" and discoveredPieceIds[normalizedPieceId] == true
+end
+
+function DataService:HasSeenBundleCutscene(player: Player, setId: string): boolean
+	if not BODY_PARTS_KEY then
+		return false
+	end
+	local normalizedSetId = BodyPartLegacyIds.NormalizeSetId(setId)
+	if normalizedSetId == nil or BodyPartsCatalog.GetSet(normalizedSetId) == nil then
+		return false
+	end
+
+	local bodyPartsState = getReplicaValue(player, BODY_PARTS_KEY)
+	local seenCutsceneSetIds = if typeof(bodyPartsState) == "table" then bodyPartsState.seenCutsceneSetIds else nil
+	return typeof(seenCutsceneSetIds) == "table" and seenCutsceneSetIds[normalizedSetId] == true
+end
+
+function DataService:MarkBundleCutsceneSeen(player: Player, setId: string): boolean
+	if not BODY_PARTS_KEY then
+		return false
+	end
+	if not getActiveReplica(player) then
+		return false
+	end
+
+	local normalizedSetId = BodyPartLegacyIds.NormalizeSetId(setId)
+	if normalizedSetId == nil or BodyPartsCatalog.GetSet(normalizedSetId) == nil then
+		return false
+	end
+
+	if self:HasSeenBundleCutscene(player, normalizedSetId) then
+		return true
+	end
+
+	return setReplicaPathValue(player, BODY_PARTS_KEY, { "seenCutsceneSetIds", normalizedSetId }, true)
 end
 
 function DataService:GetOwnedAuras(player: Player): { [string]: OwnedAuras.OwnedAuraRecord }
@@ -988,6 +1033,39 @@ function DataService:GetTimePlayed(player: Player): number
 	end
 
 	return math.max(0, clampWholeNumber(self:Get(player, TIME_PLAYED_KEY), 0))
+end
+
+function DataService:GetTimeShardsState(player: Player): TimeShardState.TimeShardStateValue
+	if not TIME_SHARDS_KEY then
+		return TimeShardState.CreateEmptyState()
+	end
+
+	return TimeShardState.Normalize(self:Get(player, TIME_SHARDS_KEY))
+end
+
+function DataService:GetTimeShardsBalance(player: Player): number
+	return self:GetTimeShardsState(player).balance
+end
+
+function DataService:AdjustTimeShardsBalance(player: Player, delta: number, _source: string?): number
+	if not TIME_SHARDS_KEY then
+		return 0
+	end
+	if not getActiveReplica(player) then
+		return 0
+	end
+
+	local updatedBalance = 0
+	self:Set(player, TIME_SHARDS_KEY, function(currentValue)
+		local state = TimeShardState.Normalize(currentValue)
+		updatedBalance = math.max(0, state.balance + (tonumber(delta) or 0))
+		return {
+			balance = updatedBalance,
+			awardedMinutes = state.awardedMinutes,
+		}
+	end)
+
+	return updatedBalance
 end
 
 function DataService:GetMoney(player: Player): number
@@ -1354,11 +1432,21 @@ function DataService:UpdateOwnedBodyPartVariant(player: Player, ownedId: string,
 end
 
 function DataService:GetNextSerialForPiece(pieceId: string): (number?, string?)
-	return BodyPartSerialStore:GetNextSerialForPiece(pieceId)
+	local normalizedPieceId = BodyPartLegacyIds.NormalizePieceId(pieceId)
+	if normalizedPieceId == nil then
+		return nil, "pieceId is required."
+	end
+
+	return BodyPartSerialStore:GetNextSerialForPiece(normalizedPieceId)
 end
 
 function DataService:GetTotalInExistenceForPiece(pieceId: string): (number?, string?)
-	return BodyPartSerialStore:GetTotalInExistenceForPiece(pieceId)
+	local normalizedPieceId = BodyPartLegacyIds.NormalizePieceId(pieceId)
+	if normalizedPieceId == nil then
+		return nil, "pieceId is required."
+	end
+
+	return BodyPartSerialStore:GetTotalInExistenceForPiece(normalizedPieceId)
 end
 
 function DataService:GetNextSerialForAura(auraId: string): (number?, string?)
@@ -1431,14 +1519,23 @@ function DataService:AddOwnedBodyPart(player: Player, payload: OwnedBodyParts.Ow
 		return nil, "finalPassiveIncomePerSecond must be zero or greater when provided."
 	end
 
+	local currentBodyPartsState = if typeof(replica.Data[BODY_PARTS_KEY]) == "table"
+		then replica.Data[BODY_PARTS_KEY]
+		else OwnedBodyParts.CreateEmptyState()
+	local currentOwnedCount = OwnedBodyParts.CountOwned(currentBodyPartsState)
+	if currentOwnedCount >= OwnedBodyParts.MAX_OWNED_COUNT then
+		return nil, string.format(
+			"Inventory is full (%d/%d). Sell body parts to make room.",
+			currentOwnedCount,
+			OwnedBodyParts.MAX_OWNED_COUNT
+		)
+	end
+
 	local serialNumber, serialError = self:GetNextSerialForPiece(pieceId)
 	if not serialNumber then
 		return nil, serialError or "Failed to allocate body part serial number."
 	end
 
-	local currentBodyPartsState = if typeof(replica.Data[BODY_PARTS_KEY]) == "table"
-		then replica.Data[BODY_PARTS_KEY]
-		else OwnedBodyParts.CreateEmptyState()
 	local nextOwnedId = math.max(1, math.floor(tonumber(currentBodyPartsState.nextOwnedId) or 1))
 	local ownedId = OwnedBodyParts.CreateOwnedId(nextOwnedId)
 	local createdRecord = normalizeOwnedBodyPartRecord({

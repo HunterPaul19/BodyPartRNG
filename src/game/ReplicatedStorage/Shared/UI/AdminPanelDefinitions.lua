@@ -17,19 +17,14 @@ AdminPanelDefinitions.Tabs = {
 						description = "Launch the sample merchant dialogue locally so the dialogue tree and shop handoff can be verified from the admin panel.",
 					},
 					{
-						id = "show_appraiser",
-						title = "Show Appraiser",
-						description = "Force the appraiser to appear immediately so the appraisal flow can be tested on demand.",
+						id = "show_merchant",
+						title = "Show Merchant",
+						description = "Force the timed merchant to appear immediately so the shop flow can be tested on demand.",
 					},
 					{
 						id = "refresh_server_state",
 						title = "Refresh Server State",
 						description = "Placeholder for forcing a server-wide refresh of tracked gameplay state.",
-					},
-					{
-						id = "broadcast_admin_notice",
-						title = "Broadcast Admin Notice",
-						description = "Placeholder for sending a visible test announcement to all connected players.",
 					},
 				},
 			},
@@ -105,6 +100,16 @@ AdminPanelDefinitions.Tabs = {
 						id = "grant_money",
 						title = "Grant Money",
 						description = "Placeholder for giving test currency to the selected player.",
+					},
+					{
+						id = "grant_all_potions",
+						title = "Grant All Potions",
+						description = "Give one use of every configured potion to your live profile so potion inventory and buff flows can be tested quickly.",
+					},
+					{
+						id = "clear_all_potion_effects",
+						title = "Remove All Potion Effects",
+						description = "Clear every currently active potion effect from your live profile so luck, roll speed, and other runtime bonuses return to their non-potion state immediately.",
 					},
 					{
 						id = "set_time_played",

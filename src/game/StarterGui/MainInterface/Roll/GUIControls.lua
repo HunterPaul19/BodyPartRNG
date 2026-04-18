@@ -24,10 +24,17 @@ local TweenService = game:GetService("TweenService")
 local GroupService = game:GetService("GroupService")
 
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
+local PreviewAppearanceRegistry = require(ReplicatedStorage.Shared.Character.PreviewAppearanceRegistry)
 local RollTargetRegions = require(ReplicatedStorage.Shared.Character.RollTargetRegions)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
+local Notify = require(ReplicatedStorage.Shared.UI.Notify)
+local RollWarningNotifier = require(ReplicatedStorage.Shared.UI.RollWarningNotifier)
+local RollCutscene = require(ReplicatedStorage.Shared.UI.RollCutscene)
+local RollCutsceneConfig = require(ReplicatedStorage.Shared.UI.RollCutsceneConfig)
+local ScreenEffects = require(ReplicatedStorage.Shared.UI.ScreenEffects)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
 local LocalPlayer = Players.LocalPlayer
@@ -47,7 +54,7 @@ local EQUIP_REMOTE_NAME = "EquipOwnedBodyPart"
 local Main = script.Parent
 local Black2 = Main.Parent.Black2
 local DisplayFrame = Main:WaitForChild("DisplayFrame")
-local RollWarningControls = require(Main.Parent.RollWarning.GUIControls)
+local SubInfoFrame = Main:WaitForChild("SubInfo")
 local MainButtons = Main.Parent.Main
 local RollButton = MainButtons.RollButton
 local QuickRollButton = MainButtons.QuickRoll
@@ -61,6 +68,17 @@ local RollShadowIcon = RollButton.ShadowIcon
 local DropdownButton = RollButton.DropdownButton
 local LeftButton = RollButton.Left
 local RightButton = RollButton.Right
+local DEFAULT_ROLL_DESC_COLOR = RollButton.Desc.TextColor3
+local READY_ROLL_DESC_COLOR = Color3.fromRGB(255, 223, 94)
+local RollResultRaritySubInfoLabel = SubInfoFrame:FindFirstChild("Mutation")
+local EverRolledSubInfoLabel = SubInfoFrame:FindFirstChild("EverRolled")
+local DEFAULT_SUBINFO_RARITY_TEXT = if RollResultRaritySubInfoLabel and RollResultRaritySubInfoLabel:IsA("TextLabel")
+	then RollResultRaritySubInfoLabel.Text
+	else ""
+local DEFAULT_SUBINFO_EVER_ROLLED_TEXT = if EverRolledSubInfoLabel and EverRolledSubInfoLabel:IsA("TextLabel")
+	then EverRolledSubInfoLabel.Text
+	else "N/A Ever Rolled"
+local DEFAULT_SUBINFO_RARITY_VISUAL_STATE = nil
 
 local Blur = Instance.new("BlurEffect")
 Blur.Parent = game.Lighting
@@ -96,14 +114,116 @@ local function formatMoney(value)
 	return "$" .. NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0)))
 end
 
+local function formatRollIncomePerSecond(value)
+	local formattedIncome = BodyPartPresentation.FormatMoneyPerSecond(math.max(0, tonumber(value) or 0))
+	return (formattedIncome:gsub("/s$", "/S"))
+end
+
 local function formatWholeNumber(value)
 	return NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0)))
 end
 
-local function formatLuck(value)
+local function formatRollResultEverRolledText(serialNumber)
+	local resolvedSerialNumber = math.floor(tonumber(serialNumber) or 0)
+	if resolvedSerialNumber <= 0 then
+		return "N/A Ever Rolled"
+	end
+
+	return string.format("#%s Ever Rolled", NumberFormatter.Format(resolvedSerialNumber))
+end
+
+local function cloneSupportedTextAdornment(instance: Instance): Instance?
+	if instance:IsA("UIGradient") or instance:IsA("UIStroke") then
+		return instance:Clone()
+	end
+
+	return nil
+end
+
+local function clearSupportedTextAdornments(label: TextLabel)
+	for _, child in ipairs(label:GetChildren()) do
+		if child:IsA("UIGradient") or child:IsA("UIStroke") then
+			child:Destroy()
+		end
+	end
+end
+
+local function captureTextLabelVisualState(label: TextLabel?): any
+	if not (label and label:IsA("TextLabel")) then
+		return nil
+	end
+
+	local adornments = {}
+	for _, child in ipairs(label:GetChildren()) do
+		local clonedAdornment = cloneSupportedTextAdornment(child)
+		if clonedAdornment then
+			table.insert(adornments, clonedAdornment)
+		end
+	end
+
+	return {
+		text = label.Text,
+		fontFace = label.FontFace,
+		textColor3 = label.TextColor3,
+		textStrokeColor3 = label.TextStrokeColor3,
+		textStrokeTransparency = label.TextStrokeTransparency,
+		richText = label.RichText,
+		adornments = adornments,
+	}
+end
+
+local function restoreTextLabelVisualState(label: TextLabel?, state: any)
+	if not (label and label:IsA("TextLabel") and typeof(state) == "table") then
+		return
+	end
+
+	label.Text = if typeof(state.text) == "string" then state.text else label.Text
+	if typeof(state.fontFace) == "Font" then
+		label.FontFace = state.fontFace
+	end
+	if typeof(state.textColor3) == "Color3" then
+		label.TextColor3 = state.textColor3
+	end
+	if typeof(state.textStrokeColor3) == "Color3" then
+		label.TextStrokeColor3 = state.textStrokeColor3
+	end
+	if typeof(state.textStrokeTransparency) == "number" then
+		label.TextStrokeTransparency = state.textStrokeTransparency
+	end
+	if typeof(state.richText) == "boolean" then
+		label.RichText = state.richText
+	end
+
+	clearSupportedTextAdornments(label)
+	for _, adornment in ipairs(state.adornments or {}) do
+		local clonedAdornment = cloneSupportedTextAdornment(adornment)
+		if clonedAdornment then
+			clonedAdornment.Parent = label
+		end
+	end
+end
+
+DEFAULT_SUBINFO_RARITY_VISUAL_STATE = captureTextLabelVisualState(RollResultRaritySubInfoLabel)
+
+local function resetRollResultSubInfo()
+	restoreTextLabelVisualState(RollResultRaritySubInfoLabel, DEFAULT_SUBINFO_RARITY_VISUAL_STATE)
+	if RollResultRaritySubInfoLabel and RollResultRaritySubInfoLabel:IsA("TextLabel") then
+		RollResultRaritySubInfoLabel.Text = DEFAULT_SUBINFO_RARITY_TEXT
+	end
+
+	if EverRolledSubInfoLabel and EverRolledSubInfoLabel:IsA("TextLabel") then
+		EverRolledSubInfoLabel.Text = DEFAULT_SUBINFO_EVER_ROLLED_TEXT
+	end
+end
+
+local function formatLuckMultiplier(value)
 	local numericValue = tonumber(value) or 1
 	local roundedValue = math.floor((numericValue * 10) + 0.5) / 10
 	return string.format("%.1fx", roundedValue)
+end
+
+local function formatLuckLabel(value)
+	return string.format("%s Luck", formatLuckMultiplier(value))
 end
 
 local function formatSizeMultiplier(value)
@@ -119,6 +239,61 @@ end
 local function formatSizeLabel(sizeName, scale)
 	local resolvedName = if typeof(sizeName) == "string" and sizeName ~= "" then sizeName else "Normal"
 	return string.format("Size: %s (%s)", resolvedName, formatSizeMultiplier(scale))
+end
+
+local function shouldPlayRollCutscene(rollResult)
+	if typeof(rollResult) ~= "table" then
+		return false
+	end
+
+	return rollResult.shouldPlayCutscene == true
+end
+
+local function playRollCutsceneIfNeeded(rollResult, rollInfo)
+	if not shouldPlayRollCutscene(rollResult) or typeof(rollInfo) ~= "table" then
+		return
+	end
+
+	local cutsceneColor = if typeof(rollInfo.Color) == "Color3" then rollInfo.Color else Color3.new(1, 1, 1)
+	local tier = tonumber(rollResult.cutsceneTier) or RollCutsceneConfig.ResolveTier(rollInfo.Rarity)
+	RollCutscene.Play(cutsceneColor, tier, RollCutsceneConfig.DefaultDuration)
+end
+
+local function resolveRollResultMutationId(rollInfo)
+	local currentRollResult = GUIControls.CurrentRollResult
+	local candidateValues = {
+		if typeof(currentRollResult) == "table" and typeof(currentRollResult.mutationResult) == "table"
+			then currentRollResult.mutationResult.id
+			else nil,
+		if typeof(rollInfo) == "table" then rollInfo.MutationId else nil,
+		if typeof(currentRollResult) == "table" and typeof(currentRollResult.finalResult) == "table"
+			then currentRollResult.finalResult.MutationId
+			else nil,
+		if typeof(currentRollResult) == "table" and typeof(currentRollResult.ownedRecord) == "table"
+			then currentRollResult.ownedRecord.mutationId
+			else nil,
+		if typeof(currentRollResult) == "table" and typeof(currentRollResult.ownedRecord) == "table"
+			then currentRollResult.ownedRecord.mutation
+			else nil,
+		if typeof(rollInfo) == "table" then rollInfo.Mutation else nil,
+	}
+
+	for _, candidateValue in ipairs(candidateValues) do
+		if typeof(candidateValue) == "string" and candidateValue ~= "" then
+			return MutationConfig.NormalizeId(candidateValue)
+		end
+	end
+
+	return MutationConfig.GetDefault().id
+end
+
+local function syncRollResultScreenEffect(rollInfo)
+	ScreenEffects.HideAll()
+
+	local presetName = MutationConfig.GetScreenEffectPreset(resolveRollResultMutationId(rollInfo))
+	if typeof(presetName) == "string" and presetName ~= "" then
+		ScreenEffects.Show(presetName)
+	end
 end
 
 local function getSelectedRollType(state)
@@ -165,6 +340,15 @@ local function getSelectedRollRegion(state)
 	end
 
 	return nil
+end
+
+local function getRollRegionNotificationLabel(rollRegionId)
+	local normalizedRegion = RollTargetRegions.Normalize(rollRegionId)
+	if normalizedRegion == RollTargetRegions.FullBody then
+		return "full body"
+	end
+
+	return string.lower(BodyPartPresentation.GetRegionLabel(normalizedRegion))
 end
 
 local function getQuickRollState(state)
@@ -361,17 +545,32 @@ local function renderRollInfo(rollInfo, sessionId)
 		DisplayFrame.BundleName.FontFace = rollInfo.Font
 	end
 
-	ViewportModelRenderer.RenderRollPreview(
-		DisplayFrame.ViewportFrame,
-		resolveRollInfoModel(rollInfo),
-		sessionId
-	)
+	local appearanceSnapshot = PreviewAppearanceRegistry.GetSnapshotForUserId(LocalPlayer.UserId)
+	local bundleModel = resolveRollInfoModel(rollInfo)
+	if appearanceSnapshot ~= nil and typeof(rollInfo.Region) == "string" and rollInfo.Region ~= "" then
+		ViewportModelRenderer.RenderBodyPartPreview(
+			DisplayFrame.ViewportFrame,
+			bundleModel,
+			rollInfo.Region,
+			appearanceSnapshot,
+			rollInfo.SizeMultiplier,
+			sessionId
+		)
+	else
+		ViewportModelRenderer.RenderRollPreview(
+			DisplayFrame.ViewportFrame,
+			bundleModel,
+			sessionId
+		)
+	end
 end
 
 local function restoreIdleRollUi()
 	HideBlackTween:Play()
 	UnblurTween:Play()
+	ScreenEffects.HideAll()
 	clearViewport()
+	resetRollResultSubInfo()
 	Main.Visible = false
 	Main.SkipButton.Visible = false
 	Main.SubInfo.Visible = false
@@ -468,7 +667,7 @@ function GUIControls:SetAutoRollEnabled(enabled)
 		local loopId = GUIControls.AutoRollLoopId
 		task.delay(0.05, function()
 			if GUIControls.AutoRoll and loopId == GUIControls.AutoRollLoopId then
-				GUIControls:Roll()
+				GUIControls:Roll("auto")
 			end
 		end)
 	end
@@ -482,7 +681,7 @@ function GUIControls:ScheduleNextAutoRoll(delayTime)
 	local loopId = GUIControls.AutoRollLoopId
 	task.delay(math.max(0, tonumber(delayTime) or 0), function()
 		if GUIControls.AutoRoll and loopId == GUIControls.AutoRollLoopId then
-			GUIControls:Roll()
+			GUIControls:Roll("auto")
 		end
 	end)
 end
@@ -513,6 +712,7 @@ function GUIControls:SetTemporaryStatus(message)
 		return
 	end
 
+	RollButton.Desc.TextColor3 = DEFAULT_ROLL_DESC_COLOR
 	RollButton.Desc.Text = message
 	task.delay(2, function()
 		if GUIControls.RollingState then
@@ -690,9 +890,12 @@ function GUIControls:RefreshRollButton()
 	local pityText = if luckBoostReady
 		then "Lucky Roll Ready"
 		else string.format("%s/%s", formatWholeNumber(rollsSinceLuckyRoll), formatWholeNumber(luckyRollGoal))
-	RollButton.TextLabel.Text = string.format('Roll <font color="rgb(96,226,98)">(%s)</font>', formatLuck(selectedRollType.luckMultiplier))
+	local descColor = if luckBoostReady then READY_ROLL_DESC_COLOR else DEFAULT_ROLL_DESC_COLOR
+	RollButton.TextLabel.Text =
+		string.format('Roll <font color="rgb(96,226,98)">(%s)</font>', formatLuckMultiplier(selectedRollType.luckMultiplier))
 	RollButton.Cost.Text = formatMoney(selectedRollType.moneyCost)
 	RollButton.Desc.Text = pityText
+	RollButton.Desc.TextColor3 = descColor
 	if selectedRollRegion and typeof(selectedRollRegion.image) == "string" then
 		RollIcon.Image = selectedRollRegion.image
 		RollShadowIcon.Image = selectedRollRegion.image
@@ -773,6 +976,7 @@ end
 
 function GUIControls:SelectRollRegion(rollRegion)
 	GUIControls:SuppressRollClickForInputFrame()
+	local previousRollRegion = getSelectedRollRegion(GUIControls.RollingState)
 	local result = invokeRemote(SelectRollRegionRemote, { rollRegion = rollRegion })
 	if not result then
 		GUIControls:SetTemporaryStatus("Failed to reach the server.")
@@ -785,6 +989,10 @@ function GUIControls:SelectRollRegion(rollRegion)
 	end
 
 	GUIControls:ApplyRollingState(result.state)
+	local currentRollRegion = getSelectedRollRegion(GUIControls.RollingState)
+	if previousRollRegion and currentRollRegion and previousRollRegion.id ~= currentRollRegion.id then
+		Notify.Show(string.format("Switched to rolling %s", getRollRegionNotificationLabel(currentRollRegion.id)))
+	end
 end
 
 function GUIControls:CycleRollRegion(direction)
@@ -871,7 +1079,7 @@ function GUIControls:RebuildRollDropdown()
 		local button = entry.Button
 		button.TextLabel.Text = rollType.displayName
 		button.Cost.Text = formatMoney(rollType.moneyCost)
-		button.Luck.Text = formatLuck(rollType.luckMultiplier)
+		button.Luck.Text = formatLuckLabel(rollType.luckMultiplier)
 		button.SelectedCover.Visible = rollType.selected == true
 		button.ImageTransparency = 0
 		button.AutoButtonColor = true
@@ -895,7 +1103,7 @@ function GUIControls:RebuildRollDropdown()
 	end
 end
 
-function GUIControls:RollSequence(previewSequence)
+function GUIControls:RollSequence(previewSequence, previewCount)
 	Main.SubInfo.Visible = false
 	Main.DisplayFrame.Position = BasePosition
 	Main.DisplayFrame.ViewportFrame.Position = UDim2.fromScale(0.5, 0.5)
@@ -908,7 +1116,11 @@ function GUIControls:RollSequence(previewSequence)
 	ShowBlackTween:Play()
 	BlurTween:Play()
 
-	local rolls = #previewSequence
+	local rolls = math.clamp(math.floor(tonumber(previewCount) or #previewSequence), 0, #previewSequence)
+	if rolls <= 0 then
+		return nil
+	end
+
 	local totalTime = GUIControls:GetRollSequenceDuration()
 	local offset = 2
 	local power = 1.8
@@ -921,7 +1133,8 @@ function GUIControls:RollSequence(previewSequence)
 		weightSum += weight
 	end
 
-	for index, rollInfo in ipairs(previewSequence) do
+	for index = 1, rolls do
+		local rollInfo = previewSequence[index]
 		local duration = (weights[index] / weightSum) * totalTime
 		local tween = TweenService:Create(
 			DisplayFrame,
@@ -941,6 +1154,23 @@ end
 function GUIControls:ShowRollResults(rollInfo)
 	ShowBlackTween:Play()
 	BlurTween:Play()
+
+	local sizeLabel = Main.SubInfo:FindFirstChild("Size")
+	local rarityLabel = Main.SubInfo:FindFirstChild("Mutation")
+	local everRolledLabel = Main.SubInfo:FindFirstChild("EverRolled")
+	if rarityLabel and rarityLabel:IsA("TextLabel") then
+		local setConfig = if typeof(rollInfo.PieceId) == "string" and rollInfo.PieceId ~= ""
+			then BodyPartsCatalog.GetSetForPiece(rollInfo.PieceId)
+			else nil
+		restoreTextLabelVisualState(rarityLabel, DEFAULT_SUBINFO_RARITY_VISUAL_STATE)
+		rarityLabel.Text = BodyPartPresentation.FormatTemplatedLabelText(DEFAULT_SUBINFO_RARITY_TEXT, rollInfo.Rarity or "-")
+		BodyPartPresentation.ApplySetRarityTemplateToLabel(
+			rarityLabel,
+			setConfig,
+			rollInfo.Rarity,
+			if typeof(rollInfo.Color) == "Color3" then rollInfo.Color else nil
+		)
+	end
 
 	for _, textObject in Main.SubInfo:GetChildren() do
 		if textObject:IsA("TextLabel") then
@@ -963,11 +1193,7 @@ function GUIControls:ShowRollResults(rollInfo)
 	DisplayTween:Play()
 	DisplayViewportTween:Play()
 
-	local sizeLabel = Main.SubInfo:FindFirstChild("Size")
-	local mutationLabel = Main.SubInfo:FindFirstChild("Mutation")
-
-	local flooredIncome = math.max(0, math.floor(tonumber(rollInfo.CashPerSec) or 0))
-	Main.SubInfo.Income.Text = "$" .. NumberFormatter.Format(flooredIncome) .. "/S"
+	Main.SubInfo.Income.Text = formatRollIncomePerSecond(rollInfo.CashPerSec)
 	Main.SubInfo.BodyPart.Text = rollInfo.BodyPart
 	if sizeLabel and sizeLabel:IsA("TextLabel") then
 		local sizeMultiplier = tonumber(rollInfo.SizeMultiplier)
@@ -980,13 +1206,18 @@ function GUIControls:ShowRollResults(rollInfo)
 		sizeLabel.Text = formatSizeLabel(sizeName, sizeMultiplier)
 		sizeLabel.Visible = true
 	end
-	if mutationLabel and mutationLabel:IsA("TextLabel") then
-		mutationLabel.Text = rollInfo.Rarity or "-"
-		mutationLabel.Visible = true
+	if rarityLabel and rarityLabel:IsA("TextLabel") then
+		rarityLabel.Visible = true
+	end
+	if everRolledLabel and everRolledLabel:IsA("TextLabel") then
+		local ownedRecord = GUIControls.CurrentRollResult and GUIControls.CurrentRollResult.ownedRecord
+		everRolledLabel.Text = formatRollResultEverRolledText(ownedRecord and ownedRecord.serialNumber)
+		everRolledLabel.Visible = true
 	end
 
 	renderRollInfo(rollInfo, GUIControls.ActiveRollPreviewSessionId)
 	GUIControls:RefreshEquipButton()
+	syncRollResultScreenEffect(rollInfo)
 
 	if GUIControls.AutoRoll then
 		local loopId = GUIControls.AutoRollLoopId
@@ -1015,8 +1246,10 @@ function GUIControls:HideRollResults()
 	end
 end
 
-function GUIControls:Roll()
+function GUIControls:Roll(triggerSource)
 	task.spawn(function()
+		local resolvedTriggerSource = if typeof(triggerSource) == "string" and triggerSource ~= "" then triggerSource else "manual"
+
 		if os.clock() < GUIControls.SuppressRollClickUntil then
 			return
 		end
@@ -1028,9 +1261,12 @@ function GUIControls:Roll()
 		GUIControls.CurrentRollResultEquipped = false
 		GUIControls.EquipDebounce = false
 		GUIControls.EquipStatusToken += 1
+		ScreenEffects.HideAll()
 		clearViewport()
 		GUIControls.ActiveRollPreviewSessionId = nil
-		GUIControls:SetDropdownOpen(false)
+		if resolvedTriggerSource ~= "auto" then
+			GUIControls:SetDropdownOpen(false)
+		end
 		local rollResponse = invokeRemote(PerformRollRemote)
 		if not rollResponse then
 			GUIControls:SetTemporaryStatus("Failed to reach the server.")
@@ -1043,7 +1279,7 @@ function GUIControls:Roll()
 				if GUIControls.AutoRoll then
 					GUIControls:SetAutoRollEnabled(false)
 				end
-				RollWarningControls.ShowInsufficientFundsWarning()
+				RollWarningNotifier.ShowInsufficientFundsWarning()
 			else
 				GUIControls:SetTemporaryStatus(failureMessage)
 			end
@@ -1056,6 +1292,7 @@ function GUIControls:Roll()
 		GUIControls:ApplyRollingState(rollResponse.state)
 		local rollResult = rollResponse.rollResult
 		if rollResult.skipPresentation == true then
+			playRollCutsceneIfNeeded(rollResult, rollResult.finalResult)
 			GUIControls.CurrentRollResult = nil
 			GUIControls.CurrentRollResultEquipped = false
 			GUIControls.EquipDebounce = false
@@ -1085,8 +1322,18 @@ function GUIControls:Roll()
 		if typeof(previewSequence) ~= "table" or #previewSequence == 0 then
 			previewSequence = buildClientPreviewSequence(rollResult) or { rollResult.finalResult }
 		end
-		local finalResult = GUIControls:RollSequence(previewSequence)
+		local shouldDelayFinalReveal = shouldPlayRollCutscene(rollResult)
+		local previewCount = if shouldDelayFinalReveal then math.max(#previewSequence - 1, 0) else #previewSequence
+		local previewedResult = GUIControls:RollSequence(previewSequence, previewCount)
+		local finalPreviewEntry = previewSequence[#previewSequence]
+		local finalResult = if typeof(finalPreviewEntry) == "table" then finalPreviewEntry else rollResult.finalResult
 		GUIControls.CurrentlyRolling = false
+		if shouldDelayFinalReveal then
+			-- Hold back the actual rolled item until the cutscene finishes.
+			playRollCutsceneIfNeeded(rollResult, finalResult)
+		else
+			finalResult = if typeof(previewedResult) == "table" then previewedResult else finalResult
+		end
 		GUIControls:ShowRollResults(finalResult)
 	end)
 end

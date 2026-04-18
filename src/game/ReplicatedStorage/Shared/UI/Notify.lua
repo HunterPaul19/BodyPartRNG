@@ -1,16 +1,48 @@
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local StarterGui = game:GetService("StarterGui")
+
+local NotificationPresenter = require(ReplicatedStorage.Shared.UI.NotificationPresenter)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local REMOTE_NAME = "Notify"
+local SCREEN_GUI_NAME = "Main"
+local CONTAINER_NAME = "Notifs"
+local TEMPLATE_NAME = "NotificationTemplate"
+local DEFAULT_CHANNEL = "system"
+local QUEUE_TIMEOUT_SECONDS = 10
+local QUEUE_RETRY_INTERVAL = 0.25
+
+local CHANNEL_COLORS = {
+	inventory = Color3.fromRGB(96, 165, 250),
+	potions = Color3.fromRGB(74, 222, 128),
+	marketplace = Color3.fromRGB(251, 191, 36),
+	titles = Color3.fromRGB(129, 140, 248),
+	auras = Color3.fromRGB(103, 232, 249),
+	admin = Color3.fromRGB(100, 116, 139),
+	system = Color3.fromRGB(148, 163, 184),
+}
+
+type NotificationPayload = {
+	title: string,
+	text: string,
+	duration: number,
+	channel: string,
+}
+
+type QueuedNotification = {
+	payload: NotificationPayload,
+	expiresAt: number,
+}
 
 local Notify = {}
 local clientRemoteConnection: RBXScriptConnection? = nil
-
+local pendingNotifications: { QueuedNotification } = {}
+local queueWorkerActive = false
 Notify.Defaults = {
 	title = "Notice",
 	duration = 4,
+	channel = DEFAULT_CHANNEL,
 }
 
 local function ensureServerRemote(): RemoteEvent
@@ -61,24 +93,191 @@ local function ensureRemote(): RemoteEvent?
 	return findClientRemote()
 end
 
-local function normalizePayload(text: any, opts)
+local function resolveChannel(opts): string
+	if typeof(opts) == "table" then
+		local channel = opts.channel
+		if typeof(channel) == "string" then
+			channel = string.lower(channel)
+			if CHANNEL_COLORS[channel] ~= nil then
+				return channel
+			end
+		end
+
+		local colorName = opts.color
+		if typeof(colorName) == "string" and string.lower(colorName) == "green" then
+			return "marketplace"
+		end
+	end
+
+	return DEFAULT_CHANNEL
+end
+
+local function normalizePayload(text: any, opts): NotificationPayload
 	opts = opts or {}
+
+	local duration = tonumber(opts.duration)
+	if duration == nil or duration ~= duration or duration <= 0 then
+		duration = Notify.Defaults.duration
+	end
+
 	return {
 		title = tostring(opts.title or Notify.Defaults.title),
 		text = tostring(text),
-		duration = tonumber(opts.duration) or Notify.Defaults.duration,
+		duration = duration,
+		channel = resolveChannel(opts),
 	}
+end
+
+local function getNotificationUi(): (Frame?, GuiObject?)
+	local localPlayer = Players.LocalPlayer
+	if not localPlayer then
+		return nil, nil
+	end
+
+	local playerGui = localPlayer:FindFirstChildOfClass("PlayerGui")
+	if not playerGui then
+		return nil, nil
+	end
+
+	local screenGui = playerGui:FindFirstChild(SCREEN_GUI_NAME)
+	if not (screenGui and screenGui:IsA("ScreenGui")) then
+		return nil, nil
+	end
+
+	local container = screenGui:FindFirstChild(CONTAINER_NAME)
+	if not (container and container:IsA("Frame")) then
+		return nil, nil
+	end
+
+	local template = container:FindFirstChild(TEMPLATE_NAME)
+	if not (template and template:IsA("GuiObject")) then
+		return nil, nil
+	end
+
+	return container, template
+end
+
+local function brightenColor(color: Color3, amount: number): Color3
+	return color:Lerp(Color3.new(1, 1, 1), math.clamp(amount, 0, 1))
+end
+
+local function applyChannelStyling(toast: GuiObject, payload: NotificationPayload)
+	local channelColor = CHANNEL_COLORS[payload.channel] or CHANNEL_COLORS[DEFAULT_CHANNEL]
+	if toast:IsA("GuiObject") then
+		toast.BackgroundColor3 = channelColor
+	end
+
+	local frameGradient = toast:FindFirstChildOfClass("UIGradient")
+	if frameGradient then
+		frameGradient.Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, brightenColor(channelColor, 0.3)),
+			ColorSequenceKeypoint.new(1, channelColor:Lerp(Color3.new(0, 0, 0), 0.08)),
+		})
+	end
+
+	local frameStroke = toast:FindFirstChildOfClass("UIStroke")
+	if frameStroke then
+		frameStroke.Color = brightenColor(channelColor, 0.18)
+	end
+end
+
+local function applyMessageLabelStyling(messageLabel: TextLabel | TextButton | TextBox, payload: NotificationPayload)
+	local channelColor = CHANNEL_COLORS[payload.channel] or CHANNEL_COLORS[DEFAULT_CHANNEL]
+	local textColor = brightenColor(channelColor, 0.32)
+	messageLabel.TextColor3 = textColor
+
+	local textStroke = messageLabel:FindFirstChildOfClass("UIStroke")
+	if textStroke then
+		textStroke.Color = Color3.fromRGB(20, 20, 20)
+
+		local strokeGradient = textStroke:FindFirstChildOfClass("UIGradient")
+		if strokeGradient then
+			strokeGradient.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, brightenColor(textColor, 0.18)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(105, 105, 105)),
+			})
+		end
+	end
+end
+
+local function renderToast(container: Frame, template: GuiObject, payload: NotificationPayload)
+	return NotificationPresenter.Show(container, template, {
+		message = payload.text,
+		messageLabelName = "TextLabel",
+		holdTime = payload.duration,
+		warnPrefix = "[Notify]",
+		onCreated = function(toast, messageLabel)
+			applyChannelStyling(toast, payload)
+			if messageLabel then
+				applyMessageLabelStyling(messageLabel, payload)
+			end
+		end,
+	})
+end
+
+local function warnDroppedNotification(payload: NotificationPayload)
+	warn(string.format("[Notify] Dropped notification after waiting for %s UI: %s", SCREEN_GUI_NAME, payload.text))
+end
+
+local function processQueue()
+	if queueWorkerActive then
+		return
+	end
+
+	queueWorkerActive = true
+
+	task.spawn(function()
+		while true do
+			if #pendingNotifications == 0 then
+				queueWorkerActive = false
+				if #pendingNotifications == 0 then
+					return
+				end
+				queueWorkerActive = true
+			end
+
+			local container, template = getNotificationUi()
+			local now = os.clock()
+
+			if not (container and template) then
+				local index = 1
+				while index <= #pendingNotifications do
+					local entry = pendingNotifications[index]
+					if entry.expiresAt <= now then
+						warnDroppedNotification(entry.payload)
+						table.remove(pendingNotifications, index)
+					else
+						index += 1
+					end
+				end
+
+				if #pendingNotifications > 0 then
+					task.wait(QUEUE_RETRY_INTERVAL)
+				end
+			else
+				local readyNotifications = pendingNotifications
+				pendingNotifications = {}
+
+				for _, entry in ipairs(readyNotifications) do
+					if entry.expiresAt <= now then
+						warnDroppedNotification(entry.payload)
+					else
+						renderToast(container, template, entry.payload)
+					end
+				end
+			end
+		end
+	end)
 end
 
 function Notify.Show(text, opts)
 	local payload = normalizePayload(text, opts)
-	return pcall(function()
-		StarterGui:SetCore("SendNotification", {
-			Title = payload.title,
-			Text = payload.text,
-			Duration = payload.duration,
-		})
-	end)
+	table.insert(pendingNotifications, {
+		payload = payload,
+		expiresAt = os.clock() + QUEUE_TIMEOUT_SECONDS,
+	})
+	processQueue()
+	return true
 end
 
 function Notify.Send(target, text, opts)
@@ -113,7 +312,7 @@ if RunService:IsClient() then
 				return
 			end
 
-			task.wait(0.25)
+			task.wait(QUEUE_RETRY_INTERVAL)
 		end
 	end)
 end

@@ -47,10 +47,10 @@ function RollMath.IsBonusReady(successfulRollCount: number, interval: number): b
 	return RollMath.GetBonusChargeProgress(successfulRollCount, safeInterval) == safeInterval - 1
 end
 
-function RollMath.GetAdjustedDenominator(displayedDenominator: number, totalLuckCoefficient: number): number
-	local safeDisplayedDenominator = math.max(1, tonumber(displayedDenominator) or 1)
+function RollMath.GetListValue(baseValue: number, totalLuckCoefficient: number): number
+	local safeBaseValue = math.max(1, tonumber(baseValue) or 1)
 	local safeTotalLuckCoefficient = math.max(0.01, tonumber(totalLuckCoefficient) or 1)
-	return math.max(1, math.ceil(safeDisplayedDenominator / safeTotalLuckCoefficient))
+	return math.max(0, math.floor(safeBaseValue / safeTotalLuckCoefficient))
 end
 
 function RollMath.RollDenominator(randomSource: Random, denominator: number): boolean
@@ -98,6 +98,31 @@ function RollMath.ChooseWeighted<T>(randomSource: Random, weightedEntries: { T }
 	end
 
 	return weightedEntries[#weightedEntries]
+end
+
+function RollMath.ApplyFlatWeightBonuses(weightedEntries: { WeightedEntry }, bonusById: any, neutralId: string?): { WeightedEntry }
+	local adjustedEntries = table.create(#weightedEntries)
+	local totalRequestedShift = 0
+	local neutralEntry = nil
+
+	for index, entry in ipairs(weightedEntries) do
+		local copiedEntry = table.clone(entry)
+		local bonusValue = if typeof(bonusById) == "table" then tonumber(bonusById[entry.id]) else nil
+		if bonusValue and bonusValue > 0 then
+			copiedEntry.weight = math.max(0, (tonumber(copiedEntry.weight) or 0) + bonusValue)
+			totalRequestedShift += bonusValue
+		end
+		if neutralId ~= nil and entry.id == neutralId then
+			neutralEntry = copiedEntry
+		end
+		adjustedEntries[index] = copiedEntry
+	end
+
+	if neutralEntry ~= nil and totalRequestedShift > 0 then
+		neutralEntry.weight = math.max(0, (tonumber(neutralEntry.weight) or 0) - totalRequestedShift)
+	end
+
+	return adjustedEntries
 end
 
 function RollMath.ComputeVariantMultiplier(mutationMultiplier: number, sizeMultiplier: number): number

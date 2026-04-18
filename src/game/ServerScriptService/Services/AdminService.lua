@@ -3,7 +3,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local AdminConfig = require(script.Parent.AdminConfig)
-local AppraisalService = require(script.Parent.AppraisalService)
 local AuraService = require(script.Parent.AuraService)
 local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
@@ -11,15 +10,23 @@ local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegio
 local BodyPartVisuals = require(ReplicatedStorage.Shared.Character.BodyPartVisuals)
 local AuraConfig = require(ReplicatedStorage.Shared.Config.AuraConfig)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local MerchantShopService = require(script.Parent.MerchantShopService)
+local Notify = require(ReplicatedStorage.Shared.UI.Notify)
+local PotionService = require(script.Parent.PotionService)
 local RollService = require(script.Parent.RollService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local ADMIN_ACTION_REMOTE_NAME = "AdminAction"
 local ACCESS_ATTRIBUTE = "CanUseAdminPanel"
+local OVERVIEW_TAB_ID = "overview"
 local BODY_PARTS_TAB_ID = "bodyParts"
 local PLAYERS_TAB_ID = "players"
+local PROGRESSION_TAB_ID = "progression"
 local MIN_SANDBOX_SCALE = 0.4
 local MAX_SANDBOX_SCALE = 2.5
+local MIN_NOTIFICATION_DURATION = 1
+local MAX_NOTIFICATION_DURATION = 10
+local MAX_NOTIFICATION_TEXT_LENGTH = 240
 
 local remotesFolder: Folder? = nil
 local adminActionRemote: RemoteFunction? = nil
@@ -35,6 +42,16 @@ local function response(ok: boolean, code: string, message: string, data: any?)
 		message = message,
 		data = data or {},
 	}
+end
+
+local function trimText(value: any): string
+	if typeof(value) ~= "string" then
+		return ""
+	end
+
+	local normalized = string.gsub(value, "\r\n", "\n")
+	normalized = string.gsub(normalized, "\r", "\n")
+	return string.match(normalized, "^%s*(.-)%s*$") or ""
 end
 
 local function ensureRemotesFolder(): Folder
@@ -355,11 +372,84 @@ local function handleTestDialogue()
 	})
 end
 
-local function handleShowAppraiser()
-	local appraisalState = AppraisalService:ForceAppear()
-	return response(true, "OK", "The appraiser has been forced onto the map.", {
-		appraisalState = appraisalState,
+local function handleShowMerchant()
+	local merchantState = MerchantShopService:ForceAppear()
+	return response(true, "OK", "The merchant has been forced onto the map.", {
+		merchantState = merchantState,
 	})
+end
+
+local function handleSendNotification(player: Player, payload: any)
+	local targetKind = if typeof(payload.targetKind) == "string" then string.lower(payload.targetKind) else ""
+	if targetKind == "" then
+		targetKind = "self"
+	end
+
+	local text = trimText(payload.text)
+	if text == "" then
+		return response(false, "BAD_REQUEST", "Notification text is required.")
+	end
+	if string.len(text) > MAX_NOTIFICATION_TEXT_LENGTH then
+		return response(false, "BAD_REQUEST", string.format("Notification text must be %d characters or fewer.", MAX_NOTIFICATION_TEXT_LENGTH))
+	end
+
+	local duration = tonumber(payload.duration)
+	if duration == nil or duration ~= duration then
+		return response(false, "BAD_REQUEST", "Notification duration must be a number.")
+	end
+	duration = math.clamp(duration, MIN_NOTIFICATION_DURATION, MAX_NOTIFICATION_DURATION)
+
+	if targetKind == "self" then
+		Notify.Send(player, text, {
+			channel = "admin",
+			duration = duration,
+		})
+		return response(true, "OK", "Sent the notification to your client.", {
+			targetKind = targetKind,
+			recipientCount = 1,
+		})
+	end
+
+	if targetKind == "all" then
+		local recipientCount = #Players:GetPlayers()
+		Notify.Send("all", text, {
+			channel = "admin",
+			duration = duration,
+		})
+		return response(
+			true,
+			"OK",
+			string.format("Broadcast the notification to %d player%s.", recipientCount, if recipientCount == 1 then "" else "s"),
+			{
+				targetKind = targetKind,
+				recipientCount = recipientCount,
+			}
+		)
+	end
+
+	if targetKind == "player" then
+		local targetUserId = math.floor(tonumber(payload.userId) or 0)
+		if targetUserId <= 0 then
+			return response(false, "BAD_REQUEST", "A valid target userId is required.")
+		end
+
+		local targetPlayer = Players:GetPlayerByUserId(targetUserId)
+		if not targetPlayer then
+			return response(false, "BAD_REQUEST", "That player is no longer in this server.")
+		end
+
+		Notify.Send(targetPlayer, text, {
+			channel = "admin",
+			duration = duration,
+		})
+		return response(true, "OK", string.format("Sent the notification to %s (@%s).", targetPlayer.DisplayName, targetPlayer.Name), {
+			targetKind = targetKind,
+			recipientCount = 1,
+			userId = targetPlayer.UserId,
+		})
+	end
+
+	return response(false, "BAD_REQUEST", "Notification targets must be self, all, or player.")
 end
 
 local function handleGetRuntimeState(player: Player)
@@ -398,9 +488,19 @@ local function handlePreviewRarityTable(player: Player)
 	return response(
 		true,
 		"OK",
-		string.format("Hidden roll table preview: %s", tostring(debugData.summary or "No preview available.")),
+		string.format("Sol's roll list preview: %s", tostring(debugData.summary or "No preview available.")),
 		debugData
 	)
+end
+
+local function handleGrantAllPotions(player: Player)
+	local ok, message, data = PotionService:GrantAllPotionUses(player, 1)
+	return response(ok, if ok then "OK" else "GRANT_FAILED", message, data)
+end
+
+local function handleClearAllPotionEffects(player: Player)
+	local ok, message, data = PotionService:ClearActivePotions(player)
+	return response(ok, if ok then "OK" else "CLEAR_FAILED", message, data)
 end
 
 local function handleEquipOwnedBodyPart(player: Player, payload: any)
@@ -596,16 +696,28 @@ function AdminService:HandleAction(player: Player, request: any)
 		return response(false, "BAD_REQUEST", "Admin request payloads must be omitted or sent as a table.")
 	end
 
-	if tabId == "overview" and actionId == "test_dialogue" then
+	if tabId == OVERVIEW_TAB_ID and actionId == "test_dialogue" then
 		return handleTestDialogue()
 	end
 
-	if tabId == "overview" and actionId == "show_appraiser" then
-		return handleShowAppraiser()
+	if tabId == OVERVIEW_TAB_ID and actionId == "show_merchant" then
+		return handleShowMerchant()
+	end
+
+	if tabId == OVERVIEW_TAB_ID and actionId == "send_notification" then
+		return handleSendNotification(player, payload or {})
 	end
 
 	if tabId == PLAYERS_TAB_ID and actionId == "inspect_player_profile" then
 		return handleInspectPlayerProfile(payload or {})
+	end
+
+	if tabId == PROGRESSION_TAB_ID and actionId == "grant_all_potions" then
+		return handleGrantAllPotions(player)
+	end
+
+	if tabId == PROGRESSION_TAB_ID and actionId == "clear_all_potion_effects" then
+		return handleClearAllPotionEffects(player)
 	end
 
 	if tabId == BODY_PARTS_TAB_ID then

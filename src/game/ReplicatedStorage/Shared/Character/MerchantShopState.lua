@@ -5,7 +5,11 @@ local MerchantShopState = {}
 export type MerchantShopStockByPotionId = { [string]: number }
 
 export type MerchantShopStateValue = {
-	cycleId: number,
+	windowId: number,
+	isActive: boolean,
+	appearsAt: number,
+	departsAt: number,
+	nextAppearsAt: number,
 	stockByPotionId: MerchantShopStockByPotionId,
 }
 
@@ -13,9 +17,17 @@ local function normalizeWhole(value: any, minimum: number, maximum: number): num
 	return math.clamp(math.floor(tonumber(value) or 0), minimum, maximum)
 end
 
+local function normalizeTimestamp(value: any): number
+	return math.max(0, math.floor(tonumber(value) or 0))
+end
+
 function MerchantShopState.CreateEmptyState(): MerchantShopStateValue
 	return {
-		cycleId = -1,
+		windowId = -1,
+		isActive = false,
+		appearsAt = 0,
+		departsAt = 0,
+		nextAppearsAt = 0,
 		stockByPotionId = {},
 	}
 end
@@ -45,8 +57,14 @@ function MerchantShopState.CloneState(state: any): MerchantShopStateValue
 		return emptyState
 	end
 
+	local windowId = math.floor(tonumber(state.windowId or state.cycleId) or emptyState.windowId)
+
 	return {
-		cycleId = math.floor(tonumber(state.cycleId) or emptyState.cycleId),
+		windowId = windowId,
+		isActive = state.isActive == true,
+		appearsAt = normalizeTimestamp(state.appearsAt),
+		departsAt = normalizeTimestamp(state.departsAt),
+		nextAppearsAt = normalizeTimestamp(state.nextAppearsAt),
 		stockByPotionId = MerchantShopState.CloneStockByPotionId(state.stockByPotionId),
 	}
 end

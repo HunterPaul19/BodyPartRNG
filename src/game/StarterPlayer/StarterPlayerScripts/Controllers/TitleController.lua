@@ -247,7 +247,7 @@ function TitleController:_submitEquipToggle()
 
 	local remote = self:_getRemote()
 	if not remote then
-		Notify.Show("The title equip remote is unavailable right now.", { title = "Titles" })
+		Notify.Show("The title equip remote is unavailable right now.", { channel = "titles" })
 		return
 	end
 
@@ -259,12 +259,12 @@ function TitleController:_submitEquipToggle()
 	end)
 
 	if not ok then
-		Notify.Show("Failed to update your equipped title.", { title = "Titles" })
+		Notify.Show("Failed to update your equipped title.", { channel = "titles" })
 		return
 	end
 
 	if typeof(response) == "table" and typeof(response.message) == "string" and response.message ~= "" then
-		Notify.Show(response.message, { title = "Titles" })
+		Notify.Show(response.message, { channel = "titles" })
 	end
 
 	if typeof(response) ~= "table" or response.ok ~= true then

@@ -8,7 +8,9 @@ local Globals = require(ReplicatedStorage.Lists.Globals)
 local Schema = require(ReplicatedStorage.Lists.Schema)
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 
-local REFRESH_TIME = 30
+local RENDER_REFRESH_TIME = 10
+local ROLLS_FLUSH_TIME = 10
+local LEGACY_SYNC_REFRESH_TIME = 30
 local MAX_FETCH_ENTRIES = 1000
 local ORDERED_STORE_PAGE_SIZE = 100
 local DEFAULT_VISIBLE_ENTRY_COUNT = 10
@@ -29,6 +31,7 @@ local BOARD_CONFIGS = {
 	RollsLeaderboard = {
 		key = ROLLS_KEY,
 		format = "Rolls",
+		useDirtySync = true,
 		modelPaths = { "Map.RollsLeaderboard" },
 		infoTitle = "Rolls",
 		headerValueLabelNames = { "Rolls", "Value" },
@@ -49,7 +52,11 @@ local thumbnailCache = {}
 local orderedStores = {}
 local orderedStoreNames = {}
 local lastSyncedValues = {}
+local rollsLiveValues = {}
+local rollsDirtyValues = {}
+local rollsLastFlushedValues = {}
 local started = false
+local connectionsStarted = false
 
 local TEMPLATE_SIZE_X_SCALE_ATTR = "LeaderboardTemplateSizeXScale"
 local TEMPLATE_SIZE_X_OFFSET_ATTR = "LeaderboardTemplateSizeXOffset"
@@ -108,6 +115,10 @@ local FORMATTERS = {
 local function formatValue(formatName, value)
 	local formatter = FORMATTERS[formatName] or tostring
 	return formatter(value)
+end
+
+local function normalizeBoardValue(value)
+	return math.max(0, math.floor(tonumber(value) or 0))
 end
 
 local function findFirstChildByNames(parent, names)
@@ -466,6 +477,19 @@ local function renderBoard(boardModel, config, entries)
 	)
 end
 
+local function sortEntriesDescending(entries)
+	table.sort(entries, function(a, b)
+		if a.value ~= b.value then
+			return a.value > b.value
+		end
+		return a.userId < b.userId
+	end)
+
+	while #entries > MAX_FETCH_ENTRIES do
+		table.remove(entries)
+	end
+end
+
 local function getCurrentPlayerEntries(dataService, key)
 	local entries = {}
 
@@ -480,18 +504,44 @@ local function getCurrentPlayerEntries(dataService, key)
 		end
 	end
 
-	table.sort(entries, function(a, b)
-		if a.value ~= b.value then
-			return a.value > b.value
-		end
-		return a.userId < b.userId
-	end)
+	sortEntriesDescending(entries)
+	return entries
+end
 
-	while #entries > MAX_FETCH_ENTRIES do
-		table.remove(entries)
+local function overlayLiveRollEntries(orderedEntries)
+	local mergedEntriesByUserId = {}
+
+	for _, entry in ipairs(orderedEntries) do
+		mergedEntriesByUserId[entry.userId] = {
+			userId = entry.userId,
+			name = entry.name,
+			value = normalizeBoardValue(entry.value),
+		}
 	end
 
-	return entries
+	for _, player in ipairs(Players:GetPlayers()) do
+		local userId = player.UserId
+		local liveValue = normalizeBoardValue(rollsLiveValues[userId])
+		if liveValue > 0 then
+			mergedEntriesByUserId[userId] = {
+				userId = userId,
+				name = player.Name,
+				value = liveValue,
+			}
+		else
+			mergedEntriesByUserId[userId] = nil
+		end
+	end
+
+	local mergedEntries = {}
+	for _, entry in pairs(mergedEntriesByUserId) do
+		if entry.value > 0 then
+			mergedEntries[#mergedEntries + 1] = entry
+		end
+	end
+
+	sortEntriesDescending(mergedEntries)
+	return mergedEntries
 end
 
 local function getMissingVisibleEntries(localEntries, orderedEntries)
@@ -513,6 +563,51 @@ local function getMissingVisibleEntries(localEntries, orderedEntries)
 	return missingEntries
 end
 
+local function setRollsLiveValue(userId: number, value: number)
+	rollsLiveValues[userId] = normalizeBoardValue(value)
+end
+
+local function markRollsValueDirty(userId: number, value: number)
+	local normalizedValue = normalizeBoardValue(value)
+	setRollsLiveValue(userId, normalizedValue)
+	if rollsLastFlushedValues[userId] ~= normalizedValue then
+		rollsDirtyValues[userId] = normalizedValue
+	else
+		rollsDirtyValues[userId] = nil
+	end
+end
+
+local function clearRollsTracking(userId: number)
+	rollsLiveValues[userId] = nil
+	rollsDirtyValues[userId] = nil
+	rollsLastFlushedValues[userId] = nil
+end
+
+local function syncRollsValueToStore(boardName, storeName, store, userId, value)
+	local normalizedValue = normalizeBoardValue(value)
+	local success, errorMessage = pcall(function()
+		store:SetAsync(userId, normalizedValue)
+	end)
+	if not success then
+		warn(string.format(
+			"[Leaderboards] Failed to write board=%s store=%s userId=%d value=%d: %s",
+			boardName,
+			storeName,
+			userId,
+			normalizedValue,
+			tostring(errorMessage)
+		))
+		return false
+	end
+
+	rollsLastFlushedValues[userId] = normalizedValue
+	if rollsDirtyValues[userId] == normalizedValue then
+		rollsDirtyValues[userId] = nil
+	end
+
+	return true
+end
+
 local function syncPlayerValueToStore(dataService, boardName, config, storeName, store, player)
 	local userId = player.UserId
 	local boardValues = lastSyncedValues[boardName]
@@ -521,7 +616,7 @@ local function syncPlayerValueToStore(dataService, boardName, config, storeName,
 		lastSyncedValues[boardName] = boardValues
 	end
 
-	local value = math.max(0, math.floor(tonumber(dataService:Get(player, config.key)) or 0))
+	local value = normalizeBoardValue(dataService:Get(player, config.key))
 	if boardValues[userId] == value then
 		return
 	end
@@ -547,6 +642,22 @@ end
 local function pushChangedPlayerData(dataService, boardName, config, storeName, store)
 	for _, player in ipairs(Players:GetPlayers()) do
 		syncPlayerValueToStore(dataService, boardName, config, storeName, store, player)
+	end
+end
+
+local function flushDirtyRollsData(boardName, storeName, store)
+	local dirtyUserIds = {}
+	for userId in pairs(rollsDirtyValues) do
+		dirtyUserIds[#dirtyUserIds + 1] = userId
+	end
+
+	table.sort(dirtyUserIds)
+
+	for _, userId in ipairs(dirtyUserIds) do
+		local value = rollsDirtyValues[userId]
+		if value ~= nil then
+			syncRollsValueToStore(boardName, storeName, store, userId, value)
+		end
 	end
 end
 
@@ -646,10 +757,55 @@ local function retryStudioRollEntries(dataService, boardName, config, storeName,
 	return entries
 end
 
+local function getOrderedEntriesForBoard(dataService, boardName, config, storeName, store)
+	local entries = getOrderedStoreEntries(boardName, storeName, store)
+	if config.useDirtySync then
+		return overlayLiveRollEntries(entries)
+	end
+
+	return retryStudioRollEntries(dataService, boardName, config, storeName, store, entries)
+end
+
+local function syncLegacyBoards(dataService)
+	if not shouldUseOrderedStores() then
+		return
+	end
+
+	for boardName, config in pairs(BOARD_CONFIGS) do
+		if config.useDirtySync ~= true then
+			local store = orderedStores[boardName]
+			local storeName = orderedStoreNames[boardName]
+			if store then
+				pushChangedPlayerData(dataService, boardName, config, storeName, store)
+			end
+		end
+	end
+end
+
 local Leaderboards = {}
+
+function Leaderboards.connect(dataService)
+	if connectionsStarted then
+		return
+	end
+	connectionsStarted = true
+
+	dataService.PlayerDataLoaded:Connect(function(player)
+		local currentValue = normalizeBoardValue(dataService:Get(player, ROLLS_KEY))
+		setRollsLiveValue(player.UserId, currentValue)
+		if currentValue > 0 then
+			markRollsValueDirty(player.UserId, currentValue)
+		end
+	end)
+
+	dataService.SuccessfulRollIncremented:Connect(function(player, _previousValue, updatedValue)
+		markRollsValueDirty(player.UserId, updatedValue)
+	end)
+end
 
 function Leaderboards.flushPlayer(dataService, player)
 	if not shouldUseOrderedStores() then
+		clearRollsTracking(player.UserId)
 		return
 	end
 
@@ -657,9 +813,17 @@ function Leaderboards.flushPlayer(dataService, player)
 		local store = orderedStores[boardName]
 		local storeName = orderedStoreNames[boardName]
 		if store then
-			syncPlayerValueToStore(dataService, boardName, config, storeName, store, player)
+			if config.useDirtySync then
+				local liveValue = rollsLiveValues[player.UserId]
+				local currentValue = if liveValue ~= nil then liveValue else dataService:Get(player, config.key)
+				syncRollsValueToStore(boardName, storeName, store, player.UserId, currentValue)
+			else
+				syncPlayerValueToStore(dataService, boardName, config, storeName, store, player)
+			end
 		end
 	end
+
+	clearRollsTracking(player.UserId)
 end
 
 function Leaderboards.refresh(dataService)
@@ -671,9 +835,7 @@ function Leaderboards.refresh(dataService)
 				local store = orderedStores[boardName]
 				local storeName = orderedStoreNames[boardName]
 				if store then
-					pushChangedPlayerData(dataService, boardName, config, storeName, store)
-					entries = getOrderedStoreEntries(boardName, storeName, store)
-					entries = retryStudioRollEntries(dataService, boardName, config, storeName, store, entries)
+					entries = getOrderedEntriesForBoard(dataService, boardName, config, storeName, store)
 				else
 					entries = {}
 				end
@@ -716,11 +878,41 @@ function Leaderboards.start(dataService)
 		end
 	end
 
+	syncLegacyBoards(dataService)
+	if shouldUseOrderedStores() then
+		local rollsBoardName = "RollsLeaderboard"
+		local rollsConfig = BOARD_CONFIGS[rollsBoardName]
+		local rollsStore = orderedStores[rollsBoardName]
+		local rollsStoreName = orderedStoreNames[rollsBoardName]
+		if rollsConfig and rollsStore and rollsStoreName then
+			flushDirtyRollsData(rollsBoardName, rollsStoreName, rollsStore)
+		end
+	end
+
 	Leaderboards.refresh(dataService)
 	task.spawn(function()
 		while true do
 			Leaderboards.refresh(dataService)
-			task.wait(REFRESH_TIME)
+			task.wait(RENDER_REFRESH_TIME)
+		end
+	end)
+	task.spawn(function()
+		while true do
+			if shouldUseOrderedStores() then
+				local rollsBoardName = "RollsLeaderboard"
+				local rollsStore = orderedStores[rollsBoardName]
+				local rollsStoreName = orderedStoreNames[rollsBoardName]
+				if rollsStore and rollsStoreName then
+					flushDirtyRollsData(rollsBoardName, rollsStoreName, rollsStore)
+				end
+			end
+			task.wait(ROLLS_FLUSH_TIME)
+		end
+	end)
+	task.spawn(function()
+		while true do
+			syncLegacyBoards(dataService)
+			task.wait(LEGACY_SYNC_REFRESH_TIME)
 		end
 	end)
 end

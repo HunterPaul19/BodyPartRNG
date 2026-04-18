@@ -1,5 +1,6 @@
 local BodyPartRegions = require(script.Parent.BodyPartRegions)
 local BodyPartsCatalog = require(script.Parent.Parent.Config.BodyParts.Catalog)
+local BodyPartLegacyIds = require(script.Parent.Parent.Config.BodyParts.LegacyIds)
 local BodyPartRuntimeConfig = require(script.Parent.Parent.Config.BodyParts.Runtime)
 
 local BodyPartLoadout = {}
@@ -34,7 +35,7 @@ local function normalizeLoadoutEntry(region: string, entry: any, ownedBodyPartsB
 	end
 
 	local ownedId = if typeof(entry.ownedId) == "string" and entry.ownedId ~= "" then entry.ownedId else nil
-	local pieceId = if typeof(entry.pieceId) == "string" and entry.pieceId ~= "" then entry.pieceId else nil
+	local pieceId = BodyPartLegacyIds.NormalizePieceId(entry.pieceId)
 	if ownedId == nil or pieceId == nil then
 		return nil
 	end

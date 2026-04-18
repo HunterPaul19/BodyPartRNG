@@ -2,13 +2,18 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Schema = require(ReplicatedStorage.Lists.Schema)
+local BodyPartEconomy = require(ReplicatedStorage.Shared.Character.BodyPartEconomy)
 local AppraisalPricing = require(ReplicatedStorage.Shared.Character.AppraisalPricing)
 local AppraisalState = require(ReplicatedStorage.Shared.Character.AppraisalState)
 local BodyPartLoadout = require(ReplicatedStorage.Shared.Character.BodyPartLoadout)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
+local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
+local ConfirmationWarning = require(ReplicatedStorage.Shared.UI.ConfirmationWarning)
+local RollWarningNotifier = require(ReplicatedStorage.Shared.UI.RollWarningNotifier)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
 local DataController = require(script.Parent.DataController)
@@ -29,8 +34,14 @@ local SELECTED_COLOR = Color3.fromRGB(116, 192, 255)
 local EQUIPPED_COLOR = Color3.fromRGB(113, 230, 139)
 local DEFAULT_OUTLINE_COLOR = Color3.fromRGB(255, 255, 255)
 local DEFAULT_DIALOGUE_NAME = "Appraiser"
-local ACTIVE_STATUS_TEXT = "Appraisal rerolls size and mutation using server stock."
+local ACTIVE_STATUS_TEXT = "Appraisal rerolls size and mutation for the selected body part."
 local INACTIVE_STATUS_TEXT = "Appraisal is unavailable right now."
+local DEFAULT_MUTATION_ID = MutationConfig.GetDefault().id
+local HIGH_SIZE_IDS = table.freeze({
+	large = true,
+	huge = true,
+	titanic = true,
+})
 
 type SlotPlaceholderState = {
 	imageTransparency: number,
@@ -151,8 +162,20 @@ local function escapeRichText(text: any): string
 		:gsub("'", "&apos;")
 end
 
-local function formatMoneyTotal(value: number): string
-	return string.format("%s$ in total", NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0))))
+local function formatWholeNumber(value: number): string
+	return NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0)))
+end
+
+local function formatAppraisalCost(value: number): string
+	return string.format("Cost: %s$", formatWholeNumber(value))
+end
+
+local function formatWorth(value: number?): string
+	if value == nil then
+		return "Worth:"
+	end
+
+	return string.format("Worth: $%s", formatWholeNumber(value))
 end
 
 function AppraisalController:_ensureState()
@@ -173,7 +196,6 @@ function AppraisalController:_ensureState()
 	self._remotes = nil :: AppraisalRemotes?
 	self._appraisalState = AppraisalState.CreateEmptyState()
 	self._speakerModel = nil :: Model?
-	self._rollWarningControls = nil
 end
 
 function AppraisalController:_getOwnedLookup(): { [string]: any }
@@ -238,6 +260,77 @@ function AppraisalController:_getSelectedAppraisalCost(): number
 	end
 
 	return AppraisalPricing.GetCost(ownedRecord, piece)
+end
+
+function AppraisalController:_getSelectedOwnedRecord()
+	local entry = self:_getSelectedEntry()
+	if not entry then
+		return nil
+	end
+
+	return self:_getOwnedLookup()[entry.ownedId]
+end
+
+function AppraisalController:_getSelectedWorth(): number?
+	local entry = self:_getSelectedEntry()
+	if not entry then
+		return nil
+	end
+
+	local ownedRecord = self:_getOwnedLookup()[entry.ownedId]
+	local piece = BodyPartsCatalog.GetPiece(entry.pieceId)
+	if not piece then
+		return nil
+	end
+
+	return BodyPartEconomy.GetSellValue(ownedRecord, piece)
+end
+
+function AppraisalController:_getSelectedAppraisalRiskMessage(): string?
+	local selectedEntry = self:_getSelectedEntry()
+	local ownedRecord = self:_getSelectedOwnedRecord()
+	if not (selectedEntry and ownedRecord) then
+		return nil
+	end
+
+	local mutationId = MutationConfig.NormalizeId(ownedRecord.mutationId or ownedRecord.mutation)
+	local hasRiskyMutation = mutationId ~= DEFAULT_MUTATION_ID
+
+	local sizeScale = tonumber(selectedEntry.scale) or tonumber(ownedRecord.sizeMultiplier) or 1
+	local sizeEntry = SizeConfig.GetByScale(sizeScale)
+	local sizeId = if sizeEntry then sizeEntry.id else SizeConfig.NormalizeId(ownedRecord.sizeId)
+	local hasRiskySize = HIGH_SIZE_IDS[sizeId] == true
+
+	if not hasRiskyMutation and not hasRiskySize then
+		return nil
+	end
+
+	local riskDescriptors = {}
+	if hasRiskyMutation then
+		table.insert(riskDescriptors, string.format("%s mutation", MutationConfig.GetDisplayName(mutationId)))
+	end
+	if hasRiskySize then
+		table.insert(
+			riskDescriptors,
+			string.format(
+				"%s size (%sx)",
+				BodyPartPresentation.GetSizeDescriptor(sizeScale, if sizeEntry then sizeEntry.id else ownedRecord.sizeId),
+				BodyPartPresentation.FormatMultiplier(sizeScale)
+			)
+		)
+	end
+
+	local riskText = ""
+	if #riskDescriptors == 1 then
+		riskText = riskDescriptors[1]
+	else
+		riskText = string.format("%s and %s", riskDescriptors[1], riskDescriptors[2])
+	end
+
+	return string.format(
+		"This appraisal may reroll your current %s into something worse. Continue?",
+		riskText
+	)
 end
 
 function AppraisalController:_applyPreviewLabelStyles(previewModel: any?)
@@ -392,14 +485,14 @@ end
 function AppraisalController:_syncServerStock()
 	local ui = self._ui
 	if ui then
-		ui.serverStockLabel.Text = string.format("Server Stock: %d", self._appraisalState.stockRemaining)
+		ui.serverStockLabel.Text = formatWorth(self:_getSelectedWorth())
 	end
 end
 
 function AppraisalController:_syncPrice()
 	local ui = self._ui
 	if ui then
-		ui.priceLabel.Text = formatMoneyTotal(self:_getSelectedAppraisalCost())
+		ui.priceLabel.Text = formatAppraisalCost(self:_getSelectedAppraisalCost())
 	end
 end
 
@@ -410,7 +503,7 @@ function AppraisalController:_syncStatus()
 	end
 
 	local state = self._appraisalState
-	local statusText = if state.isActive and state.stockRemaining > 0 then ACTIVE_STATUS_TEXT else INACTIVE_STATUS_TEXT
+	local statusText = if state.isAvailable then ACTIVE_STATUS_TEXT else INACTIVE_STATUS_TEXT
 	ui.statusLabel.Text = statusText
 end
 
@@ -447,7 +540,7 @@ function AppraisalController:_canAppraise(): boolean
 	end
 
 	local state = self._appraisalState
-	if not state.isActive or state.stockRemaining <= 0 then
+	if not state.isAvailable then
 		return false
 	end
 
@@ -458,44 +551,9 @@ function AppraisalController:_syncRollButton()
 	self:_setRollButtonEnabled(self:_canAppraise())
 end
 
-function AppraisalController:_getRollWarningControls()
-	if self._rollWarningControls then
-		return self._rollWarningControls
-	end
-
-	local playerGui = LOCAL_PLAYER:FindFirstChild("PlayerGui")
-	if not (playerGui and playerGui:IsA("PlayerGui")) then
-		return nil
-	end
-
-	local mainInterface = playerGui:FindFirstChild("MainInterface") or playerGui:WaitForChild("MainInterface", 5)
-	if not (mainInterface and mainInterface:IsA("LayerCollector")) then
-		return nil
-	end
-
-	local rollWarning = mainInterface:FindFirstChild("RollWarning")
-	if not rollWarning then
-		return nil
-	end
-
-	local controlsModule = rollWarning:FindFirstChild("GUIControls")
-	if not (controlsModule and controlsModule:IsA("ModuleScript")) then
-		return nil
-	end
-
-	local ok, controls = pcall(require, controlsModule)
-	if not ok or typeof(controls) ~= "table" then
-		return nil
-	end
-
-	self._rollWarningControls = controls
-	return controls
-end
-
 function AppraisalController:_showInsufficientFundsWarning(message: string?)
-	local warningControls = self:_getRollWarningControls()
-	if warningControls and typeof(warningControls.ShowInsufficientFundsWarning) == "function" then
-		warningControls.ShowInsufficientFundsWarning(
+	if typeof(RollWarningNotifier.ShowInsufficientFundsWarning) == "function" then
+		RollWarningNotifier.ShowInsufficientFundsWarning(
 			if typeof(message) == "string" and message ~= ""
 				then message
 				else "You don't have enough money to appraise this body part."
@@ -684,6 +742,11 @@ function AppraisalController:_performAppraisal()
 	local selectedEntry = self:_getSelectedEntry()
 	if not (selectedRegion and selectedEntry) then
 		self:_showMessage(DEFAULT_DIALOGUE_NAME, "Select an equipped body part first.")
+		return
+	end
+
+	local riskMessage = self:_getSelectedAppraisalRiskMessage()
+	if riskMessage and ConfirmationWarning.Prompt(riskMessage) ~= true then
 		return
 	end
 

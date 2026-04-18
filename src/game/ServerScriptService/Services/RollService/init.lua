@@ -10,6 +10,8 @@ local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local PerfStats = require(ReplicatedStorage.Shared.Diagnostics.PerfStats)
 local RollMath = require(ReplicatedStorage.Shared.Rolling.RollMath)
+local RollCutsceneConfig = require(ReplicatedStorage.Shared.UI.RollCutsceneConfig)
+local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
 local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
 local PotionService = require(script.Parent.PotionService)
@@ -275,18 +277,18 @@ local function isOwnedIdEquipped(player: Player, ownedId: string): boolean
 end
 
 local function computeLuckState(player: Player, rollTypeConfig, successfulRollCount: number)
-	local bonuses, potionBonuses = getEffectiveBonuses(player)
-	local equippedLuckBonus = math.max(0, tonumber(bonuses.luckBonus) or 0)
+	local bonuses, potionBonuses, loadoutBonuses = getEffectiveBonuses(player)
+	local equippedLuckBonus = math.max(0, tonumber(loadoutBonuses and loadoutBonuses.luckBonus) or 0)
 	local rollsSinceBonusRoll = RollMath.GetBonusChargeProgress(successfulRollCount, RollingConfig.BonusInterval)
 	local useBonusRoll = RollMath.IsBonusRoll(successfulRollCount, RollingConfig.BonusInterval)
 	local luckBoostReady = RollMath.IsBonusReady(successfulRollCount, RollingConfig.BonusInterval)
 	local isVipOwned = DataService:GetVipOwned(player)
 	local machineLuck = math.max(1, tonumber(rollTypeConfig.luckMultiplier) or 1)
 	local equippedLuckMultiplier = math.max(1, 1 + equippedLuckBonus)
-	local basicLuckBonus = math.max(0, (machineLuck - 1) + equippedLuckBonus)
+	local basicLuckBonus = math.max(0, machineLuck + equippedLuckBonus)
 	local baseLuck = 1 + basicLuckBonus
 	local bonusRollMultiplier = if useBonusRoll then RollingConfig.BonusMultiplier else 1
-	local specialLuckBonus = 0
+	local specialLuckBonus = math.max(0, tonumber(potionBonuses and potionBonuses.luckBonus) or 0)
 	local vipMultiplier = if isVipOwned then RollingConfig.VipMultiplier else 1
 	local bonusLuck = (baseLuck * bonusRollMultiplier) + specialLuckBonus
 	local vipLuck = bonusLuck * vipMultiplier
@@ -309,29 +311,68 @@ local function computeLuckState(player: Player, rollTypeConfig, successfulRollCo
 		successfulRollCount = successfulRollCount,
 		nextRollNumber = successfulRollCount + 1,
 		rollsSinceBonusRoll = rollsSinceBonusRoll,
-		potionLuckBonus = tonumber(potionBonuses.luckBonus) or 0,
+		potionLuckBonus = specialLuckBonus,
 	}, bonuses, potionBonuses
 end
 
-local function buildAdjustedRollEntries(rawLuck: number)
+local function buildBandLuckSummary(finalLuck: number): { [string]: any }
+	local summary = {
+		finalLuck = tonumber(finalLuck) or 0,
+		rarityBands = {},
+	}
+
+	for _, rarity in ipairs(RollingConfig.DisplayRarityOrder) do
+		local displayRarity, bandMultiplier = RollingConfig.GetDisplayRarityBandMultiplier(rarity)
+		summary.rarityBands[displayRarity] = {
+			displayRarity = displayRarity,
+			bandMultiplier = bandMultiplier,
+			bandLuck = 1 + (summary.finalLuck * bandMultiplier),
+		}
+	end
+
+	return summary
+end
+
+local function buildRollListEntries(finalLuck: number)
 	local rollEntries = BodyPartsCatalog.GetRollEntries()
-	local adjustedEntries = table.create(#rollEntries)
+	local allEntries = table.create(#rollEntries)
+	local resolvedFinalLuck = math.max(0, tonumber(finalLuck) or 0)
 
 	for index = #rollEntries, 1, -1 do
 		local rollEntry = rollEntries[index]
-		table.insert(adjustedEntries, {
+		local baseValue = rollEntry.displayedDenominator
+		local displayRarity, bandMultiplier =
+			RollingConfig.GetDisplayRarityBandMultiplier(rollEntry.rollDisplay.rarity)
+		local bandLuck = 1 + (resolvedFinalLuck * bandMultiplier)
+		local listValue = RollMath.GetListValue(baseValue, bandLuck)
+		table.insert(allEntries, {
 			setId = rollEntry.id,
 			setConfig = rollEntry,
-			displayedDenominator = rollEntry.displayedDenominator,
+			baseValue = baseValue,
+			displayedDenominator = baseValue,
 			baseChance = rollEntry.baseChance,
-			adjustedDenominator = RollMath.GetAdjustedDenominator(rollEntry.displayedDenominator, rawLuck),
+			displayRarity = displayRarity,
+			bandMultiplier = bandMultiplier,
+			bandLuck = bandLuck,
+			listValue = listValue,
+			isPruned = listValue <= 1,
+			rollSuccessChance = 0,
+			probability = 0,
 		})
 	end
 
+	local activeEntries = {}
+	for _, entry in ipairs(allEntries) do
+		if entry.isPruned ~= true then
+			table.insert(activeEntries, entry)
+		end
+	end
+
 	local remainingProbability = 1
-	local lastIndex = #adjustedEntries
-	for index, entry in ipairs(adjustedEntries) do
-		entry.rollSuccessChance = 1 / entry.adjustedDenominator
+	local lastIndex = #activeEntries
+	for index, entry in ipairs(activeEntries) do
+		entry.rollSuccessChance = 1 / entry.listValue
+		entry.activeOrder = index
 		if index == lastIndex then
 			entry.probability = remainingProbability
 		else
@@ -340,17 +381,25 @@ local function buildAdjustedRollEntries(rawLuck: number)
 		end
 	end
 
-	return adjustedEntries
+	return allEntries, activeEntries, buildBandLuckSummary(resolvedFinalLuck)
 end
 
-local function chooseWeightedSet(randomSource: Random, adjustedEntries)
-	for _, entry in ipairs(adjustedEntries) do
-		if RollMath.RollDenominator(randomSource, entry.adjustedDenominator) then
+local function chooseWeightedSet(randomSource: Random, activeEntries)
+	local lastIndex = #activeEntries
+	if lastIndex == 0 then
+		return nil
+	end
+
+	for index, entry in ipairs(activeEntries) do
+		if index == lastIndex then
+			return entry
+		end
+		if RollMath.RollDenominator(randomSource, entry.listValue) then
 			return entry
 		end
 	end
 
-	return adjustedEntries[#adjustedEntries]
+	return activeEntries[lastIndex]
 end
 
 local function choosePieceFromSet(randomSource: Random, setId: string)
@@ -381,14 +430,42 @@ local function choosePieceFromSetForRegion(randomSource: Random, setId: string, 
 	return nil
 end
 
+local function resolveCutscenePlayback(player: Player, setId: string, displayRarity: string): (boolean, number)
+	local normalizedRarity = RollCutsceneConfig.NormalizeDisplayRarity(displayRarity)
+	local cutsceneTier = RollCutsceneConfig.ResolveTier(normalizedRarity)
+	local hasSeenCutscene = DataService:HasSeenBundleCutscene(player, setId)
+	local shouldPlayCutscene = RollCutsceneConfig.ShouldPlayForSet(normalizedRarity, setId, hasSeenCutscene)
+
+	if shouldPlayCutscene and not RollCutsceneConfig.IsAlwaysPlaySetId(setId) then
+		local didMarkSeen = DataService:MarkBundleCutsceneSeen(player, setId)
+		if not didMarkSeen then
+			warn(string.format("[RollService] Failed to persist seen cutscene state for %s on set %s.", player.Name, setId))
+		end
+	end
+
+	return shouldPlayCutscene, cutsceneTier
+end
+
 local function chooseVariantEntry(randomSource: Random, orderedEntries)
 	return RollMath.ChooseWeighted(randomSource, orderedEntries, function(entry)
 		return entry.weight
 	end)
 end
 
-local function rollMutation(randomSource: Random)
-	return chooseVariantEntry(randomSource, MutationConfig.GetOrdered()) or MutationConfig.GetDefault()
+local function getAdjustedMutationEntries(mutationChanceBonusById: any)
+	if typeof(mutationChanceBonusById) ~= "table" or next(mutationChanceBonusById) == nil then
+		return MutationConfig.GetOrdered()
+	end
+
+	return RollMath.ApplyFlatWeightBonuses(
+		MutationConfig.GetOrdered(),
+		mutationChanceBonusById,
+		MutationConfig.GetDefault().id
+	)
+end
+
+local function rollMutation(randomSource: Random, mutationChanceBonusById: any)
+	return chooseVariantEntry(randomSource, getAdjustedMutationEntries(mutationChanceBonusById)) or MutationConfig.GetDefault()
 end
 
 local function rollSize(randomSource: Random)
@@ -439,31 +516,101 @@ local function createRollDisplayEntry(piece, resultData): (any?, string?)
 	}, nil
 end
 
-local function summarizeProbabilityTable(adjustedEntries)
-	local sortedEntries = table.clone(adjustedEntries)
-	table.sort(sortedEntries, function(a, b)
-		if a.probability ~= b.probability then
-			return a.probability > b.probability
-		end
-		return a.displayedDenominator < b.displayedDenominator
-	end)
-
+local function summarizeProbabilityTable(entries)
 	local lines = {}
-	local maxLines = math.min(5, #sortedEntries)
+	local prunedCount = 0
+	local previewCount = 0
 
-	for index = 1, maxLines do
-		local entry = sortedEntries[index]
-		local rollDisplay = entry.setConfig.rollDisplay
-		table.insert(
-			lines,
-			string.format(
-				"%s | 1/%s shown | 1/%s adjusted | %.4f%% hidden",
-				rollDisplay.displayName,
-				formatWholeNumber(entry.displayedDenominator),
-				formatWholeNumber(entry.adjustedDenominator),
-				(entry.probability or 0) * 100
+	for _, entry in ipairs(entries) do
+		if entry.isPruned == true then
+			prunedCount += 1
+		elseif previewCount < 5 then
+			previewCount += 1
+			local rollDisplay = entry.setConfig.rollDisplay
+			table.insert(
+				lines,
+				string.format(
+					"%s | 1/%s base | list %s | %.4f%% active",
+					rollDisplay.displayName,
+					formatWholeNumber(entry.baseValue),
+					formatWholeNumber(entry.listValue),
+					(entry.probability or 0) * 100
+				)
 			)
-		)
+		end
+	end
+
+	if #lines == 0 then
+		return string.format("No active sets remain after list pruning. %s pruned.", formatWholeNumber(prunedCount))
+	end
+
+	if prunedCount > 0 then
+		table.insert(lines, string.format("%s pruned", formatWholeNumber(prunedCount)))
+	end
+
+	return table.concat(lines, " | ")
+end
+
+local function buildRarityShareSummary(activeEntries)
+	local rarityShares = {}
+	local byRarity = {}
+
+	for _, rarity in ipairs(RollingConfig.DisplayRarityOrder) do
+		local shareEntry = {
+			displayRarity = rarity,
+			probability = 0,
+			entryCount = 0,
+		}
+		rarityShares[#rarityShares + 1] = shareEntry
+		byRarity[rarity] = shareEntry
+	end
+
+	for _, entry in ipairs(activeEntries) do
+		local displayRarity = entry.displayRarity or RollingConfig.NormalizeDisplayRarity(entry.setConfig.rollDisplay.rarity)
+		local shareEntry = byRarity[displayRarity]
+		if shareEntry then
+			shareEntry.probability += tonumber(entry.probability) or 0
+			shareEntry.entryCount += 1
+		end
+	end
+
+	return rarityShares
+end
+
+local function formatRarityShareSummary(rarityShares): string
+	local lines = {}
+
+	for _, shareEntry in ipairs(rarityShares) do
+		if shareEntry.entryCount > 0 or shareEntry.probability > 0 then
+			lines[#lines + 1] = string.format(
+				"%s %.4f%% (%s entries)",
+				shareEntry.displayRarity,
+				(tonumber(shareEntry.probability) or 0) * 100,
+				formatWholeNumber(shareEntry.entryCount)
+			)
+		end
+	end
+
+	return table.concat(lines, " | ")
+end
+
+local function formatBandLuckSummary(bandLuckSummary): string
+	local lines = {}
+	local finalLuck = tonumber(bandLuckSummary and bandLuckSummary.finalLuck) or 0
+	lines[#lines + 1] = string.format("Final luck %.2f", finalLuck)
+
+	for _, rarity in ipairs(RollingConfig.DisplayRarityOrder) do
+		local rarityBand = bandLuckSummary
+			and typeof(bandLuckSummary.rarityBands) == "table"
+			and bandLuckSummary.rarityBands[rarity]
+		if rarityBand then
+			lines[#lines + 1] = string.format(
+				"%s x%.2f -> %.2f",
+				rarity,
+				tonumber(rarityBand.bandMultiplier) or 0,
+				tonumber(rarityBand.bandLuck) or 0
+			)
+		end
 	end
 
 	return table.concat(lines, " | ")
@@ -491,13 +638,8 @@ function RollService:GetProbabilityDebug(player: Player, options: any?)
 		end
 	end
 
-	local adjustedEntries = buildAdjustedRollEntries(luckState.rawLuck)
-	table.sort(adjustedEntries, function(a, b)
-		if a.probability ~= b.probability then
-			return a.probability > b.probability
-		end
-		return a.displayedDenominator < b.displayedDenominator
-	end)
+	local entries, activeEntries, bandLuckSummary = buildRollListEntries(luckState.rawLuck)
+	local rarityShares = buildRarityShareSummary(activeEntries)
 
 	return {
 		rollTypeId = rollType.id,
@@ -506,6 +648,8 @@ function RollService:GetProbabilityDebug(player: Player, options: any?)
 		machineLuck = luckState.machineLuck,
 		baseLuck = luckState.baseLuck,
 		basicLuckBonus = luckState.basicLuckBonus,
+		specialLuckBonus = luckState.specialLuckBonus,
+		potionLuckBonus = luckState.potionLuckBonus,
 		bonusLuck = luckState.bonusLuck,
 		vipLuck = luckState.vipLuck,
 		equippedLuckMultiplier = luckState.equippedLuckMultiplier,
@@ -515,8 +659,17 @@ function RollService:GetProbabilityDebug(player: Player, options: any?)
 		bonusMultiplier = RollingConfig.BonusMultiplier,
 		vipMultiplier = RollingConfig.VipMultiplier,
 		bonuses = bonuses,
-		entries = adjustedEntries,
-		summary = summarizeProbabilityTable(adjustedEntries),
+		finalLuck = luckState.rawLuck,
+		bandLuckSummary = bandLuckSummary,
+		rarityShares = rarityShares,
+		entries = entries,
+		activeEntryCount = #activeEntries,
+		prunedEntryCount = #entries - #activeEntries,
+		summary = table.concat({
+			formatBandLuckSummary(bandLuckSummary),
+			formatRarityShareSummary(rarityShares),
+			summarizeProbabilityTable(entries),
+		}, " | "),
 	}
 end
 
@@ -771,6 +924,20 @@ function RollService:PerformRoll(player: Player): (boolean, string, any?)
 		return false, "No valid roll type is selected.", nil
 	end
 
+	local currentOwnedCount = OwnedBodyParts.CountOwned(DataService:GetBodyPartsState(player))
+	if currentOwnedCount >= OwnedBodyParts.MAX_OWNED_COUNT then
+		rollLocks[player] = nil
+		StatsService:RecordRollFailure(player, "inventory_full")
+		PerfStats.Measure("PerformRoll", startedAt, {
+			detail = string.format("%s:inventory_full", player.Name),
+		})
+		return false, string.format(
+			"Inventory is full (%d/%d). Sell body parts before rolling again.",
+			currentOwnedCount,
+			OwnedBodyParts.MAX_OWNED_COUNT
+		), nil
+	end
+
 	local currentMoney = DataService:GetMoney(player)
 	if currentMoney < selectedRollType.moneyCost then
 		rollLocks[player] = nil
@@ -786,11 +953,11 @@ function RollService:PerformRoll(player: Player): (boolean, string, any?)
 	end
 
 	local successfulRollCount = DataService:GetSuccessfulRollCount(player)
-	local luckState, bonuses = computeLuckState(player, selectedRollType, successfulRollCount)
+	local luckState, bonuses, potionBonuses = computeLuckState(player, selectedRollType, successfulRollCount)
 	local quickRollApplied = buildQuickRollState(player).enabled == true
-	local adjustedEntries = buildAdjustedRollEntries(luckState.rawLuck)
+	local _, activeEntries = buildRollListEntries(luckState.rawLuck)
 	local randomSource = Random.new()
-	local finalSet = chooseWeightedSet(randomSource, adjustedEntries)
+	local finalSet = chooseWeightedSet(randomSource, activeEntries)
 	if not finalSet then
 		rollLocks[player] = nil
 		StatsService:RecordRollFailure(player, "missing_config")
@@ -811,7 +978,10 @@ function RollService:PerformRoll(player: Player): (boolean, string, any?)
 	end
 	local didDiscoverPieceFirstTime = not DataService:HasDiscoveredBodyPartPiece(player, finalPiece.id)
 
-	local mutationData = rollMutation(randomSource)
+	local mutationData = rollMutation(
+		randomSource,
+		if typeof(potionBonuses) == "table" then potionBonuses.mutationChanceBonusById else nil
+	)
 	local sizeData, sizeScale = rollSize(randomSource)
 	local sizeMoneyMultiplier = SizeConfig.GetMoneyMultiplier(sizeData.id)
 	local variantMultiplier = RollMath.ComputeVariantMultiplier(mutationData.multiplier, sizeMoneyMultiplier)
@@ -905,6 +1075,8 @@ function RollService:PerformRoll(player: Player): (boolean, string, any?)
 		didDiscoverPieceFirstTime = didDiscoverPieceFirstTime,
 		pendingAutoSell = pendingAutoSell,
 	})
+	local shouldPlayCutscene, cutsceneTier =
+		resolveCutscenePlayback(player, finalSet.setId, finalSet.setConfig.rollDisplay.rarity)
 	local rollResult = {
 		finalResult = finalResult,
 		ownedRecord = ownedRecord,
@@ -938,6 +1110,9 @@ function RollService:PerformRoll(player: Player): (boolean, string, any?)
 			displayOddsDenominator = finalSet.displayedDenominator,
 			displayRarity = finalSet.setConfig.rollDisplay.rarity,
 		},
+		shouldPlayCutscene = shouldPlayCutscene,
+		cutsceneTier = cutsceneTier,
+		cutsceneSetId = finalSet.setId,
 		mutationResult = mutationData,
 		sizeResult = {
 			id = sizeData.id,

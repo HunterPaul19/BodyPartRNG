@@ -25,6 +25,13 @@ local RollingConfig = {
 		"Elite",
 		"Apex",
 	},
+	DisplayRarityBandLuckMultipliers = {
+		Basic = 8.8,
+		Clean = 13.5,
+		Prime = 18.75,
+		Elite = 7.5,
+		Apex = 5.5,
+	},
 	DisplayRarityAliases = {
 		Basic = "Basic",
 		Common = "Basic",
@@ -62,6 +69,15 @@ end
 
 function RollingConfig.IsValidDisplayRarity(value: any): boolean
 	return typeof(value) == "string" and RollingConfig.DisplayRaritySet[value] == true
+end
+
+function RollingConfig.GetDisplayRarityBandMultiplier(value: any): (string, number)
+	local displayRarity = RollingConfig.NormalizeDisplayRarity(value)
+	local bandMultiplier = math.max(
+		0,
+		tonumber(RollingConfig.DisplayRarityBandLuckMultipliers[displayRarity]) or 0
+	)
+	return displayRarity, bandMultiplier
 end
 
 function RollingConfig.CreateDefaultAutoSellState(): { [string]: boolean }

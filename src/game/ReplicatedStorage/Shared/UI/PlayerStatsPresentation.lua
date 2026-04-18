@@ -8,6 +8,7 @@ local PlayerStatsPresentation = {}
 
 local EARNED_SOURCE_ORDER = {
 	"passive_income",
+	"offline_income",
 	"sell_single",
 	"sell_bulk",
 	"purchase_reward",

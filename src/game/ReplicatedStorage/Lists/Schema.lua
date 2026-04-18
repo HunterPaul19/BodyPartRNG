@@ -6,6 +6,7 @@ local MarketplaceState = require(script.Parent.Parent.Shared.Marketplace.State)
 local BodyPartLoadout = require(script.Parent.Parent.Shared.Character.BodyPartLoadout)
 local RollTargetRegions = require(script.Parent.Parent.Shared.Character.RollTargetRegions)
 local RollSelection = require(script.Parent.Parent.Shared.Character.OwnedRollTypes)
+local TimeShardState = require(script.Parent.Parent.Shared.Character.TimeShardState)
 local RollingConfig = require(script.Parent.Parent.Shared.Config.RollingConfig)
 local AchievementState = require(script.Parent.Parent.Shared.Titles.AchievementState)
 local PlayerStats = require(script.Parent.Parent.Shared.Stats.PlayerStats)
@@ -19,6 +20,11 @@ return {
 	TimePlayed = {
 		key = "timePlayed",
 		value = 0,
+	},
+
+	TimeShards = {
+		key = "timeShards",
+		value = TimeShardState.CreateEmptyState(),
 	},
 
 	Diagnostics = {

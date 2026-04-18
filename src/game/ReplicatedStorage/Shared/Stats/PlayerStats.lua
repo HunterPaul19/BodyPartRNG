@@ -6,6 +6,7 @@ PlayerStats.VERSION = 1
 
 PlayerStats.EARNED_MONEY_SOURCES = {
 	passive_income = true,
+	offline_income = true,
 	sell_single = true,
 	sell_bulk = true,
 	purchase_reward = true,

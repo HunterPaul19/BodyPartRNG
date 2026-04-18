@@ -70,6 +70,13 @@
             "$path": "src/game/StarterGui/MainInterface/Roll/GUIControls.lua"
           }
         },
+        "RollWarning": {
+          "$className": "Frame",
+          "$ignoreUnknownInstances": true,
+          "GUIControls": {
+            "$path": "src/game/StarterGui/MainInterface/RollWarning/GUIControls.lua"
+          }
+        },
         "Leaderboard": {
           "$className": "Frame",
           "$ignoreUnknownInstances": true,

@@ -1,4 +1,5 @@
 local Lighting = game:GetService("Lighting")
+local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -16,6 +17,8 @@ local DayNightCycleService = {}
 local SERVER_START_TIME_ATTRIBUTE = "DayNightServerStartTime"
 local INITIAL_NORMALIZED_TIME_ATTRIBUTE = "DayNightInitialNormalizedTime"
 local LOOP_DURATION_ATTRIBUTE = "DayNightLoopDuration"
+local RUNTIME_PLACE_VERSION_ATTRIBUTE = "RuntimePlaceVersion"
+local heartbeatConnection: RBXScriptConnection? = nil
 
 local function lerpNumber(fromValue: number, toValue: number, alpha: number): number
 	return fromValue + (toValue - fromValue) * alpha
@@ -118,6 +121,18 @@ function DayNightCycleService:ApplyNormalizedTime(normalizedTime: number)
 	self:_applyKeyframePair(currentKeyframe, nextKeyframe, alpha)
 end
 
+function DayNightCycleService:_getCurrentNormalizedTime(): number
+	local serverStartTime = tonumber(Lighting:GetAttribute(SERVER_START_TIME_ATTRIBUTE))
+	local initialNormalizedTime = tonumber(Lighting:GetAttribute(INITIAL_NORMALIZED_TIME_ATTRIBUTE))
+	local loopDurationSeconds = tonumber(Lighting:GetAttribute(LOOP_DURATION_ATTRIBUTE))
+	if serverStartTime == nil or initialNormalizedTime == nil or loopDurationSeconds == nil or loopDurationSeconds <= 0 then
+		return DayNightCycleConfig.InitialNormalizedTime
+	end
+
+	local elapsedTime = math.max(0, Workspace:GetServerTimeNow() - serverStartTime)
+	return DayNightCycleConfig.NormalizeCycleTime(initialNormalizedTime + (elapsedTime / loopDurationSeconds))
+end
+
 function DayNightCycleService:GetCurrentPhase(): string
 	local currentKeyframe = DayNightCycleConfig.GetPhaseForNormalizedTime(self._normalizedTime)
 	return currentKeyframe.Phase
@@ -132,9 +147,14 @@ function DayNightCycleService:OnStart()
 	self._normalizedTime = DayNightCycleConfig.InitialNormalizedTime
 	self:_ensureEffects()
 	self:ApplyNormalizedTime(self._normalizedTime)
+	Lighting:SetAttribute(RUNTIME_PLACE_VERSION_ATTRIBUTE, game.PlaceVersion)
 	Lighting:SetAttribute(SERVER_START_TIME_ATTRIBUTE, Workspace:GetServerTimeNow())
 	Lighting:SetAttribute(INITIAL_NORMALIZED_TIME_ATTRIBUTE, self._normalizedTime)
 	Lighting:SetAttribute(LOOP_DURATION_ATTRIBUTE, DayNightCycleConfig.LoopDurationSeconds)
+
+	heartbeatConnection = RunService.Heartbeat:Connect(function()
+		self:ApplyNormalizedTime(self:_getCurrentNormalizedTime())
+	end)
 end
 
 return DayNightCycleService

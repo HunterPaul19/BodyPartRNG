@@ -8,7 +8,7 @@ local Sets = {
 			displayName = "Default",
 			rarity = "Basic",
 			chance = 1,
-			passiveIncomePerSecond = 0,
+			passiveIncomePerSecond = 1.124999999999999955,
 			color = Color3.fromRGB(255, 255, 255),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -32,13 +32,15 @@ local Sets = {
 		id = "korblox_deathspeaker",
 		displayName = "Korblox Deathspeaker",
 		sourceModelName = "Korblox Deathspeaker",
+		bundleLink = "https://www.roblox.com/bundles/192/Korblox-Deadspeaker",
+		bundleId = 192,
 		assetGroup = "Korblox",
 		assetModel = "Deathspeaker",
 		rollDisplay = {
 			displayName = "Korblox Deathspeaker",
 			rarity = "Prime",
 			chance = 16384,
-			passiveIncomePerSecond = 4500,
+			passiveIncomePerSecond = 6750,
 			color = Color3.fromRGB(0, 4, 255),
 			fontFace = Font.fromId(12187372382),
 			fontWeight = Enum.FontWeight.Thin,
@@ -58,17 +60,20 @@ local Sets = {
 		},
 	},
 
+
 	["67_brainrot"] = {
 		id = "67_brainrot",
 		displayName = "67",
 		sourceModelName = "67 (Brainrot)",
+		bundleLink = "https://www.roblox.com/bundles/189020661701506/67-Brainrot",
+		bundleId = 189020661701506,
 		assetGroup = "ImportedCommon",
 		assetModel = "67_brainrot",
 		rollDisplay = {
 			displayName = "67",
 			rarity = "Elite",
 			chance = 625000,
-			passiveIncomePerSecond = 118000,
+			passiveIncomePerSecond = 177000,
 			color = Color3.fromRGB(0, 203, 244),
 			fontFace = Font.fromId(12187375716),
 			fontWeight = Enum.FontWeight.Heavy,
@@ -88,17 +93,20 @@ local Sets = {
 		},
 	},
 
+
 	absolute_unit = {
 		id = "absolute_unit",
-		displayName = "Absolute Unit (Fat Guy)",
+		displayName = "Absolute Unit",
 		sourceModelName = "Absolute Unit",
+		bundleLink = "https://www.roblox.com/bundles/12838618049591/Absolute-Unit",
+		bundleId = 12838618049591,
 		assetGroup = "ImportedUncommon",
 		assetModel = "absolute_unit",
 		rollDisplay = {
-			displayName = "Absolute Unit (Fat Guy)",
+			displayName = "Absolute Unit",
 			rarity = "Apex",
 			chance = 2500000,
-			passiveIncomePerSecond = 300000,
+			passiveIncomePerSecond = 450000,
 			color = Color3.fromRGB(67, 246, 96),
 			fontFace = Font.fromId(12187377325),
 			fontWeight = Enum.FontWeight.Heavy,
@@ -118,17 +126,20 @@ local Sets = {
 		},
 	},
 
+
 	banana_bro = {
 		id = "banana_bro",
 		displayName = "Banana Bro",
 		sourceModelName = "Banana Bro",
+		bundleLink = "https://www.roblox.com/bundles/600498/Banana-Bro",
+		bundleId = 600498,
 		assetGroup = "ImportedCommon",
 		assetModel = "banana_bro",
 		rollDisplay = {
 			displayName = "Banana Bro",
 			rarity = "Elite",
 			chance = 250000,
-			passiveIncomePerSecond = 65000,
+			passiveIncomePerSecond = 97500,
 			color = Color3.fromRGB(244, 222, 136),
 			fontFace = Font.fromId(12187367362),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -148,17 +159,20 @@ local Sets = {
 		},
 	},
 
+
 	bastion_mech_robot_recolorable = {
 		id = "bastion_mech_robot_recolorable",
 		displayName = "Giant Mech",
 		sourceModelName = "Bastion mech robot [recolorable]",
+		bundleLink = "https://www.roblox.com/bundles/1341597/Bastion-mech-robot-recolorable",
+		bundleId = 1341597,
 		assetGroup = "ImportedRare",
 		assetModel = "bastion_mech_robot_recolorable",
 		rollDisplay = {
 			displayName = "Giant Mech",
 			rarity = "Apex",
 			chance = 1250000,
-			passiveIncomePerSecond = 190000,
+			passiveIncomePerSecond = 285000,
 			color = Color3.fromRGB(255, 204, 162),
 			fontFace = Font.fromId(12187370928),
 			fontWeight = Enum.FontWeight.Bold,
@@ -178,17 +192,20 @@ local Sets = {
 		},
 	},
 
+
 	billy = {
 		id = "billy",
 		displayName = "Billy",
 		sourceModelName = "Billy",
+		bundleLink = "https://www.roblox.com/bundles/2043/Billy",
+		bundleId = 2043,
 		assetGroup = "ImportedCommon",
 		assetModel = "billy",
 		rollDisplay = {
 			displayName = "Billy",
 			rarity = "Basic",
 			chance = 256,
-			passiveIncomePerSecond = 100,
+			passiveIncomePerSecond = 150,
 			color = Color3.fromRGB(244, 237, 197),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -208,17 +225,20 @@ local Sets = {
 		},
 	},
 
+
 	capybara = {
 		id = "capybara",
 		displayName = "Capybara",
 		sourceModelName = "Capybara",
+		bundleLink = "https://www.roblox.com/bundles/1349395/Capybara",
+		bundleId = 1349395,
 		assetGroup = "ImportedCommon",
 		assetModel = "capybara",
 		rollDisplay = {
 			displayName = "Capybara",
 			rarity = "Prime",
 			chance = 24000,
-			passiveIncomePerSecond = 6500,
+			passiveIncomePerSecond = 9750,
 			color = Color3.fromRGB(244, 222, 155),
 			fontFace = Font.fromId(12187375716),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -238,17 +258,20 @@ local Sets = {
 		},
 	},
 
+
 	cat_mech = {
 		id = "cat_mech",
 		displayName = "Cat Mech",
 		sourceModelName = "Cat Mech",
+		bundleLink = "https://www.roblox.com/bundles/8317/Cat-Mech",
+		bundleId = 8317,
 		assetGroup = "ImportedUncommon",
 		assetModel = "cat_mech",
 		rollDisplay = {
 			displayName = "Cat Mech",
 			rarity = "Elite",
 			chance = 400000,
-			passiveIncomePerSecond = 88000,
+			passiveIncomePerSecond = 132000,
 			color = Color3.fromRGB(246, 138, 244),
 			fontFace = Font.fromId(12187371840),
 			fontWeight = Enum.FontWeight.Medium,
@@ -268,17 +291,20 @@ local Sets = {
 		},
 	},
 
+
 	chef_tortrdee = {
 		id = "chef_tortrdee",
 		displayName = "Chef Tortrdee",
 		sourceModelName = "Chef Tortrdee",
+		bundleLink = "https://www.roblox.com/bundles/550/Chef-Tortrdee",
+		bundleId = 550,
 		assetGroup = "ImportedUncommon",
 		assetModel = "chef_tortrdee",
 		rollDisplay = {
 			displayName = "Chef Tortrdee",
 			rarity = "Prime",
 			chance = 60000,
-			passiveIncomePerSecond = 17250,
+			passiveIncomePerSecond = 25875,
 			color = Color3.fromRGB(75, 246, 104),
 			fontFace = Font.fromId(8836875837),
 			fontWeight = Enum.FontWeight.Medium,
@@ -298,17 +324,20 @@ local Sets = {
 		},
 	},
 
+
 	deer_monster_99_nights_in_the_forest = {
 		id = "deer_monster_99_nights_in_the_forest",
 		displayName = "99 Nights",
 		sourceModelName = "Deer Monster (99 Nights in the Forest)",
+		bundleLink = "https://www.roblox.com/bundles/121957214523451/Deer-Monster-99-Nights-in-the-Forest",
+		bundleId = 121957214523451,
 		assetGroup = "ImportedRare",
 		assetModel = "deer_monster_99_nights_in_the_forest",
 		rollDisplay = {
 			displayName = "99 Nights",
 			rarity = "Elite",
 			chance = 1000000,
-			passiveIncomePerSecond = 160000,
+			passiveIncomePerSecond = 240000,
 			color = Color3.fromRGB(255, 61, 61),
 			fontFace = Font.fromId(12187371991),
 			fontWeight = Enum.FontWeight.Bold,
@@ -328,17 +357,20 @@ local Sets = {
 		},
 	},
 
+
 	el_gato = {
 		id = "el_gato",
 		displayName = "El Gato",
 		sourceModelName = "El Gato",
+		bundleLink = "https://www.roblox.com/bundles/679795/El-Gato",
+		bundleId = 679795,
 		assetGroup = "ImportedUncommon",
 		assetModel = "el_gato",
 		rollDisplay = {
 			displayName = "El Gato",
 			rarity = "Prime",
 			chance = 70000,
-			passiveIncomePerSecond = 22000,
+			passiveIncomePerSecond = 33000,
 			color = Color3.fromRGB(246, 192, 97),
 			fontFace = Font.fromId(12187363616),
 			fontWeight = Enum.FontWeight.Bold,
@@ -358,17 +390,20 @@ local Sets = {
 		},
 	},
 
+
 	elemental_crystal_golem = {
 		id = "elemental_crystal_golem",
 		displayName = "Elemental Crystal Golem",
 		sourceModelName = "Elemental Crystal Golem",
+		bundleLink = "https://www.roblox.com/bundles/598/Elemental-Crystal-Golem",
+		bundleId = 598,
 		assetGroup = "ImportedRare",
 		assetModel = "elemental_crystal_golem",
 		rollDisplay = {
 			displayName = "Elemental Crystal Golem",
 			rarity = "Prime",
 			chance = 32768,
-			passiveIncomePerSecond = 9250,
+			passiveIncomePerSecond = 13875,
 			color = Color3.fromRGB(255, 238, 48),
 			fontFace = Font.fromId(12187364842),
 			fontWeight = Enum.FontWeight.Bold,
@@ -388,17 +423,20 @@ local Sets = {
 		},
 	},
 
+
 	frost_guard_general = {
 		id = "frost_guard_general",
 		displayName = "Frost Guard",
 		sourceModelName = "Frost Guard General",
+		bundleLink = "https://www.roblox.com/bundles/194/Frost-Guard-General",
+		bundleId = 194,
 		assetGroup = "ImportedRare",
 		assetModel = "frost_guard_general",
 		rollDisplay = {
 			displayName = "Frost Guard",
 			rarity = "Clean",
 			chance = 6000,
-			passiveIncomePerSecond = 1500,
+			passiveIncomePerSecond = 2250,
 			color = Color3.fromRGB(199, 255, 243),
 			fontFace = Font.fromId(12187368093),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -418,17 +456,20 @@ local Sets = {
 		},
 	},
 
+
 	gang_o_fries = {
 		id = "gang_o_fries",
 		displayName = "Fries",
 		sourceModelName = "Gang O' Fries",
+		bundleLink = "https://www.roblox.com/bundles/671/Gang-O-Fries",
+		bundleId = 671,
 		assetGroup = "ImportedCommon",
 		assetModel = "gang_o_fries",
 		rollDisplay = {
 			displayName = "Fries",
 			rarity = "Prime",
 			chance = 25000,
-			passiveIncomePerSecond = 7250,
+			passiveIncomePerSecond = 10875,
 			color = Color3.fromRGB(244, 194, 107),
 			fontFace = Font.fromId(12187374098),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -448,17 +489,20 @@ local Sets = {
 		},
 	},
 
+
 	gingerbread_man = {
 		id = "gingerbread_man",
 		displayName = "Gingerbread",
 		sourceModelName = "Gingerbread Man",
+		bundleLink = "https://www.roblox.com/bundles/286/Gingerbread-Man",
+		bundleId = 286,
 		assetGroup = "ImportedCommon",
 		assetModel = "gingerbread_man",
 		rollDisplay = {
 			displayName = "Gingerbread",
 			rarity = "Clean",
 			chance = 3000,
-			passiveIncomePerSecond = 775,
+			passiveIncomePerSecond = 1162.5,
 			color = Color3.fromRGB(77, 244, 88),
 			fontFace = Font.fromId(12187373592),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -478,17 +522,20 @@ local Sets = {
 		},
 	},
 
+
 	handsome_squidward = {
 		id = "handsome_squidward",
 		displayName = "Handsome Squidward",
 		sourceModelName = "Handsome Squidward",
+		bundleLink = "https://www.roblox.com/bundles/104865665980605/Handsome-Squidward",
+		bundleId = 104865665980605,
 		assetGroup = "ImportedUncommon",
 		assetModel = "handsome_squidward",
 		rollDisplay = {
 			displayName = "Handsome Squidward",
 			rarity = "Elite",
 			chance = 500000,
-			passiveIncomePerSecond = 102000,
+			passiveIncomePerSecond = 153000,
 			color = Color3.fromRGB(0, 246, 246),
 			fontFace = Font.fromId(12187375958),
 			fontWeight = Enum.FontWeight.Heavy,
@@ -508,17 +555,20 @@ local Sets = {
 		},
 	},
 
+
 	headless_horseman = {
 		id = "headless_horseman",
 		displayName = "Headless Horseman",
 		sourceModelName = "Headless Horseman",
+		bundleLink = "https://www.roblox.com/bundles/201/Headless-Horseman",
+		bundleId = 201,
 		assetGroup = "ImportedLegendary",
 		assetModel = "headless_horseman",
 		rollDisplay = {
 			displayName = "Headless Horseman",
 			rarity = "Prime",
 			chance = 18000,
-			passiveIncomePerSecond = 5000,
+			passiveIncomePerSecond = 7500,
 			color = Color3.fromRGB(255, 94, 94),
 			fontFace = Font.fromId(12187363148),
 			fontWeight = Enum.FontWeight.Bold,
@@ -538,17 +588,20 @@ local Sets = {
 		},
 	},
 
+
 	heart = {
 		id = "heart",
 		displayName = "Heart",
 		sourceModelName = "Heart",
+		bundleLink = "https://www.roblox.com/bundles/145658960621853/Heart",
+		bundleId = 145658960621853,
 		assetGroup = "ImportedCommon",
 		assetModel = "heart",
 		rollDisplay = {
 			displayName = "Heart",
 			rarity = "Prime",
 			chance = 100000,
-			passiveIncomePerSecond = 37000,
+			passiveIncomePerSecond = 55500,
 			color = Color3.fromRGB(244, 75, 156),
 			fontFace = Font.fromId(8764312106),
 			fontWeight = Enum.FontWeight.Bold,
@@ -568,17 +621,20 @@ local Sets = {
 		},
 	},
 
+
 	iron_slayer = {
 		id = "iron_slayer",
 		displayName = "Iron Slayer",
 		sourceModelName = "Iron Slayer",
+		bundleLink = "https://www.roblox.com/bundles/406/Iron-Slayer",
+		bundleId = 406,
 		assetGroup = "ImportedRare",
 		assetModel = "iron_slayer",
 		rollDisplay = {
 			displayName = "Iron Slayer",
 			rarity = "Prime",
 			chance = 50000,
-			passiveIncomePerSecond = 15250,
+			passiveIncomePerSecond = 22875,
 			color = Color3.fromRGB(222, 140, 140),
 			fontFace = Font.fromId(12187367901),
 			fontWeight = Enum.FontWeight.Bold,
@@ -598,17 +654,20 @@ local Sets = {
 		},
 	},
 
+
 	junkbot = {
 		id = "junkbot",
 		displayName = "Junkbot",
 		sourceModelName = "Junkbot",
+		bundleLink = "https://www.roblox.com/bundles/589/Junkbot",
+		bundleId = 589,
 		assetGroup = "ImportedUncommon",
 		assetModel = "junkbot",
 		rollDisplay = {
 			displayName = "Junkbot",
 			rarity = "Basic",
 			chance = 64,
-			passiveIncomePerSecond = 35,
+			passiveIncomePerSecond = 52.5,
 			color = Color3.fromRGB(244, 246, 111),
 			fontFace = Font.fromId(12187360881),
 			fontWeight = Enum.FontWeight.Medium,
@@ -628,17 +687,20 @@ local Sets = {
 		},
 	},
 
+
 	knights_of_redcliff_paladin = {
 		id = "knights_of_redcliff_paladin",
 		displayName = "Paladin",
 		sourceModelName = "Knights of Redcliff: Paladin",
+		bundleLink = "https://www.roblox.com/bundles/338/Knights-of-Redcliff-Paladin",
+		bundleId = 338,
 		assetGroup = "ImportedEpic",
 		assetModel = "knights_of_redcliff_paladin",
 		rollDisplay = {
 			displayName = "Paladin",
 			rarity = "Basic",
 			chance = 128,
-			passiveIncomePerSecond = 60,
+			passiveIncomePerSecond = 90,
 			color = Color3.fromRGB(255, 152, 79),
 			fontFace = Font.fromId(12187365769),
 			fontWeight = Enum.FontWeight.Bold,
@@ -658,17 +720,20 @@ local Sets = {
 		},
 	},
 
+
 	korblox_mage = {
 		id = "korblox_mage",
 		displayName = "Korblox Mage",
 		sourceModelName = "Korblox Mage",
+		bundleLink = "https://www.roblox.com/bundles/244/Korblox-Mage",
+		bundleId = 244,
 		assetGroup = "ImportedRare",
 		assetModel = "korblox_mage",
 		rollDisplay = {
 			displayName = "Korblox Mage",
 			rarity = "Prime",
 			chance = 12500,
-			passiveIncomePerSecond = 3500,
+			passiveIncomePerSecond = 5250,
 			color = Color3.fromRGB(53, 141, 255),
 			fontFace = Font.fromId(12187365769),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -688,17 +753,20 @@ local Sets = {
 		},
 	},
 
+
 	los_tralaleritos_brainrot = {
 		id = "los_tralaleritos_brainrot",
 		displayName = "Los Tralaleritos",
 		sourceModelName = "Los Tralaleritos (Brainrot)",
+		bundleLink = "https://www.roblox.com/bundles/173598132004776/Los-Tralaleritos-Brainrot",
+		bundleId = 173598132004776,
 		assetGroup = "ImportedEpic",
 		assetModel = "los_tralaleritos_brainrot",
 		rollDisplay = {
 			displayName = "Los Tralaleritos",
 			rarity = "Prime",
 			chance = 80000,
-			passiveIncomePerSecond = 28500,
+			passiveIncomePerSecond = 42750,
 			color = Color3.fromRGB(74, 213, 255),
 			fontFace = Font.fromId(11702779409),
 			fontWeight = Enum.FontWeight.Bold,
@@ -718,17 +786,20 @@ local Sets = {
 		},
 	},
 
+
 	mahoraga = {
 		id = "mahoraga",
 		displayName = "Mahoraga",
 		sourceModelName = "Mahoraga",
+		bundleLink = "https://www.roblox.com/bundles/102992609271094/Mahoraga",
+		bundleId = 102992609271094,
 		assetGroup = "ImportedLegendary",
 		assetModel = "mahoraga",
 		rollDisplay = {
 			displayName = "Mahoraga",
 			rarity = "Elite",
 			chance = 800000,
-			passiveIncomePerSecond = 138000,
+			passiveIncomePerSecond = 207000,
 			color = Color3.fromRGB(255, 221, 87),
 			fontFace = Font.fromId(12187365104),
 			fontWeight = Enum.FontWeight.Heavy,
@@ -748,17 +819,20 @@ local Sets = {
 		},
 	},
 
+
 	man = {
 		id = "man",
 		displayName = "Man",
 		sourceModelName = "Man",
+		bundleLink = "https://www.roblox.com/bundles/238/Man",
+		bundleId = 238,
 		assetGroup = "ImportedCommon",
 		assetModel = "man",
 		rollDisplay = {
 			displayName = "Man",
 			rarity = "Basic",
 			chance = 8,
-			passiveIncomePerSecond = 8,
+			passiveIncomePerSecond = 12,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -778,17 +852,20 @@ local Sets = {
 		},
 	},
 
+
 	mech_golem = {
 		id = "mech_golem",
-		displayName = "Mech (Golem)",
+		displayName = "Mech Golem",
 		sourceModelName = "Mech Golem",
+		bundleLink = "https://www.roblox.com/bundles/361/Mech-Golem",
+		bundleId = 361,
 		assetGroup = "ImportedRare",
 		assetModel = "mech_golem",
 		rollDisplay = {
-			displayName = "Mech (Golem)",
+			displayName = "Mech Golem",
 			rarity = "Prime",
 			chance = 75000,
-			passiveIncomePerSecond = 25000,
+			passiveIncomePerSecond = 37500,
 			color = Color3.fromRGB(255, 110, 84),
 			fontFace = Font.fromId(12187362120),
 			fontWeight = Enum.FontWeight.Bold,
@@ -808,17 +885,20 @@ local Sets = {
 		},
 	},
 
+
 	mr_roboto = {
 		id = "mr_roboto",
 		displayName = "Robot",
 		sourceModelName = "Mr. Roboto",
+		bundleLink = "https://www.roblox.com/bundles/310/Mr-Roboto",
+		bundleId = 310,
 		assetGroup = "ImportedUncommon",
 		assetModel = "mr_roboto",
 		rollDisplay = {
 			displayName = "Robot",
 			rarity = "Clean",
 			chance = 4096,
-			passiveIncomePerSecond = 1050,
+			passiveIncomePerSecond = 1575,
 			color = Color3.fromRGB(146, 176, 246),
 			fontFace = Font.fromId(12187367066),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -838,17 +918,20 @@ local Sets = {
 		},
 	},
 
+
 	mr_toilet = {
 		id = "mr_toilet",
 		displayName = "Toilet",
 		sourceModelName = "Mr. Toilet",
+		bundleLink = "https://www.roblox.com/bundles/591/Mr-Toilet",
+		bundleId = 591,
 		assetGroup = "ImportedUncommon",
 		assetModel = "mr_toilet",
 		rollDisplay = {
 			displayName = "Toilet",
 			rarity = "Clean",
 			chance = 9000,
-			passiveIncomePerSecond = 2400,
+			passiveIncomePerSecond = 3600,
 			color = Color3.fromRGB(167, 101, 84),
 			fontFace = Font.fromId(12187377325),
 			fontWeight = Enum.FontWeight.Medium,
@@ -868,17 +951,20 @@ local Sets = {
 		},
 	},
 
+
 	muscle_insane_chad_8_pack_body = {
 		id = "muscle_insane_chad_8_pack_body",
 		displayName = "Celestial Titan",
 		sourceModelName = "Muscle Insane Chad 8 Pack Body",
+		bundleLink = "https://www.roblox.com/bundles/269725821522065/Muscle-Insane-Chad-8-Pack-Body",
+		bundleId = 269725821522065,
 		assetGroup = "ImportedEpic",
 		assetModel = "muscle_insane_chad_8_pack_body",
 		rollDisplay = {
 			displayName = "Celestial Titan",
 			rarity = "Apex",
 			chance = 5000000,
-			passiveIncomePerSecond = 500000,
+			passiveIncomePerSecond = 750000,
 			color = Color3.fromRGB(255, 255, 255),
 			fontFace = Font.fromId(12187368317),
 			fontWeight = Enum.FontWeight.Heavy,
@@ -898,17 +984,20 @@ local Sets = {
 		},
 	},
 
+
 	noob_attack_mech_mobility = {
 		id = "noob_attack_mech_mobility",
-		displayName = "Mech (early)",
+		displayName = "Mech",
 		sourceModelName = "Noob Attack: Mech Mobility",
+		bundleLink = "https://www.roblox.com/bundles/464/Noob-Attack-Mech-Mobility",
+		bundleId = 464,
 		assetGroup = "ImportedUncommon",
 		assetModel = "noob_attack_mech_mobility",
 		rollDisplay = {
-			displayName = "Mech (early)",
+			displayName = "Mech",
 			rarity = "Clean",
 			chance = 10000,
-			passiveIncomePerSecond = 3000,
+			passiveIncomePerSecond = 4500,
 			color = Color3.fromRGB(122, 246, 238),
 			fontFace = Font.fromId(12187371324),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -928,17 +1017,20 @@ local Sets = {
 		},
 	},
 
+
 	paper_sketch_boy_animated = {
 		id = "paper_sketch_boy_animated",
 		displayName = "Paper Boy",
 		sourceModelName = "Paper Sketch Boy Animated",
+		bundleLink = "https://www.roblox.com/bundles/897195/Paper-Sketch-Boy-Animated",
+		bundleId = 897195,
 		assetGroup = "ImportedRare",
 		assetModel = "paper_sketch_boy_animated",
 		rollDisplay = {
 			displayName = "Paper Boy",
 			rarity = "Clean",
 			chance = 9500,
-			passiveIncomePerSecond = 2700,
+			passiveIncomePerSecond = 4050,
 			color = Color3.fromRGB(200, 187, 187),
 			fontFace = Font.fromId(12187607493),
 			fontWeight = Enum.FontWeight.Medium,
@@ -958,17 +1050,20 @@ local Sets = {
 		},
 	},
 
+
 	penguin = {
 		id = "penguin",
 		displayName = "Penguin",
 		sourceModelName = "Penguin",
+		bundleLink = "https://www.roblox.com/bundles/284/Penguin",
+		bundleId = 284,
 		assetGroup = "ImportedCommon",
 		assetModel = "penguin",
 		rollDisplay = {
 			displayName = "Penguin",
 			rarity = "Clean",
 			chance = 2500,
-			passiveIncomePerSecond = 650,
+			passiveIncomePerSecond = 975,
 			color = Color3.fromRGB(194, 235, 244),
 			fontFace = Font.fromId(12187377099),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -988,17 +1083,20 @@ local Sets = {
 		},
 	},
 
+
 	pirate_swashbuckler = {
 		id = "pirate_swashbuckler",
 		displayName = "Pirate",
 		sourceModelName = "Pirate Swashbuckler",
+		bundleLink = "https://www.roblox.com/bundles/306/Pirate-Swashbuckler",
+		bundleId = 306,
 		assetGroup = "ImportedUncommon",
 		assetModel = "pirate_swashbuckler",
 		rollDisplay = {
 			displayName = "Pirate",
 			rarity = "Clean",
 			chance = 2048,
-			passiveIncomePerSecond = 550,
+			passiveIncomePerSecond = 825,
 			color = Color3.fromRGB(172, 183, 246),
 			fontFace = Font.fromId(12187371622),
 			fontWeight = Enum.FontWeight.Medium,
@@ -1018,17 +1116,20 @@ local Sets = {
 		},
 	},
 
+
 	potato_boy = {
 		id = "potato_boy",
 		displayName = "Potato Boy",
 		sourceModelName = "Potato boy",
+		bundleLink = "https://www.roblox.com/bundles/196420413468465/Potato-boy",
+		bundleId = 196420413468465,
 		assetGroup = "ImportedCommon",
 		assetModel = "potato_boy",
 		rollDisplay = {
 			displayName = "Potato Boy",
 			rarity = "Clean",
 			chance = 1024,
-			passiveIncomePerSecond = 300,
+			passiveIncomePerSecond = 450,
 			color = Color3.fromRGB(244, 230, 179),
 			fontFace = Font.fromId(11322590111),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1048,17 +1149,20 @@ local Sets = {
 		},
 	},
 
+
 	rig = {
 		id = "rig",
-		displayName = "Lego",
-		sourceModelName = "Rig",
+		displayName = "Brick Bundle",
+		sourceModelName = "Brick Body R6",
+		bundleLink = "https://www.roblox.com/bundles/206257956080949/Brick-Body-R6",
+		bundleId = 206257956080949,
 		assetGroup = "ImportedCommon",
 		assetModel = "rig",
 		rollDisplay = {
-			displayName = "Lego",
+			displayName = "Brick Bundle",
 			rarity = "Basic",
 			chance = 512,
-			passiveIncomePerSecond = 170,
+			passiveIncomePerSecond = 382.5,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1078,17 +1182,20 @@ local Sets = {
 		},
 	},
 
+
 	roblox_boy = {
 		id = "roblox_boy",
 		displayName = "Boy",
 		sourceModelName = "ROBLOX Boy",
+		bundleLink = "https://www.roblox.com/bundles/109/ROBLOX-Boy",
+		bundleId = 109,
 		assetGroup = "ImportedCommon",
 		assetModel = "roblox_boy",
 		rollDisplay = {
 			displayName = "Boy",
 			rarity = "Basic",
 			chance = 2,
-			passiveIncomePerSecond = 2,
+			passiveIncomePerSecond = 3,
 			color = Color3.fromRGB(185, 231, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1108,17 +1215,20 @@ local Sets = {
 		},
 	},
 
+
 	roblox_girl = {
 		id = "roblox_girl",
 		displayName = "Girl",
 		sourceModelName = "ROBLOX Girl",
+		bundleLink = "https://www.roblox.com/bundles/282/ROBLOX-Girl",
+		bundleId = 282,
 		assetGroup = "ImportedCommon",
 		assetModel = "roblox_girl",
 		rollDisplay = {
 			displayName = "Girl",
 			rarity = "Basic",
 			chance = 4,
-			passiveIncomePerSecond = 4,
+			passiveIncomePerSecond = 6,
 			color = Color3.fromRGB(244, 190, 219),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1138,17 +1248,20 @@ local Sets = {
 		},
 	},
 
+
 	robloxian_2_0 = {
 		id = "robloxian_2_0",
 		displayName = "Robloxian",
 		sourceModelName = "Robloxian 2.0",
+		bundleLink = "https://www.roblox.com/bundles/311/Robloxian-2-0",
+		bundleId = 311,
 		assetGroup = "ImportedUncommon",
 		assetModel = "robloxian_2_0",
 		rollDisplay = {
 			displayName = "Robloxian",
 			rarity = "Basic",
 			chance = 32,
-			passiveIncomePerSecond = 20,
+			passiveIncomePerSecond = 30,
 			color = Color3.fromRGB(141, 181, 246),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.Medium,
@@ -1168,17 +1281,20 @@ local Sets = {
 		},
 	},
 
+
 	shrek = {
 		id = "shrek",
 		displayName = "Shrek",
 		sourceModelName = "SHREK",
+		bundleLink = "https://www.roblox.com/bundles/21233375961970/SHREK",
+		bundleId = 21233375961970,
 		assetGroup = "ImportedCommon",
 		assetModel = "shrek",
 		rollDisplay = {
 			displayName = "Shrek",
 			rarity = "Elite",
 			chance = 200000,
-			passiveIncomePerSecond = 56000,
+			passiveIncomePerSecond = 84000,
 			color = Color3.fromRGB(57, 244, 44),
 			fontFace = Font.fromId(11322590111),
 			fontWeight = Enum.FontWeight.ExtraBold,
@@ -1198,17 +1314,20 @@ local Sets = {
 		},
 	},
 
+
 	skeleton = {
 		id = "skeleton",
 		displayName = "Skeleton",
 		sourceModelName = "Skeleton",
+		bundleLink = "https://www.roblox.com/bundles/295/Skeleton",
+		bundleId = 295,
 		assetGroup = "ImportedCommon",
 		assetModel = "skeleton",
 		rollDisplay = {
 			displayName = "Skeleton",
 			rarity = "Clean",
 			chance = 3600,
-			passiveIncomePerSecond = 900,
+			passiveIncomePerSecond = 1350,
 			color = Color3.fromRGB(244, 232, 197),
 			fontFace = Font.fromId(16658237174),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1228,17 +1347,20 @@ local Sets = {
 		},
 	},
 
+
 	smiling_freak = {
 		id = "smiling_freak",
 		displayName = "Smiling Freak",
 		sourceModelName = "Smiling Freak",
+		bundleLink = "https://www.roblox.com/bundles/1186597/Smiling-Freak",
+		bundleId = 1186597,
 		assetGroup = "ImportedRare",
 		assetModel = "smiling_freak",
 		rollDisplay = {
 			displayName = "Smiling Freak",
 			rarity = "Prime",
 			chance = 90000,
-			passiveIncomePerSecond = 32500,
+			passiveIncomePerSecond = 48750,
 			color = Color3.fromRGB(193, 193, 193),
 			fontFace = Font.fromId(12187372382),
 			fontWeight = Enum.FontWeight.Heavy,
@@ -1258,17 +1380,20 @@ local Sets = {
 		},
 	},
 
+
 	snow_gentleman = {
 		id = "snow_gentleman",
 		displayName = "Snowman",
 		sourceModelName = "Snow Gentleman",
+		bundleLink = "https://www.roblox.com/bundles/188/Snow-Gentleman",
+		bundleId = 188,
 		assetGroup = "ImportedUncommon",
 		assetModel = "snow_gentleman",
 		rollDisplay = {
 			displayName = "Snowman",
 			rarity = "Clean",
 			chance = 5000,
-			passiveIncomePerSecond = 1250,
+			passiveIncomePerSecond = 1875,
 			color = Color3.fromRGB(164, 231, 246),
 			fontFace = Font.fromId(12187364648),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1288,17 +1413,20 @@ local Sets = {
 		},
 	},
 
+
 	snow_queen = {
 		id = "snow_queen",
 		displayName = "Snow Queen",
 		sourceModelName = "Snow Queen",
+		bundleLink = "https://www.roblox.com/bundles/166/Snow-Queenn",
+		bundleId = 166,
 		assetGroup = "ImportedRare",
 		assetModel = "snow_queen",
 		rollDisplay = {
 			displayName = "Snow Queen",
 			rarity = "Clean",
 			chance = 7500,
-			passiveIncomePerSecond = 1800,
+			passiveIncomePerSecond = 2700,
 			color = Color3.fromRGB(193, 255, 253),
 			fontFace = Font.fromId(12187361943),
 			fontWeight = Enum.FontWeight.ExtraBold,
@@ -1318,17 +1446,20 @@ local Sets = {
 		},
 	},
 
+
 	steamboat_mouse = {
 		id = "steamboat_mouse",
 		displayName = "Steamboat Willie",
 		sourceModelName = "Steamboat Mouse",
+		bundleLink = "https://www.roblox.com/bundles/295921/Steamboat-Mouse",
+		bundleId = 295921,
 		assetGroup = "ImportedCommon",
 		assetModel = "steamboat_mouse",
 		rollDisplay = {
 			displayName = "Steamboat Willie",
 			rarity = "Prime",
 			chance = 45000,
-			passiveIncomePerSecond = 13500,
+			passiveIncomePerSecond = 20250,
 			color = Color3.fromRGB(220, 220, 220),
 			fontFace = Font.fromId(12187367666),
 			fontWeight = Enum.FontWeight.Bold,
@@ -1348,17 +1479,20 @@ local Sets = {
 		},
 	},
 
+
 	stinky_monkey = {
 		id = "stinky_monkey",
 		displayName = "Stinky Monkey",
 		sourceModelName = "Stinky Monkey",
+		bundleLink = "https://www.roblox.com/bundles/113793957076411/Stinky-Monkey",
+		bundleId = 113793957076411,
 		assetGroup = "ImportedUncommon",
 		assetModel = "stinky_monkey",
 		rollDisplay = {
 			displayName = "Stinky Monkey",
 			rarity = "Elite",
 			chance = 150000,
-			passiveIncomePerSecond = 48000,
+			passiveIncomePerSecond = 72000,
 			color = Color3.fromRGB(115, 246, 119),
 			fontFace = Font.fromId(12187376174),
 			fontWeight = Enum.FontWeight.Bold,
@@ -1378,17 +1512,20 @@ local Sets = {
 		},
 	},
 
+
 	superhero = {
 		id = "superhero",
 		displayName = "Superhero",
 		sourceModelName = "Superhero",
+		bundleLink = "https://www.roblox.com/bundles/299/Superhero",
+		bundleId = 299,
 		assetGroup = "ImportedUncommon",
 		assetModel = "superhero",
 		rollDisplay = {
 			displayName = "Superhero",
 			rarity = "Clean",
 			chance = 1500,
-			passiveIncomePerSecond = 400,
+			passiveIncomePerSecond = 600,
 			color = Color3.fromRGB(246, 210, 137),
 			fontFace = Font.fromId(12187370000),
 			fontWeight = Enum.FontWeight.Medium,
@@ -1408,17 +1545,20 @@ local Sets = {
 		},
 	},
 
+
 	supreme_claus = {
 		id = "supreme_claus",
 		displayName = "Supreme Claus",
 		sourceModelName = "Supreme Claus",
+		bundleLink = "https://www.roblox.com/bundles/326/Supreme-Claus",
+		bundleId = 326,
 		assetGroup = "ImportedUncommon",
 		assetModel = "supreme_claus",
 		rollDisplay = {
 			displayName = "Supreme Claus",
 			rarity = "Prime",
 			chance = 20000,
-			passiveIncomePerSecond = 5750,
+			passiveIncomePerSecond = 8625,
 			color = Color3.fromRGB(246, 126, 126),
 			fontFace = Font.fromId(12187370000),
 			fontWeight = Enum.FontWeight.ExtraBold,
@@ -1438,17 +1578,20 @@ local Sets = {
 		},
 	},
 
+
 	tentacled_alien = {
 		id = "tentacled_alien",
 		displayName = "Alien",
 		sourceModelName = "Tentacled Alien",
+		bundleLink = "https://www.roblox.com/bundles/307/Tentacled-Alien",
+		bundleId = 307,
 		assetGroup = "ImportedRare",
 		assetModel = "tentacled_alien",
 		rollDisplay = {
 			displayName = "Alien",
 			rarity = "Clean",
 			chance = 8192,
-			passiveIncomePerSecond = 2100,
+			passiveIncomePerSecond = 3150,
 			color = Color3.fromRGB(230, 106, 255),
 			fontFace = Font.fromId(12187362578),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1468,17 +1611,20 @@ local Sets = {
 		},
 	},
 
+
 	the_gnomsky_brothers = {
 		id = "the_gnomsky_brothers",
 		displayName = "Gnomsky Brothers",
 		sourceModelName = "The Gnomsky Brothers",
+		bundleLink = "https://www.roblox.com/bundles/652/The-Gnomsky-Brothers",
+		bundleId = 652,
 		assetGroup = "ImportedRare",
 		assetModel = "the_gnomsky_brothers",
 		rollDisplay = {
 			displayName = "Gnomsky Brothers",
 			rarity = "Prime",
 			chance = 30000,
-			passiveIncomePerSecond = 8250,
+			passiveIncomePerSecond = 12375,
 			color = Color3.fromRGB(114, 255, 130),
 			fontFace = Font.fromId(12187371622),
 			fontWeight = Enum.FontWeight.Bold,
@@ -1498,17 +1644,20 @@ local Sets = {
 		},
 	},
 
+
 	the_overseer = {
 		id = "the_overseer",
 		displayName = "Overseer",
 		sourceModelName = "The Overseer",
+		bundleLink = "https://www.roblox.com/bundles/243/The-Overseer",
+		bundleId = 243,
 		assetGroup = "ImportedRare",
 		assetModel = "the_overseer",
 		rollDisplay = {
 			displayName = "Overseer",
 			rarity = "Prime",
 			chance = 15000,
-			passiveIncomePerSecond = 4000,
+			passiveIncomePerSecond = 6000,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187376357),
 			fontWeight = Enum.FontWeight.Bold,
@@ -1528,17 +1677,20 @@ local Sets = {
 		},
 	},
 
+
 	the_rulk_custom_colour = {
 		id = "the_rulk_custom_colour",
 		displayName = "The Rulk",
 		sourceModelName = "The Rulk - Custom Colour",
+		bundleLink = "https://www.roblox.com/bundles/390413/The-Rulk",
+		bundleId = 390413,
 		assetGroup = "ImportedLegendary",
 		assetModel = "the_rulk_custom_colour",
 		rollDisplay = {
 			displayName = "The Rulk",
 			rarity = "Elite",
 			chance = 300000,
-			passiveIncomePerSecond = 75000,
+			passiveIncomePerSecond = 112500,
 			color = Color3.fromRGB(255, 214, 92),
 			fontFace = Font.fromId(12187375194),
 			fontWeight = Enum.FontWeight.Heavy,
@@ -1558,17 +1710,20 @@ local Sets = {
 		},
 	},
 
+
 	ud_zal = {
 		id = "ud_zal",
-		displayName = "Ud'zal",
-		sourceModelName = "Ud'zal",
+		displayName = "Udzal",
+		sourceModelName = "Udzal",
+		bundleLink = "https://www.roblox.com/bundles/495/Udzal",
+		bundleId = 495,
 		assetGroup = "ImportedRare",
 		assetModel = "ud_zal",
 		rollDisplay = {
-			displayName = "Ud'zal",
+			displayName = "Udzal",
 			rarity = "Prime",
 			chance = 36000,
-			passiveIncomePerSecond = 10500,
+			passiveIncomePerSecond = 23625,
 			color = Color3.fromRGB(143, 106, 255),
 			fontFace = Font.fromId(12187368843),
 			fontWeight = Enum.FontWeight.Bold,
@@ -1588,17 +1743,20 @@ local Sets = {
 		},
 	},
 
+
 	werewolf = {
 		id = "werewolf",
 		displayName = "Werewolf",
 		sourceModelName = "Werewolf",
+		bundleLink = "https://www.roblox.com/bundles/292/Werewolf",
+		bundleId = 292,
 		assetGroup = "ImportedRare",
 		assetModel = "werewolf",
 		rollDisplay = {
 			displayName = "Werewolf",
 			rarity = "Clean",
 			chance = 1250,
-			passiveIncomePerSecond = 350,
+			passiveIncomePerSecond = 525,
 			color = Color3.fromRGB(119, 198, 255),
 			fontFace = Font.fromId(12187375194),
 			fontWeight = Enum.FontWeight.Medium,
@@ -1618,17 +1776,20 @@ local Sets = {
 		},
 	},
 
+
 	werner_weenie = {
 		id = "werner_weenie",
 		displayName = "Werner Weenie",
 		sourceModelName = "Werner Weenie",
+		bundleLink = "https://www.roblox.com/bundles/600/Werner-Weenie",
+		bundleId = 600,
 		assetGroup = "ImportedUncommon",
 		assetModel = "werner_weenie",
 		rollDisplay = {
 			displayName = "Werner Weenie",
 			rarity = "Prime",
 			chance = 40000,
-			passiveIncomePerSecond = 12000,
+			passiveIncomePerSecond = 18000,
 			color = Color3.fromRGB(246, 124, 99),
 			fontFace = Font.fromId(12187375716),
 			fontWeight = Enum.FontWeight.Bold,
@@ -1648,17 +1809,20 @@ local Sets = {
 		},
 	},
 
+
 	woman = {
 		id = "woman",
 		displayName = "Woman",
 		sourceModelName = "Woman",
+		bundleLink = "https://www.roblox.com/bundles/239/Woman",
+		bundleId = 239,
 		assetGroup = "ImportedCommon",
 		assetModel = "woman",
 		rollDisplay = {
 			displayName = "Woman",
 			rarity = "Basic",
 			chance = 16,
-			passiveIncomePerSecond = 12,
+			passiveIncomePerSecond = 18,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1678,17 +1842,20 @@ local Sets = {
 		},
 	},
 
+
 	zombie = {
 		id = "zombie",
 		displayName = "Zombie",
 		sourceModelName = "Zombie",
+		bundleLink = "https://www.roblox.com/bundles/291/Zombie",
+		bundleId = 291,
 		assetGroup = "ImportedCommon",
 		assetModel = "zombie",
 		rollDisplay = {
 			displayName = "Zombie",
 			rarity = "Clean",
 			chance = 1800,
-			passiveIncomePerSecond = 475,
+			passiveIncomePerSecond = 712.5,
 			color = Color3.fromRGB(154, 244, 141),
 			fontFace = Font.fromId(12187368625),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1707,46 +1874,20 @@ local Sets = {
 			rollSpeedBonus = 0.025,
 		},
 	},
-	brick_body_r6 = {
-		id = "brick_body_r6",
-		displayName = "Brick Body R6",
-		sourceModelName = "Brick Body R6",
-		assetGroup = "ImportedCommon",
-		assetModel = "brick_body_r6",
-		rollDisplay = {
-			displayName = "Brick Body R6",
-			rarity = "Basic",
-			chance = 512,
-			passiveIncomePerSecond = 170,
-			color = Color3.fromRGB(244, 244, 244),
-			fontFace = Font.fromId(12187375422),
-			fontWeight = Enum.FontWeight.SemiBold,
-		},
-		piecesByRegion = {
-			Head = "brick_body_r6_head",
-			Torso = "brick_body_r6_torso",
-			LeftArm = "brick_body_r6_left_arm",
-			RightArm = "brick_body_r6_right_arm",
-			LeftLeg = "brick_body_r6_left_leg",
-			RightLeg = "brick_body_r6_right_leg",
-		},
-		fullSetBonus = {
-			passiveIncomePerSecond = 0,
-			luckBonus = 0.05,
-			rollSpeedBonus = 0.025,
-		},
-	},
+
 	davy_bazooka = {
 		id = "davy_bazooka",
 		displayName = "Davy Bazooka",
 		sourceModelName = "Davy Bazooka",
+		bundleLink = "https://www.roblox.com/bundles/592/Davy-Bazooka",
+		bundleId = 592,
 		assetGroup = "ImportedCommon",
 		assetModel = "davy_bazooka",
 		rollDisplay = {
 			displayName = "Davy Bazooka",
-			rarity = "Basic",
-			chance = 512,
-			passiveIncomePerSecond = 170,
+			rarity = "Elite",
+			chance = 125000,
+			passiveIncomePerSecond = 94500,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1765,17 +1906,20 @@ local Sets = {
 			rollSpeedBonus = 0.025,
 		},
 	},
+
+
 	tung_tung_sahur = {
 		id = "tung_tung_sahur",
-		displayName = "TUNG TUNG  SAHUR",
-		sourceModelName = "TUNG TUNG  SAHUR",
+		displayName = "Tung Sahur",
+		sourceModelName = "TUNG Sahur COLORABLE",
+		bundleLink = "https://www.roblox.com/bundles/TUNG-Sahur-COLORABLE",
 		assetGroup = "ImportedCommon",
 		assetModel = "tung_tung_sahur",
 		rollDisplay = {
-			displayName = "TUNG TUNG  SAHUR",
-			rarity = "Basic",
-			chance = 512,
-			passiveIncomePerSecond = 170,
+			displayName = "Tung Sahur",
+			rarity = "Prime",
+			chance = 65536,
+			passiveIncomePerSecond = 43875,
 			color = Color3.fromRGB(244, 244, 244),
 			fontFace = Font.fromId(12187375422),
 			fontWeight = Enum.FontWeight.SemiBold,
@@ -1794,6 +1938,7 @@ local Sets = {
 			rollSpeedBonus = 0.025,
 		},
 	},
+
 
 }
 

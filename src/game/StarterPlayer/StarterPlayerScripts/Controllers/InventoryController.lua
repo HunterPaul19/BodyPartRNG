@@ -1,6 +1,5 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local StarterGui = game:GetService("StarterGui")
 local TweenService = game:GetService("TweenService")
 
 local AuraConfig = require(ReplicatedStorage.Shared.Config.AuraConfig)
@@ -11,11 +10,15 @@ local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local SizeIcons = require(ReplicatedStorage.Shared.Config.SizeIcons)
 local PerfStats = require(ReplicatedStorage.Shared.Diagnostics.PerfStats)
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
+local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
 local BodyPartLoadout = require(ReplicatedStorage.Shared.Character.BodyPartLoadout)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
+local PreviewAppearanceRegistry = require(ReplicatedStorage.Shared.Character.PreviewAppearanceRegistry)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local AuraPresentation = require(ReplicatedStorage.Shared.UI.AuraPresentation)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
+local ConfirmationWarning = require(ReplicatedStorage.Shared.UI.ConfirmationWarning)
+local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 local PotionPresentation = require(ReplicatedStorage.Shared.UI.PotionPresentation)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 local DataController = require(script.Parent.DataController)
@@ -35,6 +38,7 @@ local AURAS_REMOTES_FOLDER_NAME = "Auras"
 local GET_STATE_REMOTE_NAME = "GetSessionLoadout"
 local GET_EXISTENCE_REMOTE_NAME = "GetTotalInExistenceForPiece"
 local EQUIP_REMOTE_NAME = "EquipOwnedBodyPart"
+local EQUIP_BEST_REMOTE_NAME = "EquipBestLoadout"
 local UNEQUIP_REMOTE_NAME = "UnequipRegion"
 local SET_AUTO_SIZE_ENABLED_REMOTE_NAME = "SetAutoSizeEnabled"
 local TOGGLE_FAVORITE_REMOTE_NAME = "ToggleFavoriteOwnedBodyPart"
@@ -71,6 +75,24 @@ local FILTER_BUTTON_TO_REGION = {
 
 local REGION_TO_LABEL = BodyPartPresentation.RegionToLabel
 local REGION_TO_PLURAL_LABEL = BodyPartPresentation.RegionToPluralLabel
+local PREVIEW_LABEL_ORDER = table.freeze({
+	"Bundle",
+	"Part",
+	"Rarity",
+	"Mutation",
+	"Content",
+	"Existing",
+	"Cash",
+	"Chance",
+	"EverRolled",
+})
+local POTION_PREVIEW_VISIBLE_LABEL_ORDER = table.freeze({
+	"Bundle",
+	"Part",
+	"Rarity",
+	"Cash",
+	"Chance",
+})
 
 type OwnedBodyPartRecord = {
 	ownedId: string,
@@ -134,6 +156,7 @@ type InventoryRecordView = {
 	itemType: "bodyPart" | "aura" | "potion",
 	record: OwnedBodyPartRecord | OwnedAuraRecord | OwnedPotionRecord,
 	piece: any?,
+	region: string?,
 	setConfig: any?,
 	auraConfig: AuraConfig.AuraConfigEntry?,
 	potionConfig: any?,
@@ -146,6 +169,8 @@ type InventoryRecordView = {
 	baseFillColor: Color3?,
 	selectedFillColor: Color3?,
 	mutationCoverTexture: string?,
+	previewScale: number?,
+	appearanceUserId: number?,
 	sizeTagStyle: any?,
 	iconTexture: string?,
 	preferIconOverViewport: boolean?,
@@ -171,6 +196,17 @@ type GuiButtonLayoutState = {
 	visible: boolean,
 }
 
+type GuiObjectLayoutState = {
+	size: UDim2,
+	position: UDim2,
+	anchorPoint: Vector2,
+	visible: boolean,
+}
+
+type PreviewLabelLayouts = {
+	[string]: GuiObjectLayoutState?,
+}
+
 type PreviewSecondaryActionButtonLayouts = {
 	favorite: GuiButtonLayoutState?,
 	sell: GuiButtonLayoutState?,
@@ -179,14 +215,11 @@ type PreviewSecondaryActionButtonLayouts = {
 
 local InventoryController = {}
 
-local function showNotification(text: string, title: string?)
-	pcall(function()
-		StarterGui:SetCore("SendNotification", {
-			Title = title or "Inventory",
-			Text = tostring(text),
-			Duration = 4,
-		})
-	end)
+local function showNotification(text: string)
+	Notify.Show(text, {
+		channel = "inventory",
+		duration = 4,
+	})
 end
 
 local toRichTextColor = BodyPartPresentation.ToRichTextColor
@@ -311,6 +344,19 @@ local function captureGuiButtonLayout(button: GuiButton?): GuiButtonLayoutState?
 	}
 end
 
+local function captureGuiObjectLayout(guiObject: GuiObject?): GuiObjectLayoutState?
+	if not guiObject then
+		return nil
+	end
+
+	return {
+		size = guiObject.Size,
+		position = guiObject.Position,
+		anchorPoint = guiObject.AnchorPoint,
+		visible = guiObject.Visible,
+	}
+end
+
 local function applyGuiButtonLayout(button: GuiButton?, layout: GuiButtonLayoutState?)
 	if not (button and layout) then
 		return
@@ -320,6 +366,27 @@ local function applyGuiButtonLayout(button: GuiButton?, layout: GuiButtonLayoutS
 	button.Position = layout.position
 	button.AnchorPoint = layout.anchorPoint
 	button.Visible = layout.visible
+end
+
+local function applyGuiObjectLayout(guiObject: GuiObject?, layout: GuiObjectLayoutState?)
+	if not (guiObject and layout) then
+		return
+	end
+
+	guiObject.Size = layout.size
+	guiObject.Position = layout.position
+	guiObject.AnchorPoint = layout.anchorPoint
+	guiObject.Visible = layout.visible
+end
+
+local function capturePreviewLabelLayouts(previewLabels: { [string]: TextLabel }): PreviewLabelLayouts
+	local layouts: PreviewLabelLayouts = {}
+
+	for _, labelName in ipairs(PREVIEW_LABEL_ORDER) do
+		layouts[labelName] = captureGuiObjectLayout(previewLabels[labelName])
+	end
+
+	return layouts
 end
 
 local function buildHorizontalSpanLayout(primaryLayout: GuiButtonLayoutState?, secondaryLayout: GuiButtonLayoutState?): GuiButtonLayoutState?
@@ -405,11 +472,13 @@ function InventoryController:_ensureState()
 	self._previewExistingCountCache = {}
 	self._warnedExistingCountFailure = false
 	self._previewLabelFontFaces = nil
+	self._previewLabelLayouts = nil :: PreviewLabelLayouts?
 	self._autoSizeDescriptionText = AUTO_SIZE_DESCRIPTION_TEXT
 	self._autoSizeButtonVisualEntries = {}
 	self._autoSizeButtonTweens = {}
 	self._autoSizeVisualState = nil :: boolean?
 	self._previewSecondaryActionButtonLayouts = nil :: PreviewSecondaryActionButtonLayouts?
+	self._previewTab = "info"
 	self._autoSizeStateHydrated = false
 	self._auraActionInFlight = false
 	self._auraActionRequestToken = 0
@@ -534,6 +603,7 @@ function InventoryController:_ensureRemotes(): boolean
 	if self._remotes.getState
 		and self._remotes.getExistence
 		and self._remotes.equip
+		and self._remotes.equipBest
 		and self._remotes.unequip
 		and self._remotes.setAutoSizeEnabled
 		and self._remotes.toggleFavorite
@@ -552,6 +622,7 @@ function InventoryController:_ensureRemotes(): boolean
 	local getStateRemote = bodyPartsFolder:FindFirstChild(GET_STATE_REMOTE_NAME)
 	local getExistenceRemote = bodyPartsFolder:FindFirstChild(GET_EXISTENCE_REMOTE_NAME)
 	local equipRemote = bodyPartsFolder:FindFirstChild(EQUIP_REMOTE_NAME)
+	local equipBestRemote = bodyPartsFolder:FindFirstChild(EQUIP_BEST_REMOTE_NAME)
 	local unequipRemote = bodyPartsFolder:FindFirstChild(UNEQUIP_REMOTE_NAME)
 	local setAutoSizeEnabledRemote = bodyPartsFolder:FindFirstChild(SET_AUTO_SIZE_ENABLED_REMOTE_NAME)
 	local toggleFavoriteRemote = bodyPartsFolder:FindFirstChild(TOGGLE_FAVORITE_REMOTE_NAME)
@@ -566,6 +637,9 @@ function InventoryController:_ensureRemotes(): boolean
 		return false
 	end
 	if not (equipRemote and equipRemote:IsA("RemoteFunction")) then
+		return false
+	end
+	if not (equipBestRemote and equipBestRemote:IsA("RemoteFunction")) then
 		return false
 	end
 	if not (unequipRemote and unequipRemote:IsA("RemoteFunction")) then
@@ -590,6 +664,7 @@ function InventoryController:_ensureRemotes(): boolean
 	self._remotes.getState = getStateRemote
 	self._remotes.getExistence = getExistenceRemote
 	self._remotes.equip = equipRemote
+	self._remotes.equipBest = equipBestRemote
 	self._remotes.unequip = unequipRemote
 	self._remotes.setAutoSizeEnabled = setAutoSizeEnabledRemote
 	self._remotes.toggleFavorite = toggleFavoriteRemote
@@ -730,6 +805,42 @@ function InventoryController:_applyPreviewLabelStyles(previewModel: any?)
 	end
 end
 
+function InventoryController:_syncPreviewLabelLayout(itemType: string?)
+	local previewLabels = self._ui.previewLabels
+	local defaultLayouts = self._previewLabelLayouts
+	if not (previewLabels and defaultLayouts) then
+		return
+	end
+
+	if itemType ~= "potion" then
+		for _, labelName in ipairs(PREVIEW_LABEL_ORDER) do
+			applyGuiObjectLayout(previewLabels[labelName], defaultLayouts[labelName])
+		end
+		return
+	end
+
+	for orderIndex, labelName in ipairs(POTION_PREVIEW_VISIBLE_LABEL_ORDER) do
+		local label = previewLabels[labelName]
+		local targetSlotName = PREVIEW_LABEL_ORDER[orderIndex]
+		local targetLayout = if targetSlotName then defaultLayouts[targetSlotName] else nil
+		if label and targetLayout then
+			applyGuiObjectLayout(label, targetLayout)
+			label.Visible = true
+		end
+	end
+
+	for _, labelName in ipairs(PREVIEW_LABEL_ORDER) do
+		if table.find(POTION_PREVIEW_VISIBLE_LABEL_ORDER, labelName) == nil then
+			local label = previewLabels[labelName]
+			local defaultLayout = defaultLayouts[labelName]
+			if label and defaultLayout then
+				applyGuiObjectLayout(label, defaultLayout)
+				label.Visible = false
+			end
+		end
+	end
+end
+
 function InventoryController:_warnExistingCountFailure(message: string)
 	if self._warnedExistingCountFailure then
 		return
@@ -843,12 +954,29 @@ end
 
 function InventoryController:_setPreviewState(previewState: PreviewState?)
 	self._previewState = previewState
+	if previewState == nil then
+		self:_setPreviewTab("info")
+	end
 	if self._ui.potionSellFrame and self._ui.potionSellFrame.Visible and self._pendingPotionSellOwnedId ~= (previewState and previewState.ownedId or nil) then
 		self:_setPotionSellModalVisible(false)
 	end
 	self:_syncPreview()
 	self:_syncSlotButtons()
 	self:_syncSecondaryActionButtons()
+end
+
+function InventoryController:_setPreviewTab(tabName: string?)
+	local resolvedTab = if tabName == "stats" then "stats" else "info"
+	self._previewTab = resolvedTab
+
+	local infoFrame = self._ui.infoFrame
+	local statsFrame = self._ui.statsFrame
+	if not (infoFrame and statsFrame) then
+		return
+	end
+
+	infoFrame.Visible = resolvedTab == "info"
+	statsFrame.Visible = resolvedTab == "stats"
 end
 
 function InventoryController:_clearPreview()
@@ -997,12 +1125,28 @@ function InventoryController:_populateRowButtonForRecord(recordView: InventoryRe
 	self:_populateCardButtonForRecord(base, recordView, isSelected)
 end
 
+function InventoryController:_isRecordViewEquipped(recordView: InventoryRecordView): boolean
+	if recordView.itemType == "bodyPart" then
+		return self:_isOwnedIdEquipped(recordView.ownedId)
+	end
+
+	if recordView.itemType == "aura" then
+		return self._equippedAuraOwnedId ~= nil and recordView.ownedId == self._equippedAuraOwnedId
+	end
+
+	return false
+end
+
 function InventoryController:_buildCardPayloadForRecord(recordView: InventoryRecordView): any
 	return {
 		nameText = recordView.nameText,
 		usageText = recordView.usageText,
 		bundleModel = recordView.bundleModel,
+		region = recordView.region,
+		previewScale = recordView.previewScale,
+		appearanceUserId = recordView.appearanceUserId,
 		favoriteVisible = recordView.isFavorite,
+		equippedVisible = self:_isRecordViewEquipped(recordView),
 		cardAccentColor = recordView.cardAccentColor,
 		baseFillColor = recordView.baseFillColor,
 		selectedFillColor = recordView.selectedFillColor,
@@ -1089,6 +1233,7 @@ function InventoryController:_getInventoryRecords(): { InventoryRecordView }
 			itemType = "bodyPart",
 			record = record,
 			piece = piece,
+			region = piece.region,
 			setConfig = setConfig,
 			auraConfig = nil,
 			potionConfig = nil,
@@ -1101,6 +1246,8 @@ function InventoryController:_getInventoryRecords(): { InventoryRecordView }
 			baseFillColor = rarityStyle.baseFillColor,
 			selectedFillColor = rarityStyle.selectedFillColor,
 			mutationCoverTexture = resolveMutationCoverTexture(record),
+			previewScale = record.sizeMultiplier or 1,
+			appearanceUserId = LOCAL_PLAYER and LOCAL_PLAYER.UserId or nil,
 			sizeTagStyle = resolveSizeTagStyle(record.sizeMultiplier, record.sizeId),
 			iconTexture = nil,
 			preferIconOverViewport = false,
@@ -1121,6 +1268,13 @@ function InventoryController:_getInventoryRecords(): { InventoryRecordView }
 			record = record,
 			auraConfig = auraConfig,
 		})
+		local searchSetName = ""
+		if previewPresentation and previewPresentation.auraConfig and typeof(previewPresentation.auraConfig.setId) == "string" then
+			local setConfig = BodyPartsCatalog.GetSet(previewPresentation.auraConfig.setId)
+			if setConfig and typeof(setConfig.displayName) == "string" then
+				searchSetName = setConfig.displayName
+			end
+		end
 		table.insert(records, {
 			ownedId = ownedId,
 			itemType = "aura",
@@ -1130,20 +1284,23 @@ function InventoryController:_getInventoryRecords(): { InventoryRecordView }
 			auraConfig = auraConfig,
 			potionConfig = nil,
 			bundleModel = previewPresentation and previewPresentation.bundleModel or nil,
-			nameText = auraConfig.label,
+			nameText = if previewPresentation and typeof(previewPresentation.cardNameText) == "string"
+				then previewPresentation.cardNameText
+				else auraConfig.label,
 			usageText = if previewPresentation then previewPresentation.cardUsageText else auraConfig.tierLabel,
 			isFavorite = record.isFavorite == true,
 			searchText = string.lower(
 				string.format(
-					"%s %s %s",
+					"%s %s %s %s",
 					tostring(auraConfig.label),
 					tostring(auraConfig.description),
-					tostring(auraConfig.tierLabel)
+					tostring(auraConfig.tierLabel),
+					tostring(searchSetName)
 				)
 			),
-			cardAccentColor = nil,
-			baseFillColor = nil,
-			selectedFillColor = nil,
+			cardAccentColor = if previewPresentation then previewPresentation.cardAccentColor else nil,
+			baseFillColor = if previewPresentation then previewPresentation.baseFillColor else nil,
+			selectedFillColor = if previewPresentation then previewPresentation.selectedFillColor else nil,
 			mutationCoverTexture = nil,
 			sizeTagStyle = nil,
 			iconTexture = if previewPresentation then previewPresentation.iconTexture else nil,
@@ -1535,11 +1692,14 @@ function InventoryController:_renderMountedSlotCard(
 		return nil
 	end
 
+	local payload = self:_buildCardPayloadForRecord(recordView)
+	payload.equippedVisible = false
+
 	return self._slotCardRenderer:Render(
 		slotKey,
 		slotHost,
 		callback,
-		self:_buildCardPayloadForRecord(recordView),
+		payload,
 		isSelected == true
 	)
 end
@@ -1680,6 +1840,10 @@ function InventoryController:_getResolvedAutoSizeEnabled(overrideEnabled: boolea
 	return self:_getAutoSizeEnabled()
 end
 
+function InventoryController:_getResolvedNormalSizeEnabled(overrideAutoSizeEnabled: boolean?): boolean
+	return not self:_getResolvedAutoSizeEnabled(overrideAutoSizeEnabled)
+end
+
 function InventoryController:_setAutoSizeButtonVisualState(isEnabled: boolean, shouldAnimate: boolean?)
 	local entries = self._autoSizeButtonVisualEntries
 	if typeof(entries) ~= "table" or #entries == 0 then
@@ -1745,10 +1909,10 @@ function InventoryController:_syncAutoSizeButton(overrideEnabled: boolean?, shou
 		return
 	end
 
-	local isEnabled = self:_getResolvedAutoSizeEnabled(overrideEnabled)
+	local isEnabled = self:_getResolvedNormalSizeEnabled(overrideEnabled)
 	label.RichText = true
 	label.Text = string.format(
-		"<b>Auto Size [%s]</b> <br /> %s",
+		"<b>Normal Size [%s]</b> <br /> %s",
 		if isEnabled then "ON" else "OFF",
 		self._autoSizeDescriptionText
 	)
@@ -1794,6 +1958,36 @@ function InventoryController:_toggleAutoSize()
 	end
 
 	self:_syncAutoSizeButton(not self:_getResolvedAutoSizeEnabled(), true)
+end
+
+function InventoryController:_equipBestLoadout()
+	if not self:_ensureRemotes() then
+		return
+	end
+
+	local ok, result = pcall(function()
+		return self._remotes.equipBest:InvokeServer()
+	end)
+
+	if not ok then
+		showNotification("Equip best failed. Check the output for details.")
+		warn(string.format("[InventoryController] Equip best invoke failed: %s", tostring(result)))
+		return
+	end
+
+	if typeof(result) ~= "table" then
+		showNotification("Equip best returned an invalid response.")
+		return
+	end
+
+	if result.ok ~= true then
+		showNotification(tostring(result.message or "Could not equip your best loadout."))
+		self:_applyLoadoutState(result.state)
+		return
+	end
+
+	showNotification(tostring(result.message or "Equipped best loadout."))
+	self:_applyLoadoutState(result.state)
 end
 
 function InventoryController:_syncFilterButtons()
@@ -1981,19 +2175,20 @@ function InventoryController:_syncSlotButtons()
 end
 
 function InventoryController:_syncCapacityLabel()
-	local visibleCount = #self:_getVisibleRecords()
 	local label = "Inventory"
-	local maxCount = 100
+	local currentCount = OwnedBodyParts.CountOwnedRecords(self:_getOwnedLookup())
+	local maxCount = OwnedBodyParts.MAX_OWNED_COUNT
 	if self._selectedSpecialFilter == "aura" then
+		currentCount = #self:_getVisibleRecords()
 		label = "Auras"
 	elseif self._selectedSpecialFilter == "potion" then
+		currentCount = #self:_getVisibleRecords()
 		label = "Potions"
 		maxCount = #PotionConfig.GetAll()
-	elseif self._selectedFilterRegion then
-		label = REGION_TO_PLURAL_LABEL[self._selectedFilterRegion] or self._selectedFilterRegion
 	end
 
-	self._ui.capacityLabel.Text = string.format("%s/%s %s", formatWholeNumber(visibleCount), formatWholeNumber(maxCount), label)
+	self._ui.capacityLabel.Text =
+		string.format("%s/%s %s", formatWholeNumber(currentCount), formatWholeNumber(maxCount), label)
 end
 
 function InventoryController:_syncSummaryLabels()
@@ -2040,10 +2235,14 @@ function InventoryController:_syncPreview()
 		self._previewRenderKey = "none"
 		self._previewCountKey = nil
 		self:_applyPreviewLabelStyles(nil)
+		self:_syncPreviewLabelLayout(nil)
 		self:_setEverRolledPreviewText(nil)
+		self:_setPreviewTab("info")
 		self:_syncInventoryAnchor(false)
 		return
 	end
+
+	self:_setPreviewTab(self._previewTab)
 
 	local iconTexture = if typeof(previewModel.iconTexture) == "string" and previewModel.iconTexture ~= "" then previewModel.iconTexture else nil
 	local shouldUsePreviewIcon = previewModel.itemType == "aura" and iconTexture ~= nil
@@ -2063,13 +2262,25 @@ function InventoryController:_syncPreview()
 			if previewModel.itemType == "potion" then
 				ViewportModelRenderer.RenderPotion(previewViewport, previewModel.bundleModel)
 			else
-				ViewportModelRenderer.RenderBundle(previewViewport, previewModel.bundleModel)
+				local appearanceSnapshot = PreviewAppearanceRegistry.GetSnapshotForUserId(previewModel.appearanceUserId)
+				if appearanceSnapshot ~= nil and typeof(previewModel.region) == "string" and previewModel.region ~= "" then
+					ViewportModelRenderer.RenderBodyPartPreview(
+						previewViewport,
+						previewModel.bundleModel,
+						previewModel.region,
+						appearanceSnapshot,
+						previewModel.previewScale
+					)
+				else
+					ViewportModelRenderer.RenderBundle(previewViewport, previewModel.bundleModel)
+				end
 			end
 		end
 	end
 
 	self._previewRenderKey = renderKey
 	self:_applyPreviewLabelStyles(previewModel)
+	self:_syncPreviewLabelLayout(previewModel.itemType)
 	self._ui.previewLabels.Bundle.Text = previewModel.inventoryBundleText or previewModel.bundleText
 	self._ui.previewLabels.Part.Text = previewModel.partText
 	self._ui.previewLabels.Rarity.Text = previewModel.rarityText
@@ -2167,7 +2378,7 @@ function InventoryController:_getSellAllEligibleCount(): number
 	return count
 end
 
-function InventoryController:_buildSellWarningTitle(): string
+function InventoryController:_buildSellAllConfirmationMessage(): string
 	local eligibleCount = self:_getSellAllEligibleCount()
 	if eligibleCount <= 0 then
 		return "No unfavorited, unequipped body parts are available to sell."
@@ -2177,19 +2388,6 @@ function InventoryController:_buildSellWarningTitle(): string
 		"Sell %s unfavorited, unequipped body parts? Favorites and equipped items will stay.",
 		formatWholeNumber(eligibleCount)
 	)
-end
-
-function InventoryController:_setSellWarningVisible(isVisible: boolean)
-	local warningFrame = self._ui.sellWarningFrame
-	if not warningFrame then
-		return
-	end
-
-	if isVisible and self._ui.sellWarningTitle then
-		self._ui.sellWarningTitle.Text = self:_buildSellWarningTitle()
-	end
-
-	warningFrame.Visible = isVisible
 end
 
 function InventoryController:_getPendingPotionSellRecord(): (string?, OwnedPotionRecord?)
@@ -2295,7 +2493,8 @@ function InventoryController:_confirmPotionSell()
 end
 
 function InventoryController:_syncSecondaryActionButtons()
-	local hasOwnedSelection = self:_getPreviewOwnedRecord() ~= nil
+	local selectedRecord = self:_getPreviewOwnedRecord()
+	local hasOwnedSelection = selectedRecord ~= nil
 	local isAuraSelection = self._previewState ~= nil and self._previewState.itemType == "aura"
 	local layoutDefaults = self._previewSecondaryActionButtonLayouts
 	local favoriteButton = self._ui.favoriteButton
@@ -2307,6 +2506,12 @@ function InventoryController:_syncSecondaryActionButtons()
 		end
 		favoriteButton.Active = hasOwnedSelection
 		favoriteButton.AutoButtonColor = false
+
+		local buttonText = favoriteButton:FindFirstChild("TextLabel")
+		if buttonText and buttonText:IsA("TextLabel") then
+			buttonText.Text = if selectedRecord and selectedRecord.isFavorite == true then "Unfavorite" else "Favorite"
+			buttonText.TextTransparency = if hasOwnedSelection then 0 else 0.35
+		end
 	end
 
 	local sellButton = self._ui.sellButton
@@ -2620,15 +2825,13 @@ function InventoryController:_applyLoadoutState(state: BodyPartClientState?)
 	end
 	self:_syncSlotButtons()
 	if self._loadoutState and self._loadoutState.autoSizeEnabled ~= nil then
-		local isEnabled = self._loadoutState.autoSizeEnabled == true
+		local autoSizeEnabled = self._loadoutState.autoSizeEnabled == true
+		local isEnabled = self:_getResolvedNormalSizeEnabled(autoSizeEnabled)
 		local shouldAnimate = self._autoSizeStateHydrated
 			and self._autoSizeVisualState ~= nil
 			and self._autoSizeVisualState ~= isEnabled
-		self:_syncAutoSizeButton(isEnabled, shouldAnimate)
+		self:_syncAutoSizeButton(autoSizeEnabled, shouldAnimate)
 		self._autoSizeStateHydrated = true
-	end
-	if self._ui.sellWarningFrame and self._ui.sellWarningFrame.Visible then
-		self:_setSellWarningVisible(true)
 	end
 	self:_syncPotionSellModal()
 end
@@ -3006,8 +3209,12 @@ function InventoryController:_sellPreviewedItem()
 	self:_applyLoadoutState(result.state)
 end
 
-function InventoryController:_openSellWarning()
-	self:_setSellWarningVisible(true)
+function InventoryController:_promptSellAllConfirmation()
+	if ConfirmationWarning.Prompt(self:_buildSellAllConfirmationMessage()) ~= true then
+		return
+	end
+
+	self:_confirmSellAll()
 end
 
 function InventoryController:_confirmSellAll()
@@ -3036,7 +3243,6 @@ function InventoryController:_confirmSellAll()
 		return
 	end
 
-	self:_setSellWarningVisible(false)
 	showNotification(tostring(result.message or "Sold unfavorited body parts."))
 	self:_applyLoadoutState(result.state)
 end
@@ -3071,6 +3277,8 @@ end
 function InventoryController:_bindSlotButtons()
 	for region, button in pairs(self._ui.slotButtons) do
 		UIController:CreateButton(button, function()
+			self:_applyFilterRegion(region)
+
 			local equipped = self._loadoutState and self._loadoutState.equipped
 			local entry = equipped and equipped[region]
 			if entry then
@@ -3078,19 +3286,21 @@ function InventoryController:_bindSlotButtons()
 				return
 			end
 
-			self:_applyFilterRegion(region)
+			self:_clearPreview()
 		end)
 	end
 
 	local auraButton = self._ui.auraSlotButton
 	if auraButton then
 		UIController:CreateButton(auraButton, function()
+			self:_applySpecialFilter("aura")
+
 			if self._equippedAuraOwnedId then
 				self:_setPreviewForAura()
 				return
 			end
 
-			self:_applySpecialFilter("aura")
+			self:_clearPreview()
 		end)
 	end
 end
@@ -3101,7 +3311,10 @@ function InventoryController:_bindOpenButton(openButton: GuiButton)
 		FrameController:ToggleFrame(WINDOW_NAME)
 		if not wasOpen then
 			task.defer(function()
+				self._selectedFilterRegion = nil
+				self._selectedSpecialFilter = nil
 				self:_markInventoryRecordsDirty()
+				self:_syncFilterButtons()
 				self:_syncList()
 				self:_syncCharacterViewport()
 				self:_syncPreview()
@@ -3137,7 +3350,10 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 	local previewHolder = inventoryRoot:WaitForChild("ItemPreviewHolder", 30)
 	local previewViewport = previewHolder:WaitForChild("ViewportFrame", 30)
 	local previewIcon = previewHolder:WaitForChild("PreviewIcon", 30)
-	local previewDetails = previewHolder:WaitForChild("Frame", 30)
+	local previewInfoFrame = previewHolder:WaitForChild("Info", 30)
+	local previewStatsFrame = previewHolder:WaitForChild("Stats", 30)
+	local infoViewButton = previewHolder:WaitForChild("InfoViewButton", 30)
+	local statsViewButton = previewHolder:WaitForChild("StatsViewButton", 30)
 	local favoriteButton = previewHolder:WaitForChild("FavoriteButton", 30)
 	local sellButton = previewHolder:WaitForChild("SellButton", 30)
 	local favoriteButtonLayout = captureGuiButtonLayout(favoriteButton)
@@ -3147,14 +3363,11 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 	local autoSizeButton = characterRoot:WaitForChild("GiftButton", 30)
 	local autoSizeLabel = autoSizeButton:WaitForChild("Usage", 30)
 	local sellAllButton = characterRoot:WaitForChild("SellAllButton", 30)
+	local equipBestButton = characterRoot:WaitForChild("EquipBest", 30)
 	local topBar = inventoryRoot:WaitForChild("TopBar", 30)
 	local topBarButtons = topBar:WaitForChild("ItemTypes", 30)
-	local sellWarningFrame = modalRoot:WaitForChild("SellWarningFrame", 30)
 	local potionSellFrame = modalRoot:WaitForChild("PotionSellFrame", 30)
 	local openButton = mainInterface:WaitForChild("Main", 30):WaitForChild("ExtraButtons", 30):WaitForChild("Inventory", 30)
-	local sellWarningTitle = sellWarningFrame:WaitForChild("Title", 30)
-	local sellWarningConfirm = sellWarningFrame:WaitForChild("Confirm", 30)
-	local sellWarningNevermind = sellWarningFrame:WaitForChild("Nevermind", 30)
 	local potionSellTitle = potionSellFrame:WaitForChild("Title", 30)
 	local potionSellOwned = potionSellFrame:WaitForChild("Owned", 30)
 	local potionSellQuantity = potionSellFrame:WaitForChild("Quantity", 30)
@@ -3170,19 +3383,20 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		and previewHolder:IsA("Frame")
 		and previewViewport:IsA("ViewportFrame")
 		and previewIcon:IsA("ImageLabel")
+		and previewInfoFrame:IsA("Frame")
+		and previewStatsFrame:IsA("Frame")
+		and infoViewButton:IsA("GuiButton")
+		and statsViewButton:IsA("GuiButton")
 		and favoriteButton:IsA("GuiButton")
 		and sellButton:IsA("GuiButton")
 		and characterRoot:IsA("Frame")
 		and characterFrame:IsA("ViewportFrame")
 		and autoSizeButton:IsA("GuiButton")
 		and sellAllButton:IsA("GuiButton")
+		and equipBestButton:IsA("GuiButton")
 		and topBar:IsA("Frame")
 		and topBarButtons:IsA("Frame")
-		and sellWarningFrame:IsA("GuiObject")
 		and potionSellFrame:IsA("GuiObject")
-		and sellWarningTitle:IsA("TextLabel")
-		and sellWarningConfirm:IsA("GuiButton")
-		and sellWarningNevermind:IsA("GuiButton")
 		and potionSellTitle:IsA("TextLabel")
 		and potionSellOwned:IsA("TextLabel")
 		and potionSellQuantity:IsA("TextLabel")
@@ -3249,21 +3463,26 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		previewHolder = previewHolder,
 		previewViewport = previewViewport,
 		previewIcon = previewIcon,
+		infoFrame = previewInfoFrame,
+		statsFrame = previewStatsFrame,
+		infoViewButton = infoViewButton,
+		statsViewButton = statsViewButton,
 		favoriteButton = favoriteButton,
 		sellButton = sellButton,
 		characterViewport = characterFrame,
 		autoSizeButton = autoSizeButton,
 		autoSizeLabel = autoSizeLabel,
+		equipBestButton = equipBestButton,
 		previewLabels = {
-			Bundle = previewDetails:WaitForChild("Bundle", 30),
-			Part = previewDetails:WaitForChild("Part", 30),
-			Rarity = previewDetails:WaitForChild("Rarity", 30),
-			Mutation = previewDetails:WaitForChild("Mutation", 30),
-			Content = previewDetails:WaitForChild("Content", 30),
-			Existing = previewDetails:WaitForChild("Existing", 30),
-			Cash = previewDetails:WaitForChild("Cash", 30),
-			Chance = previewDetails:WaitForChild("Chance", 30),
-			EverRolled = previewDetails:WaitForChild("EverRolled", 30),
+			Bundle = previewInfoFrame:WaitForChild("Bundle", 30),
+			Part = previewInfoFrame:WaitForChild("Part", 30),
+			Rarity = previewInfoFrame:WaitForChild("Rarity", 30),
+			Mutation = previewInfoFrame:WaitForChild("Mutation", 30),
+			Content = previewInfoFrame:WaitForChild("Content", 30),
+			Existing = previewInfoFrame:WaitForChild("Existing", 30),
+			Cash = previewInfoFrame:WaitForChild("Cash", 30),
+			Chance = previewInfoFrame:WaitForChild("Chance", 30),
+			EverRolled = previewInfoFrame:WaitForChild("EverRolled", 30),
 		},
 		filterButtons = filterButtons,
 		auraButtons = auraButtons,
@@ -3275,10 +3494,6 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		auraSlotButton = auraSlotButton,
 		equipButton = previewHolder:WaitForChild("EquipButton", 30),
 		sellAllButton = sellAllButton,
-		sellWarningFrame = sellWarningFrame,
-		sellWarningTitle = sellWarningTitle,
-		sellWarningConfirm = sellWarningConfirm,
-		sellWarningNevermind = sellWarningNevermind,
 		potionSellFrame = potionSellFrame,
 		potionSellTitle = potionSellTitle,
 		potionSellOwned = potionSellOwned,
@@ -3309,12 +3524,10 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		sell = sellButtonLayout,
 		auraFavorite = buildHorizontalSpanLayout(favoriteButtonLayout, sellButtonLayout),
 	}
+	self._previewLabelLayouts = capturePreviewLabelLayouts(self._ui.previewLabels)
 	self._previewEverRolledNativeText = self._ui.previewLabels.EverRolled.Text
 	self._previewEverRolledSuffixText = extractTrailingLabelText(self._previewEverRolledNativeText, "Ever Rolled")
 
-	if sellWarningFrame.ZIndex < SELL_WARNING_Z_INDEX then
-		shiftGuiTreeZIndex(sellWarningFrame, SELL_WARNING_Z_INDEX - sellWarningFrame.ZIndex)
-	end
 	if potionSellFrame.ZIndex < SELL_WARNING_Z_INDEX then
 		shiftGuiTreeZIndex(potionSellFrame, SELL_WARNING_Z_INDEX - potionSellFrame.ZIndex)
 	end
@@ -3323,8 +3536,8 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 	self._scrollingFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
 	self._inventoryRoot.AnchorPoint = Vector2.new(INVENTORY_DEFAULT_ANCHOR_X, INVENTORY_ANCHOR_Y)
 	self._ui.previewHolder.Visible = false
+	self:_setPreviewTab("info")
 	self._ui.previewIcon.Visible = false
-	self._ui.sellWarningFrame.Visible = false
 	self._ui.potionSellFrame.Visible = false
 end
 
@@ -3352,17 +3565,20 @@ function InventoryController:OnStart()
 	UIController:CreateButton(self._ui.sellButton, function()
 		self:_sellPreviewedItem()
 	end)
+	UIController:CreateButton(self._ui.infoViewButton, function()
+		self:_setPreviewTab("info")
+	end)
+	UIController:CreateButton(self._ui.statsViewButton, function()
+		self:_setPreviewTab("stats")
+	end)
 	UIController:CreateButton(self._ui.autoSizeButton, function()
 		self:_toggleAutoSize()
 	end)
+	UIController:CreateButton(self._ui.equipBestButton, function()
+		self:_equipBestLoadout()
+	end)
 	UIController:CreateButton(self._ui.sellAllButton, function()
-		self:_openSellWarning()
-	end)
-	UIController:CreateButton(self._ui.sellWarningNevermind, function()
-		self:_setSellWarningVisible(false)
-	end)
-	UIController:CreateButton(self._ui.sellWarningConfirm, function()
-		self:_confirmSellAll()
+		self:_promptSellAllConfirmation()
 	end)
 	UIController:CreateButton(self._ui.potionSellNevermind, function()
 		self:_setPotionSellModalVisible(false)
@@ -3406,11 +3622,12 @@ function InventoryController:OnStart()
 		end
 
 		if key == AUTO_SIZE_ENABLED_KEY then
-			local isEnabled = self:_getResolvedAutoSizeEnabled()
+			local autoSizeEnabled = self:_getResolvedAutoSizeEnabled()
+			local isEnabled = self:_getResolvedNormalSizeEnabled(autoSizeEnabled)
 			local shouldAnimate = self._autoSizeStateHydrated
 				and self._autoSizeVisualState ~= nil
 				and self._autoSizeVisualState ~= isEnabled
-			self:_syncAutoSizeButton(isEnabled, shouldAnimate)
+			self:_syncAutoSizeButton(autoSizeEnabled, shouldAnimate)
 			self._autoSizeStateHydrated = true
 			return
 		end

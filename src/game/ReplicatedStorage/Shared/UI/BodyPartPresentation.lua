@@ -1,12 +1,15 @@
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
+local PreviewAppearanceRegistry = require(ReplicatedStorage.Shared.Character.PreviewAppearanceRegistry)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local MutationCovers = require(ReplicatedStorage.Shared.Config.MutationCovers)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local SizeIcons = require(ReplicatedStorage.Shared.Config.SizeIcons)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
+local LOCAL_PLAYER = Players.LocalPlayer
 
 local ITEM_COUNT_COLOR = Color3.fromRGB(205, 200, 0)
 local DEFAULT_MUTATION_ID = MutationConfig.GetDefault().id
@@ -163,13 +166,51 @@ local function getRarityTemplatesFolder(): Folder?
 	return nil
 end
 
-local function resolveRarityTemplateStyle(rarity: string, setConfig: any): { textColor: Color3, fontFace: Font? }
+local function resolveRarityTemplateLabel(rarity: string): TextLabel?
 	local rarityTemplates = getRarityTemplatesFolder()
 	local rarityTemplate = rarityTemplates and rarityTemplates:FindFirstChild(rarity) or nil
 	if rarityTemplate and rarityTemplate:IsA("TextLabel") then
+		return rarityTemplate
+	end
+
+	return nil
+end
+
+local function replaceSupportedTextAdornments(targetLabel: TextLabel, sourceLabel: TextLabel)
+	for _, child in ipairs(targetLabel:GetChildren()) do
+		if child:IsA("UIGradient") or child:IsA("UIStroke") then
+			child:Destroy()
+		end
+	end
+
+	for _, child in ipairs(sourceLabel:GetChildren()) do
+		if child:IsA("UIGradient") or child:IsA("UIStroke") then
+			local clonedChild = child:Clone()
+			clonedChild.Parent = targetLabel
+		end
+	end
+end
+
+local function resolveRarityTemplateStyle(
+	rarity: string,
+	setConfig: any
+): {
+	textColor: Color3,
+	fontFace: Font?,
+	textStrokeColor: Color3?,
+	textStrokeTransparency: number?,
+	richText: boolean?,
+	templateLabel: TextLabel?,
+}
+	local rarityTemplate = resolveRarityTemplateLabel(rarity)
+	if rarityTemplate then
 		return {
 			textColor = rarityTemplate.TextColor3,
 			fontFace = rarityTemplate.FontFace,
+			textStrokeColor = rarityTemplate.TextStrokeColor3,
+			textStrokeTransparency = rarityTemplate.TextStrokeTransparency,
+			richText = rarityTemplate.RichText,
+			templateLabel = rarityTemplate,
 		}
 	end
 
@@ -182,6 +223,7 @@ local function resolveRarityTemplateStyle(rarity: string, setConfig: any): { tex
 	return {
 		textColor = if rollDisplay and typeof(rollDisplay.color) == "Color3" then rollDisplay.color else EQUIPPED_COLOR,
 		fontFace = fallbackFontFace,
+		templateLabel = nil,
 	}
 end
 
@@ -277,6 +319,104 @@ function BodyPartPresentation.GetRecordPassiveIncomePerSecond(record: any, piece
 	return getRecordPassiveIncomePerSecond(record, piece)
 end
 
+function BodyPartPresentation.FormatTemplatedLabelText(templateText: any, value: any): string
+	local formattedValue = string.match(tostring(value or ""), "^%s*(.-)%s*$") or ""
+	local normalizedTemplate = if typeof(templateText) == "string"
+		then string.match(templateText, "^%s*(.-)%s*$") or ""
+		else ""
+
+	if formattedValue == "" then
+		return normalizedTemplate
+	end
+
+	if normalizedTemplate == "" then
+		return formattedValue
+	end
+
+	if string.find(normalizedTemplate, "%%s", 1, true) then
+		local ok, formattedText = pcall(string.format, normalizedTemplate, formattedValue)
+		if ok and typeof(formattedText) == "string" then
+			return formattedText
+		end
+	end
+
+	for _, delimiter in ipairs({ ":", "-", "|" }) do
+		local delimiterStart, delimiterEnd = string.find(normalizedTemplate, delimiter, 1, true)
+		if delimiterStart and delimiterEnd then
+			local prefixText = string.match(string.sub(normalizedTemplate, 1, delimiterEnd), "^%s*(.-)%s*$") or ""
+			if prefixText ~= "" then
+				return string.format("%s %s", prefixText, formattedValue)
+			end
+		end
+	end
+
+	local leadingText = string.match(normalizedTemplate, "^(.*%s)%S+$")
+	if typeof(leadingText) == "string" and leadingText ~= "" then
+		return leadingText .. formattedValue
+	end
+
+	return formattedValue
+end
+
+function BodyPartPresentation.ApplySetRarityTemplateToLabel(
+	targetLabel: TextLabel,
+	setConfig: any,
+	displayRarity: string?,
+	fallbackColor: Color3?
+)
+	local resolvedDisplayRarity = if typeof(displayRarity) == "string" and displayRarity ~= ""
+		then displayRarity
+		else tostring(setConfig and setConfig.rollDisplay and setConfig.rollDisplay.rarity or "Unknown")
+	local style = resolveRarityTemplateStyle(resolvedDisplayRarity, setConfig)
+
+	targetLabel.TextColor3 = style.textColor
+	if typeof(style.fontFace) == "Font" then
+		targetLabel.FontFace = style.fontFace
+	end
+	if typeof(style.textStrokeColor) == "Color3" then
+		targetLabel.TextStrokeColor3 = style.textStrokeColor
+	end
+	if typeof(style.textStrokeTransparency) == "number" then
+		targetLabel.TextStrokeTransparency = style.textStrokeTransparency
+	end
+	if typeof(style.richText) == "boolean" then
+		targetLabel.RichText = style.richText
+	end
+
+	local templateLabel = style.templateLabel
+	if templateLabel then
+		replaceSupportedTextAdornments(targetLabel, templateLabel)
+	elseif typeof(fallbackColor) == "Color3" then
+		targetLabel.TextColor3 = fallbackColor
+	end
+
+	return style
+end
+
+function BodyPartPresentation.ResolveSetRarityStyle(
+	setConfig: any,
+	displayRarity: string?,
+	fallbackColor: Color3?
+)
+	local resolvedDisplayRarity = if typeof(displayRarity) == "string" and displayRarity ~= ""
+		then displayRarity
+		else tostring(setConfig and setConfig.rollDisplay and setConfig.rollDisplay.rarity or "Unknown")
+	local style = resolveRarityTemplateStyle(resolvedDisplayRarity, setConfig)
+	local baseFillColor = style.textColor
+	if typeof(baseFillColor) ~= "Color3" then
+		baseFillColor = if typeof(fallbackColor) == "Color3" then fallbackColor else EQUIPPED_COLOR
+	end
+
+	return {
+		displayRarity = resolvedDisplayRarity,
+		textColor = style.textColor,
+		fontFace = style.fontFace,
+		accentColor = baseFillColor,
+		baseFillColor = baseFillColor,
+		selectedFillColor = brightenCardFill(baseFillColor, 0.3),
+	}
+end
+
 function BodyPartPresentation.FormatInventoryNameText(pieceDisplayName: any, record: any): string
 	local mutationId, _, mutationColor = resolveMutationPresentation(record)
 	local safePieceDisplayName = escapeRichText(pieceDisplayName)
@@ -310,18 +450,16 @@ function BodyPartPresentation.ResolveBodyPartRarityStyle(payload: any)
 	local displayRarity = if record and typeof(record.displayRarity) == "string" and record.displayRarity ~= ""
 		then record.displayRarity
 		else tostring(setConfig and setConfig.rollDisplay and setConfig.rollDisplay.rarity or "Unknown")
-	local style = resolveRarityTemplateStyle(displayRarity, setConfig)
-	local baseFillColor = style.textColor
-	local selectedFillColor = brightenCardFill(baseFillColor, 0.3)
+	local style = BodyPartPresentation.ResolveSetRarityStyle(setConfig, displayRarity)
 
 	return {
-		displayRarity = displayRarity,
+		displayRarity = style.displayRarity,
 		setConfig = setConfig,
 		textColor = style.textColor,
 		fontFace = style.fontFace,
-		accentColor = baseFillColor,
-		baseFillColor = baseFillColor,
-		selectedFillColor = selectedFillColor,
+		accentColor = style.accentColor,
+		baseFillColor = style.baseFillColor,
+		selectedFillColor = style.selectedFillColor,
 	}
 end
 
@@ -372,9 +510,6 @@ function BodyPartPresentation.BuildPreviewPresentation(payload: any)
 	local compactSerialNumber = if serialNumber
 		then NumberFormatter.Format(math.max(1, math.floor(serialNumber)))
 		else nil
-	local bundleSuffix = if compactSerialNumber
-		then string.format(" (#%s)", compactSerialNumber)
-		else ""
 	local passiveIncomePerSecond = getRecordPassiveIncomePerSecond(record, piece)
 	local rarityStyle = BodyPartPresentation.ResolveBodyPartRarityStyle({
 		record = record,
@@ -389,13 +524,19 @@ function BodyPartPresentation.BuildPreviewPresentation(payload: any)
 		itemType = "bodyPart",
 		pieceId = piece.id,
 		piece = piece,
+		region = piece.region,
 		setConfig = setConfig,
 		passiveIncomePerSecond = passiveIncomePerSecond,
+		previewScale = previewScale,
+		appearanceUserId = tonumber(source.appearanceUserId)
+			or tonumber(source.userId)
+			or tonumber(record and record.userId)
+			or tonumber(entry and entry.userId)
+			or (LOCAL_PLAYER and LOCAL_PLAYER.UserId or nil),
 		bundleText = string.format(
-			'Bundle: <font color="%s">%s</font>%s',
+			'Bundle: <font color="%s">%s</font>',
 			toRichTextColor(rarityTextColor),
-			tostring(bundleName),
-			bundleSuffix
+			tostring(bundleName)
 		),
 		inventoryBundleText = string.format(
 			'Bundle: <font color="%s">%s</font>',
@@ -445,6 +586,9 @@ function BodyPartPresentation.BuildBundleCardPayload(previewPresentation: any, o
 		nameText = previewPresentation.cardNameText,
 		usageText = previewPresentation.cardUsageText,
 		bundleModel = previewPresentation.bundleModel,
+		region = previewPresentation.region,
+		previewScale = previewPresentation.previewScale,
+		appearanceUserId = previewPresentation.appearanceUserId,
 		cardAccentColor = previewPresentation.cardAccentColor,
 		baseFillColor = previewPresentation.baseFillColor,
 		selectedFillColor = previewPresentation.selectedFillColor,
@@ -456,7 +600,7 @@ function BodyPartPresentation.BuildBundleCardPayload(previewPresentation: any, o
 
 	if typeof(overrides) == "table" then
 		for key, value in pairs(overrides) do
-			payload[key] = value
+		payload[key] = value
 		end
 	end
 
@@ -659,7 +803,18 @@ function BodyPartPresentation.PopulateBundleCard(cardRoot: Instance, payload: an
 	if viewport and viewport:IsA("ViewportFrame") then
 		viewport.Visible = not shouldUseIcon
 		if source.bundleModel and source.bundleModel:IsA("Model") then
-			ViewportModelRenderer.RenderBundle(viewport, source.bundleModel)
+			local appearanceSnapshot = PreviewAppearanceRegistry.GetSnapshotForUserId(source.appearanceUserId)
+			if typeof(source.region) == "string" and source.region ~= "" and appearanceSnapshot ~= nil then
+				ViewportModelRenderer.RenderBodyPartPreview(
+					viewport,
+					source.bundleModel,
+					source.region,
+					appearanceSnapshot,
+					source.previewScale
+				)
+			else
+				ViewportModelRenderer.RenderBundle(viewport, source.bundleModel)
+			end
 		else
 			ViewportModelRenderer.Clear(viewport)
 		end
@@ -668,6 +823,11 @@ function BodyPartPresentation.PopulateBundleCard(cardRoot: Instance, payload: an
 	local favoriteIcon = findFirstGuiChildInCard(cardRoot, { "FavoriteIcon" })
 	if favoriteIcon then
 		favoriteIcon.Visible = source.favoriteVisible == true
+	end
+
+	local equippedBorder = findFirstGuiChildInCard(cardRoot, { "EquippedBorder" })
+	if equippedBorder then
+		equippedBorder.Visible = source.equippedVisible == true
 	end
 
 	local mutationCover = findFirstGuiChildInCard(cardRoot, { "MutationCover" })

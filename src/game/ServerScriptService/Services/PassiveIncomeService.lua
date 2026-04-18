@@ -1,5 +1,6 @@
 local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
+local PotionService = require(script.Parent.PotionService)
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local PerfStats = require(ReplicatedStorage.Shared.Diagnostics.PerfStats)
 
@@ -33,8 +34,11 @@ end
 
 local function refreshPassiveIncomeRate(player: Player, state: PassiveIncomePlayerState?)
 	local resolvedState = state or getOrCreatePlayerState(player)
-	local bonuses = BodyPartService:GetComputedLoadoutBonuses(player)
-	resolvedState.passiveIncomePerSecond = math.max(0, tonumber(bonuses.passiveIncomePerSecond) or 0)
+	local loadoutBonuses = BodyPartService:GetComputedLoadoutBonuses(player)
+	local potionBonuses = PotionService:GetRuntimeBonuses(player)
+	local basePassiveIncomePerSecond = math.max(0, tonumber(loadoutBonuses.passiveIncomePerSecond) or 0)
+	local passiveIncomeMultiplier = math.max(1, tonumber(potionBonuses.passiveIncomeMultiplier) or 1)
+	resolvedState.passiveIncomePerSecond = basePassiveIncomePerSecond * passiveIncomeMultiplier
 end
 
 local function processPlayer(player: Player, state: PassiveIncomePlayerState)
@@ -65,6 +69,9 @@ function PassiveIncomeService:OnStart()
 
 	self._loopActive = true
 	BodyPartService.LoadoutChanged:Connect(function(player: Player)
+		refreshPassiveIncomeRate(player)
+	end)
+	PotionService.StateChanged:Connect(function(player: Player)
 		refreshPassiveIncomeRate(player)
 	end)
 	DataService.EquippedAuraChanged:Connect(function(player: Player)

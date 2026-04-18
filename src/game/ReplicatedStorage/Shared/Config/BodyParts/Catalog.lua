@@ -46,6 +46,8 @@ export type RollDisplay = {
 export type SetConfig = {
 	id: string,
 	displayName: string,
+	bundleLink: string?,
+	bundleId: number?,
 	rollDisplay: RollDisplay,
 	piecesByRegion: { [BodyRegion]: string },
 	fullSetBonus: SetBonus,
@@ -65,6 +67,15 @@ local REGION_ORDER: { BodyRegion } = {
 	"RightArm",
 	"LeftLeg",
 	"RightLeg",
+}
+
+local REGION_LABELS: { [BodyRegion]: string } = {
+	Head = "Head",
+	Torso = "Torso",
+	LeftArm = "Left Arm",
+	RightArm = "Right Arm",
+	LeftLeg = "Left Leg",
+	RightLeg = "Right Leg",
 }
 
 local VALID_REGIONS: { [string]: boolean } = {}
@@ -183,6 +194,10 @@ local function resolveBundleModelForPiece(piece: PieceConfig): Model?
 	return nil
 end
 
+local function getExpectedPieceDisplayName(setDisplayName: string, region: BodyRegion): string
+	return string.format("%s %s", setDisplayName, REGION_LABELS[region] or tostring(region))
+end
+
 local function validatePieceConfig(pieceKey: string, piece: any, seenPieceIds: { [string]: boolean }, errors: { string })
 	if typeof(piece) ~= "table" then
 		pushError(errors, `Piece "{pieceKey}" must be a table`)
@@ -249,6 +264,12 @@ local function validateSetConfig(setKey: string, setConfig: any, piecesById: { [
 	if typeof(setConfig.displayName) ~= "string" or setConfig.displayName == "" then
 		pushError(errors, `Set "{setKey}" is missing a displayName`)
 	end
+	if setConfig.bundleLink ~= nil and (typeof(setConfig.bundleLink) ~= "string" or setConfig.bundleLink == "") then
+		pushError(errors, `Set "{setKey}" must provide bundleLink as a non-empty string when present`)
+	end
+	if setConfig.bundleId ~= nil and (typeof(setConfig.bundleId) ~= "number" or setConfig.bundleId <= 0) then
+		pushError(errors, `Set "{setKey}" must provide bundleId as a positive number when present`)
+	end
 
 	if typeof(setConfig.rollDisplay) ~= "table" then
 		pushError(errors, `Set "{setKey}" must provide rollDisplay`)
@@ -302,6 +323,15 @@ local function validateSetConfig(setKey: string, setConfig: any, piecesById: { [
 					end
 					if piece.setId ~= setKey then
 						pushError(errors, `Piece "{pieceId}" must point back to set "{setKey}"`)
+					end
+					if typeof(setConfig.displayName) == "string" then
+						local expectedDisplayName = getExpectedPieceDisplayName(setConfig.displayName, region)
+						if piece.displayName ~= expectedDisplayName then
+							pushError(
+								errors,
+								`Piece "{pieceId}" displayName "{piece.displayName}" must match "{expectedDisplayName}"`
+							)
+						end
 					end
 				end
 

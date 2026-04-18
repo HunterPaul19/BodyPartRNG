@@ -9,27 +9,28 @@ export type MerchantShopEntry = {
 	sortOrder: number,
 	appearanceChance: number,
 	stockPerRefresh: number,
+	priceInTimeShards: number,
 }
 
 local TIER_STOCK_BY_TIER = {
 	[1] = {
-		appearanceChance = 1.00,
+		appearanceChance = 0.50,
 		stockPerRefresh = 3,
 	},
 	[2] = {
-		appearanceChance = 0.70,
+		appearanceChance = 0.30,
 		stockPerRefresh = 2,
 	},
 	[3] = {
-		appearanceChance = 0.45,
+		appearanceChance = 0.167,
 		stockPerRefresh = 2,
 	},
 	[4] = {
-		appearanceChance = 0.20,
+		appearanceChance = 0.028,
 		stockPerRefresh = 1,
 	},
 	[5] = {
-		appearanceChance = 0.08,
+		appearanceChance = 0.021,
 		stockPerRefresh = 1,
 	},
 }
@@ -67,17 +68,40 @@ for _, potionConfig in ipairs(PotionConfig.GetAll()) do
 	local entry: MerchantShopEntry = {
 		potionId = potionConfig.id,
 		shopLabel = potionConfig.label,
-		description = familyDescriptions and familyDescriptions[potionConfig.tier]
+		description = potionConfig.merchantDescription
+			or potionConfig.effectDescription
+			or (familyDescriptions and familyDescriptions[potionConfig.tier])
 			or string.format("%s in short supply.", potionConfig.label),
 		sortOrder = potionConfig.sortOrder,
-		appearanceChance = tierStock and tierStock.appearanceChance or 0,
-		stockPerRefresh = tierStock and tierStock.stockPerRefresh or 0,
+		appearanceChance = tonumber(potionConfig.merchantAppearanceChance)
+			or (tierStock and tierStock.appearanceChance)
+			or 0,
+		stockPerRefresh = math.max(
+			0,
+			math.floor(
+				tonumber(potionConfig.merchantStockPerRefresh)
+					or (tierStock and tierStock.stockPerRefresh)
+					or 0
+			)
+		),
+		priceInTimeShards = math.max(
+			0,
+			math.floor(tonumber(potionConfig.merchantPriceInTimeShards) or tonumber(potionConfig.buyPrice) or 0)
+		),
 	}
 
 	local frozenEntry = table.freeze(entry)
 	table.insert(ENTRIES, frozenEntry)
 	entriesByPotionId[potionConfig.id] = frozenEntry
 end
+
+table.sort(ENTRIES, function(left, right)
+	if left.sortOrder ~= right.sortOrder then
+		return left.sortOrder < right.sortOrder
+	end
+
+	return left.potionId < right.potionId
+end)
 
 function MerchantShopConfig.GetAll(): { MerchantShopEntry }
 	local results = table.create(#ENTRIES)
@@ -95,6 +119,11 @@ end
 function MerchantShopConfig.GetMaxStockForPotionId(potionId: string): number
 	local entry = MerchantShopConfig.GetByPotionId(potionId)
 	return math.max(0, math.floor(tonumber(entry and entry.stockPerRefresh) or 0))
+end
+
+function MerchantShopConfig.GetPriceInTimeShards(potionId: string): number
+	local entry = MerchantShopConfig.GetByPotionId(potionId)
+	return math.max(0, math.floor(tonumber(entry and entry.priceInTimeShards) or 0))
 end
 
 return table.freeze(MerchantShopConfig)
