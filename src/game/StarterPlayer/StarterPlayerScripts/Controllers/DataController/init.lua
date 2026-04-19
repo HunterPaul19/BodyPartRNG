@@ -4,9 +4,22 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Globals = require(ReplicatedStorage.Lists.Globals)
 local Signal = require(ReplicatedStorage.Common.Signal)
 local ReplicaController = require(ReplicatedStorage.Packages.ReplicaController)
+local sharedFolder = ReplicatedStorage:WaitForChild("Shared", 10)
+local placeProfilesFolder = if sharedFolder then sharedFolder:WaitForChild("PlaceProfiles", 10) else nil
+local placeProfileModule = if placeProfilesFolder then placeProfilesFolder:WaitForChild("PlaceProfile", 10) else nil
+
+if not (placeProfileModule and placeProfileModule:IsA("ModuleScript")) then
+	error(
+		"[DataController] ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile is missing or did not replicate in time.",
+		0
+	)
+end
+
+local PlaceProfile = require(placeProfileModule)
 
 local PLAYER = Players.LocalPlayer
 local SCOPE = Globals.SCOPE
+local REPLICA_REMOTE_EVENTS_TIMEOUT = 10
 
 local DATA = nil
 local DataReceived = Signal.new()
@@ -48,6 +61,25 @@ local function bindReplica(replica)
 end
 
 function DataController:OnStart()
+	if not PlaceProfile.RequiresPlayerDataReplica() then
+		return
+	end
+
+	local activeProfile = PlaceProfile.GetActiveProfile()
+	local placeId = math.max(0, math.floor(tonumber(game.PlaceId) or 0))
+	local replicaRemoteEvents = ReplicatedStorage:WaitForChild("ReplicaRemoteEvents", REPLICA_REMOTE_EVENTS_TIMEOUT)
+	if not (replicaRemoteEvents and replicaRemoteEvents:IsA("Folder")) then
+		error(
+			string.format(
+				"[DataController][Profile:%s][PlaceId:%d] Required ReplicatedStorage.ReplicaRemoteEvents is missing after %d seconds. Expected server-side data replication to be initialized for this place.",
+				activeProfile.id,
+				placeId,
+				REPLICA_REMOTE_EVENTS_TIMEOUT
+			),
+			0
+		)
+	end
+
 	ReplicaController.ReplicaOfClassCreated(SCOPE, bindReplica)
 	ReplicaController.RequestData()
 end

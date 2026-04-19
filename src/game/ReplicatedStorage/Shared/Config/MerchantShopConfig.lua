@@ -15,15 +15,15 @@ export type MerchantShopEntry = {
 local TIER_STOCK_BY_TIER = {
 	[1] = {
 		appearanceChance = 0.50,
-		stockPerRefresh = 3,
+		stockPerRefresh = 1,
 	},
 	[2] = {
 		appearanceChance = 0.30,
-		stockPerRefresh = 2,
+		stockPerRefresh = 1,
 	},
 	[3] = {
 		appearanceChance = 0.167,
-		stockPerRefresh = 2,
+		stockPerRefresh = 1,
 	},
 	[4] = {
 		appearanceChance = 0.028,
@@ -34,6 +34,10 @@ local TIER_STOCK_BY_TIER = {
 		stockPerRefresh = 1,
 	},
 }
+
+local function resolveStockPerRefresh(rawStockPerRefresh: any): number
+	return math.clamp(math.floor(tonumber(rawStockPerRefresh) or 0), 0, 1)
+end
 
 local FAMILY_DESCRIPTIONS = {
 	money = {
@@ -76,13 +80,10 @@ for _, potionConfig in ipairs(PotionConfig.GetAll()) do
 		appearanceChance = tonumber(potionConfig.merchantAppearanceChance)
 			or (tierStock and tierStock.appearanceChance)
 			or 0,
-		stockPerRefresh = math.max(
-			0,
-			math.floor(
-				tonumber(potionConfig.merchantStockPerRefresh)
-					or (tierStock and tierStock.stockPerRefresh)
-					or 0
-			)
+		stockPerRefresh = resolveStockPerRefresh(
+			tonumber(potionConfig.merchantStockPerRefresh)
+				or (tierStock and tierStock.stockPerRefresh)
+				or 0
 		),
 		priceInTimeShards = math.max(
 			0,

@@ -39,6 +39,10 @@ local AURA_RUNTIME_ATTRIBUTE = "BodyPartAuraManaged"
 local AURA_REAPPLY_DEBOUNCE_SECONDS = 0.15
 local APPEARANCE_TRANSFER_MANAGED_ATTRIBUTE = "AppearanceTransferApplied"
 local APPEARANCE_REFRESH_DEBOUNCE_SECONDS = 0.15
+local CHARACTER_APPEARANCE_FALLBACK_SECONDS = 8
+local CHARACTER_READY_TIMEOUT_SECONDS = 5
+local CHARACTER_READY_POLL_INTERVAL_SECONDS = 0.1
+local PLAYER_DATA_READY_TIMEOUT_SECONDS = 15
 
 local REQUIRED_R15_PARTS = {
 	"Head",
@@ -73,7 +77,19 @@ local sellOwnedRemote: RemoteFunction? = nil
 local sellAllRemote: RemoteFunction? = nil
 local updatedRemote: RemoteEvent? = nil
 local characterAddedConnections: { [Player]: RBXScriptConnection } = {}
+local characterAppearanceLoadedConnections: { [Player]: RBXScriptConnection } = {}
 local lastBodyPartScaleOverrideByPlayer: { [Player]: number? } = {}
+local playerDataReadyByPlayer: { [Player]: boolean } = {}
+local characterLifecycleStates: {
+	[Player]: {
+		currentCharacter: Model?,
+		appearanceLoadedCharacter: Model?,
+		activeRuntimeCharacter: Model?,
+		pendingRuntimeApply: boolean,
+		fallbackGeneration: number,
+		lastActivationSource: string?,
+	},
+} = {}
 local characterRuntimeWatcherStates: {
 	[Player]: {
 		character: Model,
@@ -128,6 +144,45 @@ end
 
 local function notifyLoadoutChanged(player: Player)
 	BodyPartService.LoadoutChanged:Fire(player)
+end
+
+local function getCharacterLifecycleState(player: Player)
+	local state = characterLifecycleStates[player]
+	if state then
+		return state
+	end
+
+	state = {
+		currentCharacter = nil,
+		appearanceLoadedCharacter = nil,
+		activeRuntimeCharacter = nil,
+		pendingRuntimeApply = false,
+		fallbackGeneration = 0,
+		lastActivationSource = nil,
+	}
+	characterLifecycleStates[player] = state
+	return state
+end
+
+local function waitForPlayerDataReady(player: Player, timeoutSeconds: number?): boolean
+	if playerDataReadyByPlayer[player] == true then
+		return true
+	end
+
+	local timeoutAt = os.clock() + (timeoutSeconds or PLAYER_DATA_READY_TIMEOUT_SECONDS)
+	while os.clock() < timeoutAt do
+		if player.Parent ~= Players then
+			return false
+		end
+
+		if playerDataReadyByPlayer[player] == true then
+			return true
+		end
+
+		task.wait()
+	end
+
+	return playerDataReadyByPlayer[player] == true
 end
 
 local function setCharacterBuildLock(character: Model?, isLocked: boolean)
@@ -632,20 +687,76 @@ getCharacter = function(player: Player): Model?
 	return nil
 end
 
-waitForCharacterReady = function(character: Model): boolean
-	local humanoid = character:FindFirstChildOfClass("Humanoid") or character:WaitForChild("Humanoid", 5)
-	if not (humanoid and humanoid:IsA("Humanoid") and humanoid.RigType == Enum.HumanoidRigType.R15) then
-		return false
+local function getCharacterRigNotReadyMessage(reason: string?, reasonKind: string?): string
+	if reasonKind == "placeholder_character" then
+		return "Body part runtime is waiting for the finalized avatar appearance to load."
 	end
 
+	if typeof(reason) == "string" and reason ~= "" then
+		return string.format("Body part runtime is waiting for the character rig to finish assembling. %s", reason)
+	end
+
+	return "Body part runtime is waiting for the character rig to finish assembling."
+end
+
+local function validateCharacterReadyNow(character: Model): (boolean, string?, string?)
+	if not (character and character:IsA("Model") and character.Parent) then
+		return false, "Character is not available.", "missing_character"
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not (humanoid and humanoid:IsA("Humanoid")) then
+		return false, "Character is missing a Humanoid.", "missing_humanoid"
+	end
+
+	if humanoid.RigType ~= Enum.HumanoidRigType.R15 then
+		return false, "Character is not using an R15 rig.", "non_r15_rig"
+	end
+
+	local missingPartNames = {}
 	for _, partName in ipairs(REQUIRED_R15_PARTS) do
-		local bodyPart = character:FindFirstChild(partName) or character:WaitForChild(partName, 5)
-		if not bodyPart then
-			return false
+		local bodyPart = character:FindFirstChild(partName)
+		if not (bodyPart and bodyPart:IsA("BasePart")) then
+			table.insert(missingPartNames, partName)
 		end
 	end
 
-	return true
+	if #missingPartNames > 0 then
+		return false, string.format(
+			"Character is missing required R15 body parts: %s.",
+			table.concat(missingPartNames, ", ")
+		), "missing_required_parts"
+	end
+
+	local canBuildReferencePose, referencePoseError, referencePoseErrorKind = BodyPartVisuals.ValidateReferencePose(character)
+	if not canBuildReferencePose then
+		return false, referencePoseError or "Character rig joints are not fully assembled yet.", referencePoseErrorKind
+	end
+
+	return true, nil, nil
+end
+
+waitForCharacterReady = function(character: Model, timeoutSeconds: number?): (boolean, string?, string?)
+	local timeoutAt = os.clock() + math.max(0, tonumber(timeoutSeconds) or 0)
+	local lastError = nil
+	local lastErrorKind = nil
+
+	while true do
+		local isReady, readyError, readyErrorKind = validateCharacterReadyNow(character)
+		if isReady then
+			return true, nil, nil
+		end
+
+		lastError = readyError
+		lastErrorKind = readyErrorKind
+		if os.clock() >= timeoutAt then
+			break
+		end
+
+		task.wait(CHARACTER_READY_POLL_INTERVAL_SECONDS)
+	end
+
+	return false, lastError, lastErrorKind
 end
 
 local function getBaseRig(): Model?
@@ -1336,8 +1447,9 @@ function BodyPartService:CanApplyCurrentVisualState(player: Player, equippedAura
 	if not character then
 		return true, nil
 	end
-	if not waitForCharacterReady(character) then
-		return true, nil
+	local isCharacterReady, characterReadyError, characterReadyErrorKind = waitForCharacterReady(character)
+	if not isCharacterReady then
+		return false, getCharacterRigNotReadyMessage(characterReadyError, characterReadyErrorKind)
 	end
 
 	local request, requestError = self:BuildCurrentVisualApplyRequest(player, equippedAuraIdOverride)
@@ -1372,6 +1484,16 @@ function BodyPartService:ApplySessionLoadout(player: Player): (boolean, string?)
 			detail = string.format("%s:no_character", player.Name),
 		})
 		return true, nil
+	end
+
+	local isCharacterReady, characterReadyError, characterReadyErrorKind =
+		waitForCharacterReady(character, CHARACTER_READY_TIMEOUT_SECONDS)
+	if not isCharacterReady then
+		local failureMessage = getCharacterRigNotReadyMessage(characterReadyError, characterReadyErrorKind)
+		PerfStats.Measure("BodyPartVisualsApply", startedAt, {
+			detail = string.format("%s:not_ready", player.Name),
+		})
+		return false, failureMessage
 	end
 
 	beginRuntimeMutationSuppression(player, character)
@@ -1581,6 +1703,143 @@ local function getSanitizedPersistedLoadout(player: Player): (BodyPartLoadout.Eq
 
 	local ok, message = DataService:SetEquippedLoadout(player, sanitizedState)
 	return sanitizedState, ok, message
+end
+
+local function syncSessionLoadoutFromPersistedData(player: Player): (boolean, BodyPartLoadout.EquippedState)
+	local previousState = SessionStore.GetEquipped(player)
+	local restoredState, savedCleanedState, savedCleanedStateMessage = getSanitizedPersistedLoadout(player)
+	SessionStore.LoadPlayer(player, restoredState)
+
+	if savedCleanedState == false and savedCleanedStateMessage then
+		warn(string.format("[BodyPartService] Failed to clean persisted loadout for %s: %s", player.Name, savedCleanedStateMessage))
+	end
+
+	return not BodyPartLoadout.AreEquippedStatesEqual(previousState, restoredState), restoredState
+end
+
+local function isCharacterCurrentForPlayer(player: Player, character: Model?): boolean
+	if not (character and character:IsA("Model") and character.Parent) then
+		return false
+	end
+
+	local state = getCharacterLifecycleState(player)
+	return player.Parent == Players and player.Character == character and state.currentCharacter == character
+end
+
+local function markCurrentCharacter(player: Player, character: Model)
+	local state = getCharacterLifecycleState(player)
+	local didChange = state.currentCharacter ~= character
+
+	if didChange then
+		state.currentCharacter = character
+		state.appearanceLoadedCharacter = nil
+		state.activeRuntimeCharacter = nil
+		state.lastActivationSource = nil
+		state.fallbackGeneration += 1
+		clearCharacterRuntimeWatcherState(player)
+	end
+
+	state.pendingRuntimeApply = true
+	return state, didChange
+end
+
+local function logDeferredCharacterActivation(player: Player, source: string, reason: string)
+	print(string.format(
+		"[BodyPartService] Waiting for finalized avatar appearance for %s after %s: %s",
+		player.Name,
+		source,
+		reason
+	))
+end
+
+local function tryActivateCharacterRuntime(
+	player: Player,
+	character: Model,
+	source: string,
+	options: { forceReapply: boolean? }?
+): boolean
+	if not isCharacterCurrentForPlayer(player, character) then
+		return false
+	end
+
+	local state = getCharacterLifecycleState(player)
+	if not playerDataReadyByPlayer[player] then
+		state.pendingRuntimeApply = true
+		return false
+	end
+
+	local forceReapply = if typeof(options) == "table" then options.forceReapply == true else false
+	local didChange = false
+	didChange = syncSessionLoadoutFromPersistedData(player)
+
+	local shouldApply = forceReapply
+		or didChange
+		or state.pendingRuntimeApply
+		or state.activeRuntimeCharacter ~= character
+	if not shouldApply then
+		return true
+	end
+
+	local isCharacterReady, characterReadyError, characterReadyErrorKind =
+		waitForCharacterReady(character, CHARACTER_READY_TIMEOUT_SECONDS)
+	if not isCharacterReady then
+		if characterReadyErrorKind == "placeholder_character" then
+			state.pendingRuntimeApply = true
+			logDeferredCharacterActivation(
+				player,
+				source,
+				tostring(characterReadyError or "Character appearance has not finished loading.")
+			)
+			return false
+		end
+
+		state.pendingRuntimeApply = true
+		warn(string.format(
+			"[BodyPartService] Character rig readiness failed during %s for %s: %s",
+			source,
+			player.Name,
+			tostring(characterReadyError)
+		))
+		BodyPartService:NotifyClient(player, getCharacterRigNotReadyMessage(characterReadyError, characterReadyErrorKind))
+		return false
+	end
+
+	attachCharacterRuntimeWatcher(player, character)
+
+	local success, applyMessage = BodyPartService:ApplySessionLoadout(player)
+	if not success then
+		state.pendingRuntimeApply = true
+		if applyMessage then
+			BodyPartService:NotifyClient(player, applyMessage)
+			warn(string.format("[BodyPartService] %s", applyMessage))
+		end
+		return false
+	end
+
+	state.activeRuntimeCharacter = character
+	state.pendingRuntimeApply = false
+	state.lastActivationSource = source
+	print(string.format("[BodyPartService] Activated body part runtime for %s via %s.", player.Name, source))
+	notifyLoadoutChanged(player)
+	return true
+end
+
+local function scheduleCharacterActivationFallback(player: Player, character: Model, source: string)
+	local state = getCharacterLifecycleState(player)
+	local fallbackGeneration = state.fallbackGeneration
+
+	task.delay(CHARACTER_APPEARANCE_FALLBACK_SECONDS, function()
+		local activeState = characterLifecycleStates[player]
+		if activeState == nil or activeState.fallbackGeneration ~= fallbackGeneration then
+			return
+		end
+
+		if activeState.currentCharacter ~= character or activeState.appearanceLoadedCharacter == character then
+			return
+		end
+
+		tryActivateCharacterRuntime(player, character, source)
+	end)
 end
 
 local function equipOwnedBodyPartInternal(
@@ -1945,6 +2204,13 @@ local function handleGetPlayerInspectSummary(player: Player, payload: any)
 		}
 	end
 
+	if targetUserId == player.UserId then
+		return {
+			ok = false,
+			message = "You cannot inspect yourself.",
+		}
+	end
+
 	local targetPlayer = Players:GetPlayerByUserId(targetUserId)
 	if not targetPlayer then
 		return {
@@ -2139,63 +2405,106 @@ function BodyPartService:OnStart()
 
 		notifyLoadoutChanged(player)
 	end)
+
+	DataService.PlayerDataLoaded:Connect(function(player: Player)
+		playerDataReadyByPlayer[player] = true
+
+		if player.Parent ~= Players then
+			return
+		end
+
+		local didChange = syncSessionLoadoutFromPersistedData(player)
+		local state = getCharacterLifecycleState(player)
+		local character = state.currentCharacter or getCharacter(player)
+		if not character then
+			if didChange then
+				notifyLoadoutChanged(player)
+			end
+			return
+		end
+
+		if state.currentCharacter ~= character then
+			markCurrentCharacter(player, character)
+			state = getCharacterLifecycleState(player)
+		end
+
+		state.pendingRuntimeApply = true
+		if state.appearanceLoadedCharacter == character or state.activeRuntimeCharacter == character then
+			tryActivateCharacterRuntime(player, character, "PlayerDataLoaded", {
+				forceReapply = didChange or state.activeRuntimeCharacter ~= character,
+			})
+		else
+			logDeferredCharacterActivation(
+				player,
+				"PlayerDataLoaded",
+				"Current character has not reached CharacterAppearanceLoaded yet."
+			)
+			if didChange then
+				notifyLoadoutChanged(player)
+			end
+		end
+	end)
 end
 
 function BodyPartService:OnPlayerAdded(player: Player)
 	lastBodyPartScaleOverrideByPlayer[player] = getBodyPartScaleOverride(player)
-	local restoredState, savedCleanedState, savedCleanedStateMessage = getSanitizedPersistedLoadout(player)
-	SessionStore.LoadPlayer(player, restoredState)
-	if savedCleanedState == false and savedCleanedStateMessage then
-		warn(string.format("[BodyPartService] Failed to clean persisted loadout for %s: %s", player.Name, savedCleanedStateMessage))
-	end
+	waitForPlayerDataReady(player, PLAYER_DATA_READY_TIMEOUT_SECONDS)
+	syncSessionLoadoutFromPersistedData(player)
+
+	local state = getCharacterLifecycleState(player)
 
 	if characterAddedConnections[player] then
 		characterAddedConnections[player]:Disconnect()
 	end
+	if characterAppearanceLoadedConnections[player] then
+		characterAppearanceLoadedConnections[player]:Disconnect()
+	end
 
 	characterAddedConnections[player] = player.CharacterAdded:Connect(function(character)
-		clearCharacterRuntimeWatcherState(player)
+		markCurrentCharacter(player, character)
+		scheduleCharacterActivationFallback(player, character, "CharacterAddedFallback")
+	end)
+
+	characterAppearanceLoadedConnections[player] = player.CharacterAppearanceLoaded:Connect(function(character)
+		if player.Character ~= character then
+			return
+		end
+
+		local activeState = getCharacterLifecycleState(player)
+		if activeState.currentCharacter ~= character then
+			markCurrentCharacter(player, character)
+			activeState = getCharacterLifecycleState(player)
+		end
+
+		activeState.appearanceLoadedCharacter = character
+		activeState.pendingRuntimeApply = true
 		task.defer(function()
-			if not waitForCharacterReady(character) then
-				self:NotifyClient(player, "Character did not finish loading the required R15 body parts.")
-				return
-			end
-
-			attachCharacterRuntimeWatcher(player, character)
-			local success, applyMessage = self:ApplySessionLoadout(player)
-			if not success and applyMessage then
-				self:NotifyClient(player, applyMessage)
-				warn(string.format("[BodyPartService] %s", applyMessage))
-				return
-			end
-
-			self:NotifyClient(player, "Body part runtime is ready on the live rig.")
-			notifyLoadoutChanged(player)
+			tryActivateCharacterRuntime(player, character, "CharacterAppearanceLoaded")
 		end)
 	end)
 
 	if player.Character then
-		task.defer(function()
-			local character = player.Character
-			if character and waitForCharacterReady(character) then
-				attachCharacterRuntimeWatcher(player, character)
-				local success, applyMessage = self:ApplySessionLoadout(player)
-				if not success and applyMessage then
-					self:NotifyClient(player, applyMessage)
-				else
-					notifyLoadoutChanged(player)
-				end
-			end
-		end)
+		local character = player.Character
+		if character and character:IsA("Model") then
+			markCurrentCharacter(player, character)
+			state.pendingRuntimeApply = true
+			scheduleCharacterActivationFallback(player, character, "ExistingCharacterFallback")
+		end
 	end
 end
 
 function BodyPartService:OnPlayerRemoving(player: Player)
 	lastBodyPartScaleOverrideByPlayer[player] = nil
+	playerDataReadyByPlayer[player] = nil
 	if characterAddedConnections[player] then
 		characterAddedConnections[player]:Disconnect()
 		characterAddedConnections[player] = nil
 	end
+	if characterAppearanceLoadedConnections[player] then
+		characterAppearanceLoadedConnections[player]:Disconnect()
+		characterAppearanceLoadedConnections[player] = nil
+	end
+	characterLifecycleStates[player] = nil
 
 	clearCharacterRuntimeWatcherState(player)
 

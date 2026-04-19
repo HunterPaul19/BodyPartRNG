@@ -2675,16 +2675,45 @@ local function transformRegionParts(visualPartsByName: { [string]: BasePart }, t
 	end
 end
 
-local function buildReferencePose(character: Model): ({ rootCFrame: CFrame, partCFrames: { [string]: CFrame } }?, string?)
+local REFERENCE_POSE_CHAIN_SPECS = {
+	{
+		label = "Root",
+		motorName = "Root",
+		fromName = "HumanoidRootPart",
+		toName = "LowerTorso",
+	},
+	{
+		label = "Waist",
+		motorName = "Waist",
+		fromName = "LowerTorso",
+		toName = "UpperTorso",
+	},
+	{
+		label = "Neck",
+		motorName = "Neck",
+		fromName = "UpperTorso",
+		toName = "Head",
+	},
+}
+
+local function sortPartNames(partNames: { string }): { string }
+	table.sort(partNames)
+	return partNames
+end
+
+local function buildReferencePose(character: Model): ({ rootCFrame: CFrame, partCFrames: { [string]: CFrame } }?, string?, string?)
 	local rootPart = character:FindFirstChild("HumanoidRootPart")
 	if not (rootPart and rootPart:IsA("BasePart")) then
-		return nil, "Missing HumanoidRootPart while building the neutral reference pose."
+		return nil, "Missing HumanoidRootPart while building the neutral reference pose.", "missing_root_part"
 	end
 
 	local partCFrames = {
 		HumanoidRootPart = rootPart.CFrame,
 	}
 	local adjacency = {}
+	local connectedMotorStates = {}
+	local namedMotorStates = {}
+	local reachablePartNames = {}
 
 	local function addMotorEdge(fromName: string, toName: string, resolver)
 		local edges = adjacency[fromName]
@@ -2700,9 +2729,25 @@ local function buildReferencePose(character: Model): ({ rootCFrame: CFrame, part
 	end
 
 	for _, descendant in ipairs(character:GetDescendants()) do
-		if descendant:IsA("Motor6D") and descendant.Part0 and descendant.Part1 then
+		if descendant:IsA("Motor6D") then
+			local part0Name = if descendant.Part0 then descendant.Part0.Name else nil
+			local part1Name = if descendant.Part1 then descendant.Part1.Name else nil
+			if descendant.Name ~= "" then
+				namedMotorStates[descendant.Name] = {
+					part0Name = part0Name,
+					part1Name = part1Name,
+					connected = part0Name ~= nil and part1Name ~= nil,
+				}
+			end
+
+			if not (descendant.Part0 and descendant.Part1) then
+				continue
+			end
+
 			local part0Name = descendant.Part0.Name
 			local part1Name = descendant.Part1.Name
+			connectedMotorStates[part0Name .. "\0" .. part1Name] = descendant.Name
+			connectedMotorStates[part1Name .. "\0" .. part0Name] = descendant.Name
 			addMotorEdge(part0Name, part1Name, function(fromCFrame: CFrame): CFrame
 				return fromCFrame * descendant.C0 * descendant.C1:Inverse()
 			end)
@@ -2719,6 +2764,7 @@ local function buildReferencePose(character: Model): ({ rootCFrame: CFrame, part
 		index += 1
 
 		local fromCFrame = partCFrames[fromName]
+		table.insert(reachablePartNames, fromName)
 		for _, edge in ipairs(adjacency[fromName] or {}) do
 			if partCFrames[edge.toName] == nil then
 				partCFrames[edge.toName] = edge.resolve(fromCFrame)
@@ -2729,14 +2775,71 @@ local function buildReferencePose(character: Model): ({ rootCFrame: CFrame, part
 
 	for _, partName in ipairs(ALL_RIG_PARTS) do
 		if partCFrames[partName] == nil then
-			return nil, string.format("Unable to solve neutral reference CFrame for %s.", partName)
+			local chainStates = {}
+			local hasAnyConnectedCoreMotor = false
+			for _, chainSpec in ipairs(REFERENCE_POSE_CHAIN_SPECS) do
+				local namedMotorState = namedMotorStates[chainSpec.motorName]
+				local connectedMotorName = connectedMotorStates[chainSpec.fromName .. "\0" .. chainSpec.toName]
+				local stateMessage = nil
+
+				if connectedMotorName ~= nil then
+					hasAnyConnectedCoreMotor = true
+					stateMessage = string.format(
+						"%s=connected(%s->%s via %s)",
+						chainSpec.label,
+						chainSpec.fromName,
+						chainSpec.toName,
+						connectedMotorName
+					)
+				elseif namedMotorState == nil then
+					stateMessage = string.format("%s=missing", chainSpec.label)
+				elseif namedMotorState.connected ~= true then
+					stateMessage = string.format("%s=unbound", chainSpec.label)
+				else
+					stateMessage = string.format(
+						"%s=misbound(%s->%s)",
+						chainSpec.label,
+						tostring(namedMotorState.part0Name),
+						tostring(namedMotorState.part1Name)
+					)
+				end
+
+				table.insert(chainStates, stateMessage)
+			end
+
+			if not hasAnyConnectedCoreMotor then
+				return nil,
+					"Character is still waiting for the finalized avatar appearance load. The core torso/head motor chain is not connected yet.",
+					"placeholder_character"
+			end
+
+			local reachableSummary = table.concat(sortPartNames(reachablePartNames), ", ")
+			return nil, string.format(
+				"Unable to solve neutral reference CFrame for %s. Motor graph reachable=[%s]. Chain states: %s.",
+				partName,
+				reachableSummary,
+				table.concat(chainStates, ", ")
+			), "broken_reference_pose"
 		end
 	end
 
 	return {
 		rootCFrame = rootPart.CFrame,
 		partCFrames = partCFrames,
-	}, nil
+	}, nil, nil
+end
+
+function BodyPartVisuals.ValidateReferencePose(character: Model): (boolean, string?, string?)
+	if not (character and character:IsA("Model")) then
+		return false, "Character must be a Model.", "invalid_character"
+	end
+
+	local referencePose, referencePoseError, referencePoseErrorKind = buildReferencePose(character)
+	if not referencePose then
+		return false, referencePoseError or "Failed to build the neutral reference pose.", referencePoseErrorKind
+	end
+
+	return true, nil, nil
 end
 
 local function applyExternalSeamAlignment(
@@ -3470,6 +3573,12 @@ function BodyPartVisuals.Apply(character: Model, request: ApplyRequest): ApplyRe
 			return buildResult(false, errors, appliedRegions, character)
 		end
 
+		local snapshotSuccess, snapshotError = CharacterAppearanceHostApplier.EnsureSnapshot(character)
+		if not snapshotSuccess then
+			table.insert(errors, snapshotError or "Failed to capture the native appearance snapshot.")
+			return buildResult(false, errors, appliedRegions, character)
+		end
+
 		local rigSuccess, rigError = applyRig(character, baseRig, request)
 		if not rigSuccess then
 			table.insert(errors, rigError or "Failed to resize the live rig.")
@@ -3528,6 +3637,12 @@ function BodyPartVisuals.Apply(character: Model, request: ApplyRequest): ApplyRe
 			if #errors == 0 then
 				local previousLowestFootBottomY = computeLowestFootBottomY(character)
 				settleCharacterFooting(character, previousLowestFootBottomY)
+
+				local finalAccessoryAlignmentSuccess, finalAccessoryAlignmentError =
+					CharacterAppearanceHostApplier.RefreshManagedAccessoryAlignment(character, request.regions)
+				if not finalAccessoryAlignmentSuccess and finalAccessoryAlignmentError then
+					warn(string.format("[CharacterAppearanceHostApplier] %s", tostring(finalAccessoryAlignmentError)))
+				end
 			end
 		end
 

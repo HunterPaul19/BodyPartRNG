@@ -49,6 +49,10 @@ function TitleController:_ensureState()
 	self._searchText = ""
 	self._selectedTitleId = nil
 	self._emptyStateLabel = nil
+	self._playerGui = nil
+	self._openButtonBound = false
+	self._fullUiReady = false
+	self._dataBindingsReady = false
 end
 
 function TitleController:_getRemote(): RemoteFunction?
@@ -280,10 +284,25 @@ function TitleController:_bindOpenButton(openButton: GuiButton)
 		FrameController:ToggleFrame(WINDOW_NAME)
 		if not wasOpen then
 			task.defer(function()
+				self:_ensureFullUi(self._playerGui or LOCAL_PLAYER:WaitForChild("PlayerGui"))
 				self:_syncAll()
 			end)
 		end
 	end)
+end
+
+function TitleController:_cacheOpenButton(playerGui: PlayerGui)
+	local mainInterface = playerGui:WaitForChild("MainInterface", 30)
+	if not (mainInterface and mainInterface:IsA("ScreenGui")) then
+		error("PlayerGui.MainInterface is missing.")
+	end
+
+	local openButton = mainInterface:WaitForChild("Main", 30):WaitForChild("Titles", 30)
+	if not (openButton and openButton:IsA("GuiButton")) then
+		error("Titles open button is missing.")
+	end
+
+	self._ui.openButton = openButton
 end
 
 function TitleController:_cacheUi(playerGui: PlayerGui)
@@ -342,12 +361,13 @@ function TitleController:_cacheUi(playerGui: PlayerGui)
 	self._ui.previewHolder.Visible = false
 end
 
-function TitleController:OnStart()
-	self:_ensureState()
+function TitleController:_ensureFullUi(playerGui: PlayerGui)
+	if self._fullUiReady then
+		return
+	end
 
-	local playerGui = LOCAL_PLAYER:WaitForChild("PlayerGui")
 	self:_cacheUi(playerGui)
-	self:_bindOpenButton(self._ui.openButton)
+
 	UIController:CreateButton(self._ui.closeButton, function()
 		FrameController:CloseFrame(WINDOW_NAME)
 	end)
@@ -360,17 +380,34 @@ function TitleController:OnStart()
 		self:_syncAll()
 	end)
 
-	DataController.DataReceived:Connect(function()
-		self:_syncAll()
-	end)
-
-	DataController.DataUpdated:Connect(function(key)
-		if key == ACHIEVEMENTS_KEY or key == EQUIPPED_TITLE_KEY then
+	if not self._dataBindingsReady then
+		DataController.DataReceived:Connect(function()
 			self:_syncAll()
-		end
-	end)
+		end)
 
-	self:_syncAll()
+		DataController.DataUpdated:Connect(function(key)
+			if key == ACHIEVEMENTS_KEY or key == EQUIPPED_TITLE_KEY then
+				self:_syncAll()
+			end
+		end)
+
+		self._dataBindingsReady = true
+	end
+
+	self._fullUiReady = true
+end
+
+function TitleController:OnStart()
+	self:_ensureState()
+
+	local playerGui = LOCAL_PLAYER:WaitForChild("PlayerGui")
+	self._playerGui = playerGui
+	self:_cacheOpenButton(playerGui)
+
+	if not self._openButtonBound then
+		self:_bindOpenButton(self._ui.openButton)
+		self._openButtonBound = true
+	end
 end
 
 return TitleController

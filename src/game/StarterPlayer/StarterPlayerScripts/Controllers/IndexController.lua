@@ -217,6 +217,10 @@ function IndexController:_ensureState()
 	self._defaultPieceNameLabelStyle = nil :: TextLabelStyle?
 	self._completedSetCount = 0
 	self._bodyPartsRefreshScheduled = false
+	self._playerGui = nil
+	self._openButtonBound = false
+	self._fullUiReady = false
+	self._dataBindingsReady = false
 end
 
 function IndexController:_getRarityTemplatesFolder(): Folder?
@@ -769,6 +773,20 @@ function IndexController:_scheduleBodyPartsRefresh()
 	end)
 end
 
+function IndexController:_cacheOpenButton(playerGui: PlayerGui)
+	local mainInterface = playerGui:WaitForChild("MainInterface", 30)
+	if not (mainInterface and mainInterface:IsA("ScreenGui")) then
+		error("PlayerGui.MainInterface is missing.")
+	end
+
+	local openButton = mainInterface:WaitForChild("Main", 30):WaitForChild("ExtraButtons", 30):WaitForChild("Index", 30)
+	if not (openButton and openButton:IsA("GuiButton")) then
+		error("Index open button is missing.")
+	end
+
+	self._ui.openButton = openButton
+end
+
 function IndexController:_cacheUi(playerGui: PlayerGui)
 	local mainInterface = playerGui:WaitForChild("MainInterface", 30)
 	local modalRoot = playerGui:WaitForChild("ModalRoot", 30)
@@ -912,6 +930,7 @@ function IndexController:_bindOpenButton(openButton: GuiButton)
 		FrameController:ToggleFrame(WINDOW_NAME)
 		if not wasOpen then
 			task.defer(function()
+				self:_ensureFullUi(self._playerGui or LOCAL_PLAYER:WaitForChild("PlayerGui"))
 				self:_syncAll()
 			end)
 		end
@@ -957,13 +976,12 @@ function IndexController:_bindBuyBundleButton()
 	end)
 end
 
-function IndexController:OnStart()
-	self:_ensureState()
+function IndexController:_ensureFullUi(playerGui: PlayerGui)
+	if self._fullUiReady then
+		return
+	end
 
-	local playerGui = LOCAL_PLAYER:WaitForChild("PlayerGui")
 	self:_cacheUi(playerGui)
-
-	self:_bindOpenButton(self._ui.openButton)
 	self:_bindRegionButtons()
 	self:_bindBuyBundleButton()
 
@@ -974,20 +992,37 @@ function IndexController:OnStart()
 		end)
 	end
 
-	DataController.DataReceived:Connect(function()
-		if not FrameController:IsOpen(WINDOW_NAME) then
-			return
-		end
-		self:_syncAll()
-	end)
+	if not self._dataBindingsReady then
+		DataController.DataReceived:Connect(function()
+			if not FrameController:IsOpen(WINDOW_NAME) then
+				return
+			end
+			self:_syncAll()
+		end)
 
-	DataController.DataUpdated:Connect(function(key)
-		if key == BODY_PARTS_DATA_KEY then
-			self:_scheduleBodyPartsRefresh()
-		end
-	end)
+		DataController.DataUpdated:Connect(function(key)
+			if key == BODY_PARTS_DATA_KEY then
+				self:_scheduleBodyPartsRefresh()
+			end
+		end)
 
-	self:_syncAll()
+		self._dataBindingsReady = true
+	end
+
+	self._fullUiReady = true
+end
+
+function IndexController:OnStart()
+	self:_ensureState()
+
+	local playerGui = LOCAL_PLAYER:WaitForChild("PlayerGui")
+	self._playerGui = playerGui
+	self:_cacheOpenButton(playerGui)
+
+	if not self._openButtonBound then
+		self:_bindOpenButton(self._ui.openButton)
+		self._openButtonBound = true
+	end
 end
 
 return IndexController

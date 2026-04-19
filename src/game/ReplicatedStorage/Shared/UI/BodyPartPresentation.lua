@@ -247,14 +247,16 @@ local function resolveMutationInput(record: any): any
 		return nil
 	end
 
-	local mutationId = record.mutationId
-	if typeof(mutationId) == "string" and mutationId ~= "" then
-		return mutationId
+	for _, mutationId in ipairs({ record.mutationId, record.MutationId }) do
+		if typeof(mutationId) == "string" and mutationId ~= "" then
+			return mutationId
+		end
 	end
 
-	local mutationName = record.mutation
-	if typeof(mutationName) == "string" and mutationName ~= "" then
-		return mutationName
+	for _, mutationName in ipairs({ record.mutation, record.Mutation }) do
+		if typeof(mutationName) == "string" and mutationName ~= "" then
+			return mutationName
+		end
 	end
 
 	return nil
@@ -356,6 +358,25 @@ function BodyPartPresentation.FormatTemplatedLabelText(templateText: any, value:
 	end
 
 	return formattedValue
+end
+
+function BodyPartPresentation.FormatMutationLabelText(templateText: any, record: any): string
+	local _, mutationDisplayName, mutationColor = resolveMutationPresentation(record)
+	local formattedMutationName = string.format(
+		'<font color="%s">%s</font>',
+		toRichTextColor(mutationColor),
+		escapeRichText(mutationDisplayName)
+	)
+	local formattedText = BodyPartPresentation.FormatTemplatedLabelText(templateText, formattedMutationName)
+	local normalizedTemplate = if typeof(templateText) == "string"
+		then string.match(templateText, "^%s*(.-)%s*$") or ""
+		else ""
+
+	if formattedText == formattedMutationName and normalizedTemplate ~= "" then
+		return string.format("%s: %s", normalizedTemplate, formattedMutationName)
+	end
+
+	return formattedText
 end
 
 function BodyPartPresentation.ApplySetRarityTemplateToLabel(
@@ -502,7 +523,6 @@ function BodyPartPresentation.BuildPreviewPresentation(payload: any)
 		or tonumber(setConfig and setConfig.rollDisplay and setConfig.rollDisplay.chance)
 		or tonumber(piece.rarity)
 		or 1
-	local _, mutationDisplayName, mutationColor = resolveMutationPresentation(record)
 	local bundleName = if record and typeof(record.rolledSetDisplayName) == "string" and record.rolledSetDisplayName ~= ""
 		then record.rolledSetDisplayName
 		else if setConfig and setConfig.rollDisplay and setConfig.rollDisplay.displayName then setConfig.rollDisplay.displayName else piece.displayName
@@ -552,11 +572,7 @@ function BodyPartPresentation.BuildPreviewPresentation(payload: any)
 			displayRarity
 		),
 		rarityFontFace = rarityFontFace,
-		mutationText = string.format(
-			'Mutation: <font color="%s">%s</font>',
-			toRichTextColor(mutationColor),
-			escapeRichText(mutationDisplayName)
-		),
+		mutationText = BodyPartPresentation.FormatMutationLabelText("Mutation", record),
 		sizeText = string.format("Size: %s (%sx)", getSizeDescriptor(previewScale, sizeId), formatMultiplier(previewScale)),
 		cashText = string.format(
 			'Cash Per Sec: <font color="%s">%s</font>',

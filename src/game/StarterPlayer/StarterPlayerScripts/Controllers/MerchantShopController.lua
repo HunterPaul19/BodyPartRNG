@@ -77,6 +77,10 @@ local function formatTimeShards(value: any): string
 	return string.format("%s Time Shards", Globals.formatNumber(value))
 end
 
+local function formatCost(value: any): string
+	return string.format("Cost: %s", formatTimeShards(value))
+end
+
 local function buildEmptyState(): MerchantShopState
 	local stockByPotionId = {}
 	for _, entry in ipairs(MerchantShopConfig.GetAll()) do
@@ -376,7 +380,7 @@ function MerchantShopController:_refreshText()
 			then string.format("The merchant returns in %s.", formatCountdown(shopState.nextAppearsAt))
 			else "The merchant isn't here right now."
 		ui.stocksLabel.Text = "[Returns Soon]"
-		ui.priceLabel.Text = "0 Time Shards total"
+		ui.priceLabel.Text = formatCost(0)
 		self:_setPurchaseEnabled(false)
 		return
 	end
@@ -395,7 +399,7 @@ function MerchantShopController:_refreshText()
 	ui.stocksLabel.Text = if entry
 		then string.format("[Stock: %d/%d] [Leaves in %s]", stock, stockCap, departureText)
 		else string.format("[Leaves in %s]", departureText)
-	ui.priceLabel.Text = string.format("%s total", formatTimeShards(totalPrice))
+	ui.priceLabel.Text = formatCost(totalPrice)
 	self:_setPurchaseEnabled(entry ~= nil and stock > 0)
 end
 

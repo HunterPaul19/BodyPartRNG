@@ -119,56 +119,16 @@ local function getPlayerFromInstance(target: Instance?): Player?
 	return player
 end
 
-local function getCharacterScreenBounds(character: Model, camera: Camera): (Vector2?, Vector2?)
-	local boundingCFrame, boundingSize = character:GetBoundingBox()
-	local halfSize = boundingSize * 0.5
-	local minX, minY = math.huge, math.huge
-	local maxX, maxY = -math.huge, -math.huge
-	local hasVisibleCorner = false
-
-	for _, x in ipairs({ -1, 1 }) do
-		for _, y in ipairs({ -1, 1 }) do
-			for _, z in ipairs({ -1, 1 }) do
-				local worldPoint = boundingCFrame:PointToWorldSpace(Vector3.new(halfSize.X * x, halfSize.Y * y, halfSize.Z * z))
-				local screenPoint, onScreen = camera:WorldToViewportPoint(worldPoint)
-				if onScreen and screenPoint.Z > 0 then
-					hasVisibleCorner = true
-					minX = math.min(minX, screenPoint.X)
-					minY = math.min(minY, screenPoint.Y)
-					maxX = math.max(maxX, screenPoint.X)
-					maxY = math.max(maxY, screenPoint.Y)
-				end
-			end
-		end
+local function getInspectablePlayer(player: Player?): Player?
+	if player == LOCAL_PLAYER then
+		return nil
 	end
 
-	if not hasVisibleCorner then
-		return nil, nil
-	end
-
-	return Vector2.new(minX, minY), Vector2.new(maxX, maxY)
-end
-
-local function isPointInsideCharacterBounds(player: Player, screenPoint: Vector2, camera: Camera): boolean
-	local character = player.Character
-	if not character then
-		return false
-	end
-
-	local minBound, maxBound = getCharacterScreenBounds(character, camera)
-	if not (minBound and maxBound) then
-		return false
-	end
-
-	local padding = 8
-	return screenPoint.X >= (minBound.X - padding)
-		and screenPoint.X <= (maxBound.X + padding)
-		and screenPoint.Y >= (minBound.Y - padding)
-		and screenPoint.Y <= (maxBound.Y + padding)
+	return player
 end
 
 local function getPointerInspectablePlayer(mouse): Player?
-	local hoveredPlayer = getPlayerFromInstance(mouse.Target)
+	local hoveredPlayer = getInspectablePlayer(getPlayerFromInstance(mouse.Target))
 	if hoveredPlayer then
 		return hoveredPlayer
 	end
@@ -182,11 +142,7 @@ local function getPointerInspectablePlayer(mouse): Player?
 	local viewportRay = camera:ViewportPointToRay(mouseLocation.X, mouseLocation.Y)
 	local raycastResult = workspace:Raycast(viewportRay.Origin, viewportRay.Direction * 1000)
 	if raycastResult then
-		return getPlayerFromInstance(raycastResult.Instance)
-	end
-
-	if isPointInsideCharacterBounds(LOCAL_PLAYER, mouseLocation, camera) then
-		return LOCAL_PLAYER
+		return getInspectablePlayer(getPlayerFromInstance(raycastResult.Instance))
 	end
 
 	return nil
@@ -451,6 +407,7 @@ function PlayerInspectController:_getEquippedAuraEntry(): EquippedAuraInspectEnt
 end
 
 function PlayerInspectController:_setHoveredPlayer(player: Player?)
+	player = getInspectablePlayer(player)
 	self._hoveredPlayer = player
 	if player and player.Character then
 		self._highlight.Adornee = player.Character
@@ -981,6 +938,10 @@ function PlayerInspectController:_applySummary(player: Player, summary: InspectS
 end
 
 function PlayerInspectController:_openForPlayer(player: Player)
+	if getInspectablePlayer(player) == nil then
+		return
+	end
+
 	self._requestToken += 1
 	local requestToken = self._requestToken
 	self._inspectedPlayer = player

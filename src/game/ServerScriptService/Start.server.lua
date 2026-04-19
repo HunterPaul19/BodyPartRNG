@@ -3,23 +3,34 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local Loader = require(ReplicatedStorage.Loader)
-
-local DISABLED_SERVER_MODULES = {}
+local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 
 local function shouldLoadService(moduleScript: ModuleScript): boolean
 	if not moduleScript.Name:match("Service$") then
 		return false
 	end
 
-	return not DISABLED_SERVER_MODULES[moduleScript.Name]
+	return PlaceProfile.ShouldLoadService(moduleScript.Name)
 end
 
-local loadedModules = Loader.LoadDescendants(ServerScriptService.Services, shouldLoadService)
+local loaderContext = {
+	phase = "Startup",
+	runtime = "Server",
+	source = script:GetFullName(),
+}
 
-Loader.SpawnAll(loadedModules, "OnStart")
-Loader.ConnectFunctions(loadedModules, Players.PlayerAdded, "OnPlayerAdded")
-Loader.ConnectFunctions(loadedModules, Players.PlayerRemoving, "OnPlayerRemoving")
+local eventContext = {
+	phase = "RuntimeEvent",
+	runtime = "Server",
+	source = script:GetFullName(),
+}
+
+local loadedModules = Loader.LoadDescendants(ServerScriptService.Services, shouldLoadService, loaderContext)
+
+Loader.RunAllFatal(loadedModules, "OnStart", loaderContext)
+Loader.ConnectFunctionsReporting(loadedModules, Players.PlayerAdded, "OnPlayerAdded", eventContext)
+Loader.ConnectFunctionsReporting(loadedModules, Players.PlayerRemoving, "OnPlayerRemoving", eventContext)
 
 for _, player in Players:GetPlayers() do
-	Loader.SpawnAll(loadedModules, "OnPlayerAdded", player)
+	Loader.RunAllFatal(loadedModules, "OnPlayerAdded", loaderContext, player)
 end

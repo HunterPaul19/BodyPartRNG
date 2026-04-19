@@ -46,29 +46,11 @@ local definitionsById: { [string]: DialogueDefinition } = {
 						},
 					},
 					{
-						id = "secret_stock",
-						text = "What about the secret stock?",
-						nextNodeId = "secret_stock",
-						conditionIds = { "richEnoughForSecretStock" },
-					},
-					{
 						id = "leave",
 						text = "Maybe later.",
 						action = {
 							type = "closeDialogue",
 						},
-					},
-				},
-			},
-			secret_stock = {
-				id = "secret_stock",
-				speakerName = "Merchant",
-				text = "Come back when you've got deeper pockets. I only show the secret shelf to serious collectors.",
-				choices = {
-					{
-						id = "secret_back",
-						text = "Back",
-						nextNodeId = "intro",
 					},
 				},
 			},

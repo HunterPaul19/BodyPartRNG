@@ -1,19 +1,60 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Loader = require(ReplicatedStorage.Loader)
+local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 local SoundUtil = require(ReplicatedStorage.Shared.Audio.SoundUtil)
 
 local StarterPlayerScripts = script.Parent
-local DISABLED_CLIENT_MODULES = {}
 local playClientSoundConnection: RBXScriptConnection? = nil
+local STARTUP_WATCHDOG_SECONDS = 3
+
+local CLIENT_STARTUP_PHASE_DEFINITIONS = {
+	{
+		label = "Phase1.CoreUI",
+		names = { "UIController", "FrameController", "HUDWindowController", "MainInterfaceController" },
+	},
+	{
+		label = "Phase2.HUDPanels",
+		names = {
+			"RollController",
+			"DialogueController",
+			"LeaderboardController",
+		},
+	},
+	{
+		label = "Phase3.HUDModal",
+		names = {
+			"HelpController",
+			"StoreController",
+			"MerchantTeleportController",
+			"TitleController",
+			"IndexController",
+			"InventoryController",
+		},
+	},
+	{
+		label = "Phase4.Features",
+		names = {
+			"DataController",
+			"MoneyHUDController",
+			"TimeShardsHUDController",
+			"PotionController",
+			"MarketplaceController",
+			"MerchantShopController",
+			"MerchantPresentationController",
+			"PlayerInspectController",
+			"AppraisalController",
+		},
+	},
+}
 
 local function shouldLoadController(moduleScript: ModuleScript): boolean
 	if not moduleScript.Name:match("Controller$") then
 		return false
 	end
 
-	return not DISABLED_CLIENT_MODULES[moduleScript.Name]
+	return PlaceProfile.ShouldLoadController(moduleScript.Name)
 end
 
 local function bindPlayClientSoundRemote()
@@ -36,9 +77,74 @@ local function bindPlayClientSoundRemote()
 	end)
 end
 
-local loadedModules = Loader.LoadDescendants(StarterPlayerScripts.Controllers, shouldLoadController)
+local function buildStartupPhases(loadedModules, source: string)
+	local activeProfile = PlaceProfile.GetActiveProfile()
+	local loadedNameSet = {}
+	local assignedNameSet = {}
 
-Loader.SpawnAll(loadedModules, "OnStart")
+	for _, loadedModule in ipairs(loadedModules) do
+		loadedNameSet[loadedModule.name] = true
+	end
+
+	local phaseGroups = {}
+	local phaseSummaryParts = {}
+
+	for phaseIndex, phaseDefinition in ipairs(CLIENT_STARTUP_PHASE_DEFINITIONS) do
+		local phaseNames = {}
+		for _, name in ipairs(phaseDefinition.names) do
+			if loadedNameSet[name] == true and assignedNameSet[name] ~= true then
+				table.insert(phaseNames, name)
+				assignedNameSet[name] = true
+			end
+		end
+
+		if phaseIndex == #CLIENT_STARTUP_PHASE_DEFINITIONS then
+			local remainingNames = {}
+			for _, loadedModule in ipairs(loadedModules) do
+				if assignedNameSet[loadedModule.name] ~= true then
+					assignedNameSet[loadedModule.name] = true
+					table.insert(remainingNames, loadedModule.name)
+				end
+			end
+			table.sort(remainingNames)
+			for _, name in ipairs(remainingNames) do
+				table.insert(phaseNames, name)
+			end
+		end
+
+		table.insert(phaseGroups, {
+			names = phaseNames,
+			context = {
+				phase = phaseDefinition.label,
+				runtime = "Client",
+				source = source,
+				logLifecycle = true,
+				watchdogSeconds = STARTUP_WATCHDOG_SECONDS,
+			},
+		})
+		table.insert(phaseSummaryParts, string.format("%s=[%s]", phaseDefinition.label, table.concat(phaseNames, ", ")))
+	end
+
+	print(string.format(
+		"[ClientBootstrap] Profile='%s' PlaceId=%d %s",
+		activeProfile.id,
+		math.max(0, math.floor(tonumber(game.PlaceId) or 0)),
+		table.concat(phaseSummaryParts, " ")
+	))
+
+	return phaseGroups
+end
+
+local loaderContext = {
+	phase = "Startup",
+	runtime = "Client",
+	source = script:GetFullName(),
+}
+
+local loadedModules = Loader.LoadDescendants(StarterPlayerScripts.Controllers, shouldLoadController, loaderContext)
+local startupPhases = buildStartupPhases(loadedModules, script:GetFullName())
+
+Loader.RunOrderedFatal(loadedModules, "OnStart", startupPhases, loaderContext)
 task.spawn(bindPlayClientSoundRemote)
 
 return Notify

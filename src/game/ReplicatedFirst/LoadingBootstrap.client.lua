@@ -1,7 +1,21 @@
 local ContentProvider = game:GetService("ContentProvider")
 local Players = game:GetService("Players")
 local ReplicatedFirst = game:GetService("ReplicatedFirst")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+
+local sharedFolder = ReplicatedStorage:WaitForChild("Shared", 10)
+local placeProfilesFolder = if sharedFolder then sharedFolder:WaitForChild("PlaceProfiles", 10) else nil
+local placeProfileModule = if placeProfilesFolder then placeProfilesFolder:WaitForChild("PlaceProfile", 10) else nil
+
+if not (placeProfileModule and placeProfileModule:IsA("ModuleScript")) then
+	error(
+		"[LoadingBootstrap] ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile is missing or did not replicate in time.",
+		0
+	)
+end
+
+local PlaceProfile = require(placeProfileModule)
 
 local MIN_DISPLAY_SECONDS = 1.5
 local MAIN_INTERFACE_TIMEOUT = 10
@@ -14,6 +28,16 @@ if not player then
 end
 
 local playerGui = player:WaitForChild("PlayerGui")
+local activeProfile = PlaceProfile.GetActiveProfile()
+local activePlaceId = math.max(0, math.floor(tonumber(game.PlaceId) or 0))
+
+local function formatContextPrefix(): string
+	return string.format(
+		"[LoadingBootstrap][Profile:%s][PlaceId:%d]",
+		activeProfile.id,
+		activePlaceId
+	)
+end
 
 pcall(function()
 	ReplicatedFirst:RemoveDefaultLoadingScreen()
@@ -263,17 +287,31 @@ end)
 preloadInstances(collectPreloadInstances(loadingScreen), false)
 waitForGameLoaded()
 
-local mainInterface = playerGui:WaitForChild("MainInterface", MAIN_INTERFACE_TIMEOUT)
-if not mainInterface then
-	warn("[LoadingBootstrap] PlayerGui.MainInterface did not appear before the timeout.")
+local requiresMainInterface = PlaceProfile.RequiresMainInterface()
+local mainInterface = nil
+
+if requiresMainInterface then
+	mainInterface = playerGui:WaitForChild("MainInterface", MAIN_INTERFACE_TIMEOUT)
+	if not (mainInterface and mainInterface:IsA("ScreenGui")) then
+		error(
+			string.format(
+				"%s Required PlayerGui.MainInterface did not appear within %d seconds. This place should include the shared MainInterface content.",
+				formatContextPrefix(),
+				MAIN_INTERFACE_TIMEOUT
+			),
+			0
+		)
+	end
 else
+	mainInterface = playerGui:FindFirstChild("MainInterface")
+end
+
+if mainInterface and mainInterface:IsA("ScreenGui") then
 	task.spawn(function()
 		preloadInstances(collectPreloadInstances(mainInterface), true)
 		preloadCompleted = true
 	end)
-end
-
-if not mainInterface then
+elseif not requiresMainInterface then
 	preloadCompleted = true
 end
 

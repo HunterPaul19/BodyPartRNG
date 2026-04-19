@@ -438,6 +438,7 @@ function InventoryController:_ensureState()
 	end
 
 	self._started = true
+	self._playerGui = nil
 	self._inventoryRoot = nil
 	self._listTemplate = nil
 	self._scrollingFrame = nil
@@ -489,6 +490,9 @@ function InventoryController:_ensureState()
 	self._bodyPartRefreshScheduled = false
 	self._pendingPotionSellOwnedId = nil :: string?
 	self._pendingPotionSellQuantity = 1
+	self._openButtonBound = false
+	self._fullUiReady = false
+	self._dataBindingsReady = false
 end
 
 function InventoryController:_cancelInventoryAnchorTween()
@@ -3311,6 +3315,7 @@ function InventoryController:_bindOpenButton(openButton: GuiButton)
 		FrameController:ToggleFrame(WINDOW_NAME)
 		if not wasOpen then
 			task.defer(function()
+				self:_ensureFullUi(self._playerGui or LOCAL_PLAYER:WaitForChild("PlayerGui"))
 				self._selectedFilterRegion = nil
 				self._selectedSpecialFilter = nil
 				self:_markInventoryRecordsDirty()
@@ -3328,6 +3333,20 @@ function InventoryController:_bindOpenButton(openButton: GuiButton)
 			end)
 		end
 	end)
+end
+
+function InventoryController:_cacheOpenButton(playerGui: PlayerGui)
+	local mainInterface = playerGui:WaitForChild("MainInterface", 30)
+	if not (mainInterface and mainInterface:IsA("ScreenGui")) then
+		error("PlayerGui.MainInterface is missing.")
+	end
+
+	local openButton = mainInterface:WaitForChild("Main", 30):WaitForChild("ExtraButtons", 30):WaitForChild("Inventory", 30)
+	if not (openButton and openButton:IsA("GuiButton")) then
+		error("Inventory open button is missing.")
+	end
+
+	self._ui.openButton = openButton
 end
 
 function InventoryController:_cacheUi(playerGui: PlayerGui)
@@ -3541,13 +3560,13 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 	self._ui.potionSellFrame.Visible = false
 end
 
-function InventoryController:OnStart()
-	self:_ensureState()
+function InventoryController:_ensureFullUi(playerGui: PlayerGui)
+	if self._fullUiReady then
+		return
+	end
 
-	local playerGui = LOCAL_PLAYER:WaitForChild("PlayerGui")
 	self:_cacheUi(playerGui)
 
-	self:_bindOpenButton(self._ui.openButton)
 	self:_bindFilterButtons()
 	self:_bindSlotButtons()
 
@@ -3600,105 +3619,114 @@ function InventoryController:OnStart()
 		end)
 	end
 
-	DataController.DataReceived:Connect(function()
-		self:_markInventoryRecordsDirty()
-		if not FrameController:IsOpen(WINDOW_NAME) then
-			return
-		end
-		self:_syncList()
-		self:_syncPreview()
-		self:_syncActionButton()
-		self:_syncSecondaryActionButtons()
-		self:_syncAutoSizeButton(nil, false)
-		self._autoSizeStateHydrated = true
-		self:_refreshAuraStateFromData()
-		self:_syncPotionSellModal()
-	end)
-
-	DataController.DataUpdated:Connect(function(key)
-		if key == BODY_PARTS_DATA_KEY then
-			self:_scheduleBodyPartRefresh()
-			return
-		end
-
-		if key == AUTO_SIZE_ENABLED_KEY then
-			local autoSizeEnabled = self:_getResolvedAutoSizeEnabled()
-			local isEnabled = self:_getResolvedNormalSizeEnabled(autoSizeEnabled)
-			local shouldAnimate = self._autoSizeStateHydrated
-				and self._autoSizeVisualState ~= nil
-				and self._autoSizeVisualState ~= isEnabled
-			self:_syncAutoSizeButton(autoSizeEnabled, shouldAnimate)
+	if not self._dataBindingsReady then
+		DataController.DataReceived:Connect(function()
+			self:_markInventoryRecordsDirty()
+			if not FrameController:IsOpen(WINDOW_NAME) then
+				return
+			end
+			self:_syncList()
+			self:_syncPreview()
+			self:_syncActionButton()
+			self:_syncSecondaryActionButtons()
+			self:_syncAutoSizeButton(nil, false)
 			self._autoSizeStateHydrated = true
-			return
-		end
-
-		if key == AURA_DATA_KEY or key == EQUIPPED_AURA_ID_KEY then
-			self:_scheduleAuraStateRefresh()
-		end
-	end)
-
-	PotionController.StateUpdated:Connect(function()
-		self:_markInventoryRecordsDirty()
-		if not FrameController:IsOpen(WINDOW_NAME) then
-			return
-		end
-		self:_syncList()
-		self:_syncPreview()
-		self:_syncSummaryLabels()
-		self:_syncActionButton()
-		self:_syncSecondaryActionButtons()
-		self:_syncPotionSellModal()
-	end)
-
-	LOCAL_PLAYER.CharacterAdded:Connect(function()
-		self:_invalidateCharacterPreviewModel()
-		if FrameController:IsOpen(WINDOW_NAME) then
-			task.defer(function()
-				self:_syncCharacterViewport()
-			end)
-		end
-	end)
-
-	LOCAL_PLAYER.CharacterRemoving:Connect(function()
-		self:_invalidateCharacterPreviewModel()
-	end)
-
-	task.spawn(function()
-		while not self:_ensureRemotes() do
-			task.wait(1)
-		end
-
-		self._remotes.updated.OnClientEvent:Connect(function(state)
-			self:_applyLoadoutState(state)
-		end)
-
-		self:_requestLoadoutState()
-	end)
-
-	task.spawn(function()
-		while not self:_ensureAuraRemotes() do
-			task.wait(1)
-		end
-
-		local ok, result = pcall(function()
-			return self._remotes.auraGetState:InvokeServer()
-		end)
-		if ok and typeof(result) == "table" and result.ok == true and typeof(result.state) == "table" then
-			self:_applyAuraState(result.state)
-		else
 			self:_refreshAuraStateFromData()
-		end
-	end)
+			self:_syncPotionSellModal()
+		end)
 
-	self:_syncFilterButtons()
-	self:_syncSlotButtons()
-	self:_syncAutoSizeButton(nil, false)
-	self:_syncList()
-	self:_syncCharacterViewport()
-	self:_syncSummaryLabels()
-	self:_syncActionButton()
-	self:_syncSecondaryActionButtons()
-	self:_syncPotionSellModal()
+		DataController.DataUpdated:Connect(function(key)
+			if key == BODY_PARTS_DATA_KEY then
+				self:_scheduleBodyPartRefresh()
+				return
+			end
+
+			if key == AUTO_SIZE_ENABLED_KEY then
+				local autoSizeEnabled = self:_getResolvedAutoSizeEnabled()
+				local isEnabled = self:_getResolvedNormalSizeEnabled(autoSizeEnabled)
+				local shouldAnimate = self._autoSizeStateHydrated
+					and self._autoSizeVisualState ~= nil
+					and self._autoSizeVisualState ~= isEnabled
+				self:_syncAutoSizeButton(autoSizeEnabled, shouldAnimate)
+				self._autoSizeStateHydrated = true
+				return
+			end
+
+			if key == AURA_DATA_KEY or key == EQUIPPED_AURA_ID_KEY then
+				self:_scheduleAuraStateRefresh()
+			end
+		end)
+
+		PotionController.StateUpdated:Connect(function()
+			self:_markInventoryRecordsDirty()
+			if not FrameController:IsOpen(WINDOW_NAME) then
+				return
+			end
+			self:_syncList()
+			self:_syncPreview()
+			self:_syncSummaryLabels()
+			self:_syncActionButton()
+			self:_syncSecondaryActionButtons()
+			self:_syncPotionSellModal()
+		end)
+
+		LOCAL_PLAYER.CharacterAdded:Connect(function()
+			self:_invalidateCharacterPreviewModel()
+			if FrameController:IsOpen(WINDOW_NAME) then
+				task.defer(function()
+					self:_syncCharacterViewport()
+				end)
+			end
+		end)
+
+		LOCAL_PLAYER.CharacterRemoving:Connect(function()
+			self:_invalidateCharacterPreviewModel()
+		end)
+
+		task.spawn(function()
+			while not self:_ensureRemotes() do
+				task.wait(1)
+			end
+
+			self._remotes.updated.OnClientEvent:Connect(function(state)
+				self:_applyLoadoutState(state)
+			end)
+
+			self:_requestLoadoutState()
+		end)
+
+		task.spawn(function()
+			while not self:_ensureAuraRemotes() do
+				task.wait(1)
+			end
+
+			local ok, result = pcall(function()
+				return self._remotes.auraGetState:InvokeServer()
+			end)
+			if ok and typeof(result) == "table" and result.ok == true and typeof(result.state) == "table" then
+				self:_applyAuraState(result.state)
+			else
+				self:_refreshAuraStateFromData()
+			end
+		end)
+
+		self._dataBindingsReady = true
+	end
+
+	self._fullUiReady = true
+end
+
+function InventoryController:OnStart()
+	self:_ensureState()
+
+	local playerGui = LOCAL_PLAYER:WaitForChild("PlayerGui")
+	self._playerGui = playerGui
+	self:_cacheOpenButton(playerGui)
+
+	if not self._openButtonBound then
+		self:_bindOpenButton(self._ui.openButton)
+		self._openButtonBound = true
+	end
 end
 
 return InventoryController

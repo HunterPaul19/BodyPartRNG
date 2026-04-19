@@ -2,7 +2,9 @@ local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local FrameController = {}
 
 FrameController.TagName = "frame"
@@ -16,6 +18,19 @@ FrameController.OverlayTween = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.E
 FrameController.BackdropTransparency = 0.5
 FrameController.VignetteTransparency = 0.35
 FrameController.ClosedYScale = 1.25
+
+local FALLBACK_MODAL_FRAME_NAMES = {
+	AppraisalUI = true,
+	AutoSell = true,
+	Gifting = true,
+	Help = true,
+	Index = true,
+	Inventory = true,
+	MerchantTeleportFrame = true,
+	PlayerInfo = true,
+	RobuxStore = true,
+	Titles = true,
+}
 
 local function warnf(message: string, ...)
 	warn(string.format("[FrameController] " .. message, ...))
@@ -65,6 +80,7 @@ function FrameController:_ensureState()
 	self._backdropTween = nil
 	self._vignetteTween = nil
 	self._warnedMissingModalRoot = false
+	self._startupDiagnosticEmitted = false
 	self._started = true
 end
 
@@ -421,6 +437,80 @@ function FrameController:_getClosedPosition(frame: GuiObject): UDim2
 	)
 end
 
+function FrameController:_getRegisteredFrameNames(): { string }
+	local names = {}
+	for name in pairs(self._framesByName) do
+		table.insert(names, name)
+	end
+	table.sort(names)
+	return names
+end
+
+function FrameController:_getActiveProfileId(): string
+	return PlaceProfile.GetActiveProfile().id
+end
+
+function FrameController:_shouldUseFallbackFrame(instance: Instance, modalRoot: ScreenGui): boolean
+	return instance:IsA("GuiObject")
+		and instance.Parent == modalRoot
+		and FALLBACK_MODAL_FRAME_NAMES[instance.Name] == true
+end
+
+function FrameController:_registerFrameCandidate(
+	instance: Instance,
+	modalRoot: ScreenGui,
+	namesToInstances: { [string]: GuiObject },
+	duplicateNames: { [string]: { GuiObject } },
+	options: { sourceLabel: string, requiresTag: boolean? }
+)
+	local sourceLabel = options.sourceLabel
+
+	if not instance:IsA("GuiObject") then
+		if options.requiresTag == true then
+			warnf("Ignoring %s '%s' because it is not a GuiObject.", sourceLabel, instance:GetFullName())
+		end
+		return
+	end
+
+	if instance.Parent ~= modalRoot then
+		if options.requiresTag == true then
+			warnf(
+				"Ignoring %s '%s' because modal frames must be direct children of PlayerGui.%s.",
+				sourceLabel,
+				instance:GetFullName(),
+				self.ModalRootName
+			)
+		end
+		return
+	end
+
+	local existing = namesToInstances[instance.Name]
+	if existing == instance then
+		return
+	end
+
+	if existing then
+		duplicateNames[instance.Name] = duplicateNames[instance.Name] or { existing }
+		table.insert(duplicateNames[instance.Name], instance)
+		namesToInstances[instance.Name] = nil
+		return
+	end
+
+	if duplicateNames[instance.Name] then
+		table.insert(duplicateNames[instance.Name], instance)
+		return
+	end
+
+	namesToInstances[instance.Name] = instance
+	self:_getFrameState(instance)
+	instance.Active = true
+
+	if instance ~= self._currentFrame then
+		instance.Visible = false
+		instance.Position = self._frameStates[instance].OpenPosition
+	end
+end
+
 function FrameController:_refreshRegistry()
 	local playerGui = self:_getPlayerGui()
 	local modalRoot = self:_getModalRoot(false)
@@ -437,40 +527,20 @@ function FrameController:_refreshRegistry()
 			continue
 		end
 
-		if not taggedInstance:IsA("GuiObject") then
-			warnf("Ignoring tagged instance '%s' because it is not a GuiObject.", taggedInstance:GetFullName())
+		self:_registerFrameCandidate(taggedInstance, modalRoot, namesToInstances, duplicateNames, {
+			sourceLabel = "tagged frame",
+			requiresTag = true,
+		})
+	end
+
+	for _, child in ipairs(modalRoot:GetChildren()) do
+		if not self:_shouldUseFallbackFrame(child, modalRoot) then
 			continue
 		end
 
-		if taggedInstance.Parent ~= modalRoot then
-			warnf(
-				"Ignoring tagged frame '%s' because modal frames must be direct children of PlayerGui.%s.",
-				taggedInstance:GetFullName(),
-				self.ModalRootName
-			)
-			continue
-		end
-
-		if namesToInstances[taggedInstance.Name] then
-			duplicateNames[taggedInstance.Name] = duplicateNames[taggedInstance.Name] or { namesToInstances[taggedInstance.Name] }
-			table.insert(duplicateNames[taggedInstance.Name], taggedInstance)
-			namesToInstances[taggedInstance.Name] = nil
-			continue
-		end
-
-		if duplicateNames[taggedInstance.Name] then
-			table.insert(duplicateNames[taggedInstance.Name], taggedInstance)
-			continue
-		end
-
-		namesToInstances[taggedInstance.Name] = taggedInstance
-		self:_getFrameState(taggedInstance)
-		taggedInstance.Active = true
-
-		if taggedInstance ~= self._currentFrame then
-			taggedInstance.Visible = false
-			taggedInstance.Position = self._frameStates[taggedInstance].OpenPosition
-		end
+		self:_registerFrameCandidate(child, modalRoot, namesToInstances, duplicateNames, {
+			sourceLabel = "fallback modal frame",
+		})
 	end
 
 	for name, instances in pairs(duplicateNames) do
@@ -616,11 +686,20 @@ end
 
 function FrameController:OpenFrame(name: string): boolean
 	self:_ensureState()
+
 	self:_refreshRegistry()
 
 	local frame = self._framesByName[name]
 	if not frame then
-		warnf("No registered modal frame named '%s' was found.", name)
+		local modalRoot = self:_getModalRoot(false)
+		local registeredNames = self:_getRegisteredFrameNames()
+		warnf(
+			"No registered modal frame named '%s' was found. profile='%s' modalRootExists=%s registered=[%s]",
+			name,
+			self:_getActiveProfileId(),
+			tostring(modalRoot ~= nil),
+			table.concat(registeredNames, ", ")
+		)
 		return false
 	end
 
@@ -689,6 +768,14 @@ function FrameController:OnStart()
 	self:_ensureOverlay()
 	self:_refreshRegistry()
 	self:_refreshCloseButtons()
+	if not self._startupDiagnosticEmitted then
+		self._startupDiagnosticEmitted = true
+		warnf(
+			"Initialized for profile '%s' with registered frames: [%s]",
+			self:_getActiveProfileId(),
+			table.concat(self:_getRegisteredFrameNames(), ", ")
+		)
+	end
 
 	table.insert(self._connections, CollectionService:GetInstanceAddedSignal(self.TagName):Connect(function()
 		self:_refreshRegistry()
@@ -703,7 +790,11 @@ function FrameController:OnStart()
 		self:_unregisterCloseButton(instance)
 	end))
 	table.insert(self._connections, playerGui.DescendantAdded:Connect(function(instance)
-		if instance.Name == self.ModalRootName or CollectionService:HasTag(instance, self.TagName) then
+		local modalRoot = self:_getModalRoot(false)
+		if instance.Name == self.ModalRootName
+			or CollectionService:HasTag(instance, self.TagName)
+			or (modalRoot ~= nil and self:_shouldUseFallbackFrame(instance, modalRoot))
+		then
 			self._modalRoot = nil
 			self:_ensureOverlay()
 			self:_refreshRegistry()
@@ -718,7 +809,12 @@ function FrameController:OnStart()
 			self:_unregisterCloseButton(instance)
 		end
 
-		if instance == self._currentFrame or instance.Name == self.ModalRootName or CollectionService:HasTag(instance, self.TagName) then
+		local modalRoot = self._modalRoot
+		if instance == self._currentFrame
+			or instance.Name == self.ModalRootName
+			or CollectionService:HasTag(instance, self.TagName)
+			or (modalRoot ~= nil and self:_shouldUseFallbackFrame(instance, modalRoot))
+		then
 			task.defer(function()
 				self._modalRoot = nil
 				self:_ensureOverlay()

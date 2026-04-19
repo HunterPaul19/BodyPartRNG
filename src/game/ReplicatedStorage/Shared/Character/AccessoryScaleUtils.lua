@@ -8,6 +8,15 @@ local function scaleVectorBySizeRatio(vector: Vector3, sourceSize: Vector3, targ
 	)
 end
 
+function AccessoryScaleUtils.ScaleAttachmentLocalCFrame(
+	sourceAttachmentCFrame: CFrame,
+	sourcePartSize: Vector3,
+	targetPartSize: Vector3
+): CFrame
+	return CFrame.new(scaleVectorBySizeRatio(sourceAttachmentCFrame.Position, sourcePartSize, targetPartSize))
+		* sourceAttachmentCFrame.Rotation
+end
+
 function AccessoryScaleUtils.ScaleAccessoryToPartSize(
 	accessory: Accessory,
 	sourcePartSize: Vector3,

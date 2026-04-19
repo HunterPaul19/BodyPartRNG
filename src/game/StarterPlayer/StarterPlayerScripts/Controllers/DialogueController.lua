@@ -9,6 +9,7 @@ local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelR
 
 local DataController = require(script.Parent.DataController)
 local FrameController = require(script.Parent.FrameController)
+local MainInterfaceController = require(script.Parent.MainInterfaceController)
 local MerchantPresentationController = require(script.Parent.MerchantPresentationController)
 local UIController = require(script.Parent.UIController)
 
@@ -47,7 +48,6 @@ type PanelVisibilitySnapshot = {
 	blurSize: number,
 }
 
-local MONEY_KEY = Schema.Money and Schema.Money.key or nil
 local VIP_OWNED_KEY = Schema.VipOwned and Schema.VipOwned.key or nil
 
 local DialogueController = {
@@ -72,10 +72,6 @@ end
 
 local function toBoolean(value: any): boolean
 	return value == true
-end
-
-local function getNumericValue(value: any): number
-	return tonumber(value) or 0
 end
 
 local function deepCopyContext(context: { [string]: any }?): { [string]: any }
@@ -108,23 +104,10 @@ local ConditionPredicates: { [string]: (context: { [string]: any }?) -> boolean 
 
 		return toBoolean(DataController:Get(VIP_OWNED_KEY))
 	end,
-	richEnoughForSecretStock = function()
-		if not MONEY_KEY then
-			return false
-		end
-
-		return getNumericValue(DataController:Get(MONEY_KEY)) >= 100000
-	end,
 }
 
 function DialogueController:_getGuiController()
-	if self._guiController then
-		return self._guiController
-	end
-
-	local mainInterface = self:_ensureUi().mainInterface
-	local guiControllerModule = mainInterface:WaitForChild("GUIController", 30)
-	self._guiController = require(guiControllerModule)
+	self._guiController = MainInterfaceController
 	return self._guiController
 end
 

@@ -9,6 +9,7 @@ local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local PerfStats = require(ReplicatedStorage.Shared.Diagnostics.PerfStats)
+local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local RollMath = require(ReplicatedStorage.Shared.Rolling.RollMath)
 local RollCutsceneConfig = require(ReplicatedStorage.Shared.UI.RollCutsceneConfig)
 local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
@@ -30,6 +31,7 @@ local FINALIZE_AUTO_SELL_ROLL_REMOTE_NAME = "FinalizeAutoSellRoll"
 local PROMPT_QUICK_ROLL_PURCHASE_REMOTE_NAME = "PromptQuickRollPurchase"
 local UPDATED_REMOTE_NAME = "RollingUpdated"
 local BASE_ROLL_COOLDOWN = 1
+local ROLLING_FEATURE_ID = "rolling"
 
 local remotesFolder: Folder? = nil
 local rollingRemotesFolder: Folder? = nil
@@ -48,6 +50,56 @@ local loadoutChangedConnection = nil
 local potionStateChangedConnection = nil
 
 local RollService = {}
+
+local function isRollingEnabled(): boolean
+	local activeProfile = PlaceProfile.GetActiveProfile()
+	if activeProfile.id ~= "unknown" then
+		return true
+	end
+
+	return PlaceProfile.IsFeatureEnabled(ROLLING_FEATURE_ID)
+end
+
+local function getRollingUnavailableMessage(): string
+	return PlaceProfile.GetFeatureUnavailableMessage(ROLLING_FEATURE_ID)
+end
+
+local function buildUnavailableRollingState(message: string?): { [string]: any }
+	return {
+		unavailable = true,
+		featureId = ROLLING_FEATURE_ID,
+		placeProfileId = PlaceProfile.GetActiveProfile().id,
+		rollTypes = {},
+		rollRegions = {},
+		quickRoll = {
+			owned = false,
+			enabled = false,
+		},
+		autoSellRarities = RollingConfig.CreateDefaultAutoSellState(),
+		message = message or getRollingUnavailableMessage(),
+	}
+end
+
+local function destroyRollingRemotes()
+	local existingRemotesFolder = ReplicatedStorage:FindFirstChild(REMOTES_FOLDER_NAME)
+	if existingRemotesFolder and existingRemotesFolder:IsA("Folder") then
+		local existingRollingFolder = existingRemotesFolder:FindFirstChild(ROLLING_FOLDER_NAME)
+		if existingRollingFolder then
+			existingRollingFolder:Destroy()
+		end
+	end
+
+	rollingRemotesFolder = nil
+	getStateRemote = nil
+	selectRollTypeRemote = nil
+	selectRollRegionRemote = nil
+	performRollRemote = nil
+	toggleQuickRollRemote = nil
+	toggleAutoSellRarityRemote = nil
+	finalizeAutoSellRollRemote = nil
+	promptQuickRollPurchaseRemote = nil
+	updatedRemote = nil
+end
 
 local function formatWholeNumber(value: any): string
 	return NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0)))
@@ -617,6 +669,19 @@ local function formatBandLuckSummary(bandLuckSummary): string
 end
 
 function RollService:GetProbabilityDebug(player: Player, options: any?)
+	if not isRollingEnabled() then
+		local message = getRollingUnavailableMessage()
+		return {
+			unavailable = true,
+			featureId = ROLLING_FEATURE_ID,
+			placeProfileId = PlaceProfile.GetActiveProfile().id,
+			summary = message,
+			message = message,
+			entries = {},
+			rarityShares = {},
+		}
+	end
+
 	local selectedRollTypeId = if typeof(options) == "table" and typeof(options.rollTypeId) == "string" then options.rollTypeId else DataService:GetSelectedRollType(player)
 	local rollType = RollTypes.Get(selectedRollTypeId) or RollTypes.GetDefault()
 	local successfulRollCount = DataService:GetSuccessfulRollCount(player)
@@ -674,6 +739,10 @@ function RollService:GetProbabilityDebug(player: Player, options: any?)
 end
 
 function RollService:GetRollingState(player: Player, message: string?)
+	if not isRollingEnabled() then
+		return buildUnavailableRollingState(message)
+	end
+
 	local rollTypeEntries, selectedRollTypeId = buildRollTypeState(player)
 	local rollRegionEntries, selectedRollRegion, selectedRollRegionIcon = buildRollRegionState(player)
 	local selectedRollType = RollTypes.Get(selectedRollTypeId) or RollTypes.GetDefault()
@@ -724,6 +793,10 @@ function RollService:GetRollingState(player: Player, message: string?)
 end
 
 function RollService:GetRollingDeltaState(player: Player, message: string?)
+	if not isRollingEnabled() then
+		return markDeltaState(buildUnavailableRollingState(message))
+	end
+
 	local selectedRollTypeId = DataService:GetSelectedRollType(player)
 	local selectedRollType = RollTypes.Get(selectedRollTypeId) or RollTypes.GetDefault()
 	local successfulRollCount = DataService:GetSuccessfulRollCount(player)
@@ -772,6 +845,10 @@ function RollService:GetRollingDeltaState(player: Player, message: string?)
 end
 
 function RollService:NotifyClient(player: Player, message: string?)
+	if not isRollingEnabled() then
+		return
+	end
+
 	local startedAt = PerfStats.Begin()
 	local payload = self:GetRollingDeltaState(player, message)
 	ensureUpdatedRemote():FireClient(player, payload)
@@ -782,6 +859,10 @@ function RollService:NotifyClient(player: Player, message: string?)
 end
 
 function RollService:SelectRollType(player: Player, rollTypeId: string): (boolean, string)
+	if not isRollingEnabled() then
+		return false, getRollingUnavailableMessage()
+	end
+
 	local rollType = RollTypes.Get(rollTypeId)
 	if not rollType then
 		return false, "That roll type does not exist."
@@ -800,6 +881,10 @@ function RollService:SelectRollType(player: Player, rollTypeId: string): (boolea
 end
 
 function RollService:SelectRollRegion(player: Player, rollRegion: string): (boolean, string)
+	if not isRollingEnabled() then
+		return false, getRollingUnavailableMessage()
+	end
+
 	local previousRollRegion = DataService:GetSelectedRollRegion(player)
 	local ok, message = DataService:SetSelectedRollRegion(player, rollRegion)
 	if not ok then
@@ -814,6 +899,10 @@ function RollService:SelectRollRegion(player: Player, rollRegion: string): (bool
 end
 
 function RollService:ToggleQuickRoll(player: Player, enabled: boolean): (boolean, string)
+	if not isRollingEnabled() then
+		return false, getRollingUnavailableMessage()
+	end
+
 	local quickRollState = buildQuickRollState(player)
 	if not quickRollState.owned then
 		return false, "Quick Roll requires the gamepass."
@@ -832,6 +921,10 @@ function RollService:ToggleQuickRoll(player: Player, enabled: boolean): (boolean
 end
 
 function RollService:ToggleAutoSellRarity(player: Player, displayRarity: any, enabled: boolean): (boolean, string)
+	if not isRollingEnabled() then
+		return false, getRollingUnavailableMessage()
+	end
+
 	local normalizedRarity = RollingConfig.ResolveDisplayRarity(displayRarity)
 	if not normalizedRarity then
 		return false, "That auto-sell rarity does not exist."
@@ -854,6 +947,10 @@ function RollService:ToggleAutoSellRarity(player: Player, displayRarity: any, en
 end
 
 function RollService:FinalizeAutoSellRoll(player: Player, payload: any): (boolean, string)
+	if not isRollingEnabled() then
+		return false, getRollingUnavailableMessage()
+	end
+
 	if typeof(payload) ~= "table" then
 		return false, "Finalize auto-sell payload must be a table."
 	end
@@ -886,6 +983,10 @@ function RollService:FinalizeAutoSellRoll(player: Player, payload: any): (boolea
 end
 
 function RollService:PromptQuickRollPurchase(player: Player): (boolean, string)
+	if not isRollingEnabled() then
+		return false, getRollingUnavailableMessage()
+	end
+
 	local passConfig = getQuickRollPassConfig()
 	if not passConfig or not passConfig.offerKey then
 		return false, "Quick Roll is not configured."
@@ -899,9 +1000,17 @@ function RollService:PromptQuickRollPurchase(player: Player): (boolean, string)
 	return true, message or "Purchase prompt opened."
 end
 
-function RollService:PerformRoll(player: Player): (boolean, string, any?)
+function RollService:PerformRoll(player: Player, payload: any?): (boolean, string, any?)
 	local startedAt = PerfStats.Begin()
 	StatsService:RecordRollRequest(player)
+	if not isRollingEnabled() then
+		StatsService:RecordRollFailure(player, "unavailable")
+		PerfStats.Measure("PerformRoll", startedAt, {
+			detail = string.format("%s:unavailable", player.Name),
+		})
+		return false, getRollingUnavailableMessage(), nil
+	end
+
 	if rollLocks[player] then
 		StatsService:RecordRollFailure(player, "locked")
 		PerfStats.Measure("PerformRoll", startedAt, {
@@ -955,6 +1064,9 @@ function RollService:PerformRoll(player: Player): (boolean, string, any?)
 	local successfulRollCount = DataService:GetSuccessfulRollCount(player)
 	local luckState, bonuses, potionBonuses = computeLuckState(player, selectedRollType, successfulRollCount)
 	local quickRollApplied = buildQuickRollState(player).enabled == true
+	local triggerSource = if typeof(payload) == "table" and payload.triggerSource == "auto" then "auto" else "manual"
+	local skipPresentation = quickRollApplied and triggerSource == "auto"
+	local skipPreview = quickRollApplied and triggerSource ~= "auto"
 	local _, activeEntries = buildRollListEntries(luckState.rawLuck)
 	local randomSource = Random.new()
 	local finalSet = chooseWeightedSet(randomSource, activeEntries)
@@ -1037,7 +1149,7 @@ function RollService:PerformRoll(player: Player): (boolean, string, any?)
 	local updatedSuccessfulRollCount = DataService:IncrementSuccessfulRollCount(player)
 	local autoSellRarity = RollingConfig.NormalizeDisplayRarity(finalSet.setConfig.rollDisplay.rarity)
 	local autoSellEnabledForRarity = DataService:IsAutoSellEnabledForRarity(player, autoSellRarity)
-	local pendingAutoSell = (not quickRollApplied) and autoSellEnabledForRarity
+	local pendingAutoSell = (not skipPresentation) and autoSellEnabledForRarity
 	local autoSoldInstantly = false
 	local rollMessage = string.format("Rolled %s.", finalResult.Name)
 	if pendingAutoSell then
@@ -1045,7 +1157,7 @@ function RollService:PerformRoll(player: Player): (boolean, string, any?)
 			displayRarity = autoSellRarity,
 			ownedId = ownedRecord.ownedId,
 		}
-	elseif quickRollApplied and autoSellEnabledForRarity then
+	elseif skipPresentation and autoSellEnabledForRarity then
 		local sold, sellMessage = BodyPartService:SellOwnedBodyPart(player, ownedRecord.ownedId)
 		if sold then
 			autoSoldInstantly = true
@@ -1083,7 +1195,8 @@ function RollService:PerformRoll(player: Player): (boolean, string, any?)
 		ownedId = ownedRecord.ownedId,
 		pendingAutoSell = pendingAutoSell,
 		autoSoldInstantly = autoSoldInstantly,
-		skipPresentation = quickRollApplied,
+		skipPreview = skipPreview,
+		skipPresentation = skipPresentation,
 		autoSellRarity = if (pendingAutoSell or autoSoldInstantly) then autoSellRarity else nil,
 		rollTypeId = selectedRollType.id,
 		rollRegion = selectedRollRegion,
@@ -1185,12 +1298,17 @@ local function handlePromptQuickRollPurchase(player: Player)
 	return response(ok, message, RollService:GetRollingState(player))
 end
 
-local function handlePerformRoll(player: Player)
-	local ok, message, rollResult = RollService:PerformRoll(player)
+local function handlePerformRoll(player: Player, payload: any)
+	local ok, message, rollResult = RollService:PerformRoll(player, payload)
 	return response(ok, message, RollService:GetRollingDeltaState(player, message), rollResult)
 end
 
 function RollService:OnStart()
+	if not isRollingEnabled() then
+		destroyRollingRemotes()
+		return
+	end
+
 	getStateRemote = ensureRemoteFunction(getStateRemote, GET_STATE_REMOTE_NAME)
 	selectRollTypeRemote = ensureRemoteFunction(selectRollTypeRemote, SELECT_ROLL_TYPE_REMOTE_NAME)
 	selectRollRegionRemote = ensureRemoteFunction(selectRollRegionRemote, SELECT_ROLL_REGION_REMOTE_NAME)
@@ -1278,9 +1396,9 @@ function RollService:OnStart()
 		warn(string.format("[RollService] PromptQuickRollPurchase failed for %s: %s", player.Name, tostring(result)))
 		return response(false, "Failed to open the Quick Roll purchase prompt.", self:GetRollingState(player))
 	end
-	performRollRemote.OnServerInvoke = function(player: Player)
+	performRollRemote.OnServerInvoke = function(player: Player, payload: any)
 		local ok, result = pcall(function()
-			return handlePerformRoll(player)
+			return handlePerformRoll(player, payload)
 		end)
 		if ok then
 			return result

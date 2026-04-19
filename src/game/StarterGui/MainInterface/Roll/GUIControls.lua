@@ -70,15 +70,20 @@ local LeftButton = RollButton.Left
 local RightButton = RollButton.Right
 local DEFAULT_ROLL_DESC_COLOR = RollButton.Desc.TextColor3
 local READY_ROLL_DESC_COLOR = Color3.fromRGB(255, 223, 94)
-local RollResultRaritySubInfoLabel = SubInfoFrame:FindFirstChild("Mutation")
+local RollResultRaritySubInfoLabel = SubInfoFrame:FindFirstChild("Rarity")
+local RollResultMutationSubInfoLabel = SubInfoFrame:FindFirstChild("Mutation")
 local EverRolledSubInfoLabel = SubInfoFrame:FindFirstChild("EverRolled")
 local DEFAULT_SUBINFO_RARITY_TEXT = if RollResultRaritySubInfoLabel and RollResultRaritySubInfoLabel:IsA("TextLabel")
 	then RollResultRaritySubInfoLabel.Text
+	else ""
+local DEFAULT_SUBINFO_MUTATION_TEXT = if RollResultMutationSubInfoLabel and RollResultMutationSubInfoLabel:IsA("TextLabel")
+	then RollResultMutationSubInfoLabel.Text
 	else ""
 local DEFAULT_SUBINFO_EVER_ROLLED_TEXT = if EverRolledSubInfoLabel and EverRolledSubInfoLabel:IsA("TextLabel")
 	then EverRolledSubInfoLabel.Text
 	else "N/A Ever Rolled"
 local DEFAULT_SUBINFO_RARITY_VISUAL_STATE = nil
+local DEFAULT_SUBINFO_MUTATION_VISUAL_STATE = nil
 
 local Blur = Instance.new("BlurEffect")
 Blur.Parent = game.Lighting
@@ -204,11 +209,17 @@ local function restoreTextLabelVisualState(label: TextLabel?, state: any)
 end
 
 DEFAULT_SUBINFO_RARITY_VISUAL_STATE = captureTextLabelVisualState(RollResultRaritySubInfoLabel)
+DEFAULT_SUBINFO_MUTATION_VISUAL_STATE = captureTextLabelVisualState(RollResultMutationSubInfoLabel)
 
 local function resetRollResultSubInfo()
 	restoreTextLabelVisualState(RollResultRaritySubInfoLabel, DEFAULT_SUBINFO_RARITY_VISUAL_STATE)
 	if RollResultRaritySubInfoLabel and RollResultRaritySubInfoLabel:IsA("TextLabel") then
 		RollResultRaritySubInfoLabel.Text = DEFAULT_SUBINFO_RARITY_TEXT
+	end
+
+	restoreTextLabelVisualState(RollResultMutationSubInfoLabel, DEFAULT_SUBINFO_MUTATION_VISUAL_STATE)
+	if RollResultMutationSubInfoLabel and RollResultMutationSubInfoLabel:IsA("TextLabel") then
+		RollResultMutationSubInfoLabel.Text = DEFAULT_SUBINFO_MUTATION_TEXT
 	end
 
 	if EverRolledSubInfoLabel and EverRolledSubInfoLabel:IsA("TextLabel") then
@@ -420,6 +431,11 @@ local function isInsufficientFundsMessage(message)
 	return typeof(message) == "string"
 		and string.find(string.lower(message), "need", 1, true) ~= nil
 		and string.find(string.lower(message), "money", 1, true) ~= nil
+end
+
+local function isInventoryFullMessage(message)
+	return typeof(message) == "string"
+		and string.find(string.lower(message), "inventory is full", 1, true) ~= nil
 end
 
 local function clearViewport()
@@ -1155,8 +1171,9 @@ function GUIControls:ShowRollResults(rollInfo)
 	ShowBlackTween:Play()
 	BlurTween:Play()
 
+	local rarityLabel = Main.SubInfo:FindFirstChild("Rarity")
 	local sizeLabel = Main.SubInfo:FindFirstChild("Size")
-	local rarityLabel = Main.SubInfo:FindFirstChild("Mutation")
+	local mutationLabel = Main.SubInfo:FindFirstChild("Mutation")
 	local everRolledLabel = Main.SubInfo:FindFirstChild("EverRolled")
 	if rarityLabel and rarityLabel:IsA("TextLabel") then
 		local setConfig = if typeof(rollInfo.PieceId) == "string" and rollInfo.PieceId ~= ""
@@ -1169,6 +1186,14 @@ function GUIControls:ShowRollResults(rollInfo)
 			setConfig,
 			rollInfo.Rarity,
 			if typeof(rollInfo.Color) == "Color3" then rollInfo.Color else nil
+		)
+	end
+	if mutationLabel and mutationLabel:IsA("TextLabel") then
+		restoreTextLabelVisualState(mutationLabel, DEFAULT_SUBINFO_MUTATION_VISUAL_STATE)
+		mutationLabel.RichText = true
+		mutationLabel.Text = BodyPartPresentation.FormatMutationLabelText(
+			DEFAULT_SUBINFO_MUTATION_TEXT,
+			{ mutationId = resolveRollResultMutationId(rollInfo) }
 		)
 	end
 
@@ -1208,6 +1233,9 @@ function GUIControls:ShowRollResults(rollInfo)
 	end
 	if rarityLabel and rarityLabel:IsA("TextLabel") then
 		rarityLabel.Visible = true
+	end
+	if mutationLabel and mutationLabel:IsA("TextLabel") then
+		mutationLabel.Visible = true
 	end
 	if everRolledLabel and everRolledLabel:IsA("TextLabel") then
 		local ownedRecord = GUIControls.CurrentRollResult and GUIControls.CurrentRollResult.ownedRecord
@@ -1267,7 +1295,9 @@ function GUIControls:Roll(triggerSource)
 		if resolvedTriggerSource ~= "auto" then
 			GUIControls:SetDropdownOpen(false)
 		end
-		local rollResponse = invokeRemote(PerformRollRemote)
+		local rollResponse = invokeRemote(PerformRollRemote, {
+			triggerSource = resolvedTriggerSource,
+		})
 		if not rollResponse then
 			GUIControls:SetTemporaryStatus("Failed to reach the server.")
 			return
@@ -1280,6 +1310,15 @@ function GUIControls:Roll(triggerSource)
 					GUIControls:SetAutoRollEnabled(false)
 				end
 				RollWarningNotifier.ShowInsufficientFundsWarning()
+			elseif isInventoryFullMessage(failureMessage) then
+				if GUIControls.AutoRoll then
+					GUIControls:SetAutoRollEnabled(false)
+				end
+				Notify.Show(failureMessage, {
+					channel = "inventory",
+					duration = 4,
+				})
+				GUIControls:SetTemporaryStatus(failureMessage)
 			else
 				GUIControls:SetTemporaryStatus(failureMessage)
 			end
@@ -1318,11 +1357,28 @@ function GUIControls:Roll(triggerSource)
 		GUIControls.EquipDebounce = false
 
 		GUIControls:BeginRollPreviewSession()
+		local shouldDelayFinalReveal = shouldPlayRollCutscene(rollResult)
+		if rollResult.skipPreview == true then
+			local finalResult = if typeof(rollResult.finalResult) == "table" then rollResult.finalResult else nil
+			GUIControls.CurrentlyRolling = false
+			if finalResult then
+				if shouldDelayFinalReveal then
+					playRollCutsceneIfNeeded(rollResult, finalResult)
+				end
+				GUIControls:ShowRollResults(finalResult)
+			else
+				restoreIdleRollUi()
+				GUIControls:RefreshEquipButton()
+				GUIControls:SetButtonCooldown()
+				GUIControls:SetTemporaryStatus(rollResponse.message or "Roll complete.")
+			end
+			return
+		end
+
 		local previewSequence = rollResult.previewSequence
 		if typeof(previewSequence) ~= "table" or #previewSequence == 0 then
 			previewSequence = buildClientPreviewSequence(rollResult) or { rollResult.finalResult }
 		end
-		local shouldDelayFinalReveal = shouldPlayRollCutscene(rollResult)
 		local previewCount = if shouldDelayFinalReveal then math.max(#previewSequence - 1, 0) else #previewSequence
 		local previewedResult = GUIControls:RollSequence(previewSequence, previewCount)
 		local finalPreviewEntry = previewSequence[#previewSequence]
