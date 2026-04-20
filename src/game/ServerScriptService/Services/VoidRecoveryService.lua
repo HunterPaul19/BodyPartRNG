@@ -2,6 +2,8 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
+local BossArenaRuntimeService = require(script.Parent.BossArenaRuntimeService)
+
 local VOID_Y_THRESHOLD = -1000
 local RETURN_HEIGHT_ABOVE_SPAWN = 1000
 local RECOVERY_COOLDOWN_SECONDS = 1.0
@@ -13,7 +15,7 @@ local heartbeatConnection: RBXScriptConnection? = nil
 
 local VoidRecoveryService = {}
 
-local function getSpawnLocation(): SpawnLocation?
+local function getFallbackSpawnLocation(): SpawnLocation?
 	local current: Instance? = Workspace
 
 	for _, childName in ipairs(MAIN_SPAWN_PATH) do
@@ -29,6 +31,20 @@ local function getSpawnLocation(): SpawnLocation?
 	end
 
 	return Workspace:FindFirstChildWhichIsA("SpawnLocation", true)
+end
+
+local function getRecoverySpawnPosition(player: Player): Vector3?
+	local arenaSpawnCFrame = BossArenaRuntimeService:GetAssignedPlayerSpawnCFrame(player)
+	if arenaSpawnCFrame ~= nil then
+		return arenaSpawnCFrame.Position
+	end
+
+	local spawnLocation = getFallbackSpawnLocation()
+	if spawnLocation == nil then
+		return nil
+	end
+
+	return spawnLocation.Position
 end
 
 local function getRecoverableCharacterParts(character: Model): (Humanoid?, BasePart?)
@@ -62,15 +78,15 @@ local function recoverCharacter(player: Player, character: Model)
 		return
 	end
 
-	local spawnLocation = getSpawnLocation()
-	if spawnLocation == nil then
+	local spawnPosition = getRecoverySpawnPosition(player)
+	if spawnPosition == nil then
 		return
 	end
 
 	recoveryCooldownUntilByPlayer[player] = os.clock() + RECOVERY_COOLDOWN_SECONDS
 
 	local linearVelocity = root.AssemblyLinearVelocity
-	local targetCFrame = buildRecoveryCFrame(character:GetPivot(), spawnLocation.Position)
+	local targetCFrame = buildRecoveryCFrame(character:GetPivot(), spawnPosition)
 
 	character:PivotTo(targetCFrame)
 	root.AssemblyLinearVelocity = linearVelocity

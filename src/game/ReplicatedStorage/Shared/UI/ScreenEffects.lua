@@ -7,7 +7,6 @@ local ScreenEffects = {}
 local GAME_ASSETS_FOLDER_NAME = "GameAssets"
 local SCREEN_EFFECTS_FOLDER_NAME = "ScreenEffects"
 local CLEANUP_DELAY = 1.5
-local BASE_RESOLUTION = Vector2.new(1920, 1080)
 
 local PRESET_CONFIGS = table.freeze({
 	Corrupted = {
@@ -99,12 +98,16 @@ local function syncEffectPartToCamera(
 	camera: Camera
 )
 	local viewport = camera.ViewportSize
-	local scaleX = viewport.X / BASE_RESOLUTION.X
-	local scaleY = viewport.Y / BASE_RESOLUTION.Y
+	local viewportWidth = math.max(viewport.X, 1)
+	local viewportHeight = math.max(viewport.Y, 1)
+	local depth = math.max(math.abs(presetConfig.frontOffset.Position.Z), 0.001)
+	local fov = math.rad(camera.FieldOfView)
+	local visibleHeight = 2 * math.tan(fov / 2) * depth
+	local visibleWidth = visibleHeight * (viewportWidth / viewportHeight)
 
 	effectPart.Size = Vector3.new(
-		originalSize.X * scaleX,
-		originalSize.Y * scaleY,
+		visibleWidth,
+		visibleHeight,
 		originalSize.Z
 	)
 	effectPart.CFrame = camera.CFrame * presetConfig.frontOffset

@@ -16,6 +16,7 @@ local PotionRuntimeBonuses = require(ReplicatedStorage.Shared.Character.PotionRu
 local PerfStats = require(ReplicatedStorage.Shared.Diagnostics.PerfStats)
 local DataService = require(script.Parent.DataService)
 local PotionService = require(script.Parent.PotionService)
+local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 local StatsService = require(script.Parent.StatsService)
 local SessionStore = require(script.SessionStore)
 
@@ -39,7 +40,8 @@ local AURA_RUNTIME_ATTRIBUTE = "BodyPartAuraManaged"
 local AURA_REAPPLY_DEBOUNCE_SECONDS = 0.15
 local APPEARANCE_TRANSFER_MANAGED_ATTRIBUTE = "AppearanceTransferApplied"
 local APPEARANCE_REFRESH_DEBOUNCE_SECONDS = 0.15
-local CHARACTER_APPEARANCE_FALLBACK_SECONDS = 8
+local CHARACTER_ACTIVATION_RETRY_SECONDS = 0.5
+local CHARACTER_ACTIVATION_RETRY_LIMIT = 4
 local CHARACTER_READY_TIMEOUT_SECONDS = 5
 local CHARACTER_READY_POLL_INTERVAL_SECONDS = 0.1
 local PLAYER_DATA_READY_TIMEOUT_SECONDS = 15
@@ -87,6 +89,7 @@ local characterLifecycleStates: {
 		activeRuntimeCharacter: Model?,
 		pendingRuntimeApply: boolean,
 		fallbackGeneration: number,
+		activationRetryAttempt: number,
 		lastActivationSource: string?,
 	},
 } = {}
@@ -134,6 +137,10 @@ local function response(ok: boolean, message: string, state: any?)
 	}
 end
 
+local function buildRateLimitResponse(message: string, state: any?)
+	return response(false, message, state)
+end
+
 local rebuildCurrentVisualStateNow: ((Player, string?) -> (boolean, string?))
 local refreshCurrentAppearanceNow: ((Player, string?) -> (boolean, string?))
 
@@ -158,6 +165,7 @@ local function getCharacterLifecycleState(player: Player)
 		activeRuntimeCharacter = nil,
 		pendingRuntimeApply = false,
 		fallbackGeneration = 0,
+		activationRetryAttempt = 0,
 		lastActivationSource = nil,
 	}
 	characterLifecycleStates[player] = state
@@ -188,6 +196,17 @@ end
 local function setCharacterBuildLock(character: Model?, isLocked: boolean)
 	if character and character.Parent then
 		character:SetAttribute(BUILD_LOCK_ATTRIBUTE, isLocked)
+	end
+end
+
+local function ensureLiveHumanoidAutoRotateEnabled(character: Model?)
+	if not (character and character:IsA("Model") and character.Parent) then
+		return
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid and humanoid.Parent then
+		humanoid.AutoRotate = true
 	end
 end
 
@@ -1546,6 +1565,7 @@ function BodyPartService:ApplySessionLoadout(player: Player): (boolean, string?)
 
 	setCharacterBuildLock(character, false)
 	endRuntimeMutationSuppression(player, character)
+	ensureLiveHumanoidAutoRotateEnabled(character)
 	PerfStats.Measure("BodyPartVisualsApply", startedAt, {
 		detail = string.format("%s:%s", player.Name, if success then "ok" else "failed"),
 	})
@@ -1593,6 +1613,7 @@ refreshCurrentAppearanceNow = function(player: Player, reason: string?): (boolea
 
 	setCharacterBuildLock(character, false)
 	endRuntimeMutationSuppression(player, character)
+	ensureLiveHumanoidAutoRotateEnabled(character)
 
 	local success = refreshSuccessOrTrace
 	local message = refreshMessage
@@ -1665,6 +1686,7 @@ rollbackVisualState = function(player: Player, previousState: BodyPartLoadout.Eq
 	end, debug.traceback)
 
 	setCharacterBuildLock(character, false)
+	ensureLiveHumanoidAutoRotateEnabled(character)
 
 	if not rollbackSucceeded then
 		warn(string.format("[BodyPartService] Failed to rollback visual state for %s: %s", player.Name, tostring(rollbackError)))
@@ -1736,6 +1758,7 @@ local function markCurrentCharacter(player: Player, character: Model)
 		state.activeRuntimeCharacter = nil
 		state.lastActivationSource = nil
 		state.fallbackGeneration += 1
+		state.activationRetryAttempt = 0
 		clearCharacterRuntimeWatcherState(player)
 	end
 
@@ -1745,7 +1768,7 @@ end
 
 local function logDeferredCharacterActivation(player: Player, source: string, reason: string)
 	print(string.format(
-		"[BodyPartService] Waiting for finalized avatar appearance for %s after %s: %s",
+		"[BodyPartService] Delaying body part runtime activation for %s after %s: %s",
 		player.Name,
 		source,
 		reason
@@ -1757,15 +1780,15 @@ local function tryActivateCharacterRuntime(
 	character: Model,
 	source: string,
 	options: { forceReapply: boolean? }?
-): boolean
+): (boolean, string?)
 	if not isCharacterCurrentForPlayer(player, character) then
-		return false
+		return false, "not_current_character"
 	end
 
 	local state = getCharacterLifecycleState(player)
 	if not playerDataReadyByPlayer[player] then
 		state.pendingRuntimeApply = true
-		return false
+		return false, "player_data_not_ready"
 	end
 
 	local forceReapply = if typeof(options) == "table" then options.forceReapply == true else false
@@ -1777,7 +1800,7 @@ local function tryActivateCharacterRuntime(
 		or state.pendingRuntimeApply
 		or state.activeRuntimeCharacter ~= character
 	if not shouldApply then
-		return true
+		return true, nil
 	end
 
 	local isCharacterReady, characterReadyError, characterReadyErrorKind =
@@ -1790,7 +1813,7 @@ local function tryActivateCharacterRuntime(
 				source,
 				tostring(characterReadyError or "Character appearance has not finished loading.")
 			)
-			return false
+			return false, characterReadyErrorKind
 		end
 
 		state.pendingRuntimeApply = true
@@ -1801,7 +1824,7 @@ local function tryActivateCharacterRuntime(
 			tostring(characterReadyError)
 		))
 		BodyPartService:NotifyClient(player, getCharacterRigNotReadyMessage(characterReadyError, characterReadyErrorKind))
-		return false
+		return false, characterReadyErrorKind or "character_not_ready"
 	end
 
 	attachCharacterRuntimeWatcher(player, character)
@@ -1813,32 +1836,70 @@ local function tryActivateCharacterRuntime(
 			BodyPartService:NotifyClient(player, applyMessage)
 			warn(string.format("[BodyPartService] %s", applyMessage))
 		end
-		return false
+		return false, "apply_failed"
 	end
 
 	state.activeRuntimeCharacter = character
+	state.activationRetryAttempt = 0
 	state.pendingRuntimeApply = false
 	state.lastActivationSource = source
 	print(string.format("[BodyPartService] Activated body part runtime for %s via %s.", player.Name, source))
 	notifyLoadoutChanged(player)
-	return true
+	return true, nil
 end
 
-local function scheduleCharacterActivationFallback(player: Player, character: Model, source: string)
+local function scheduleCharacterActivationRetry(
+	player: Player,
+	character: Model,
+	source: string,
+	retryAttempt: number,
+	options: { forceReapply: boolean? }?
+)
+	if retryAttempt > CHARACTER_ACTIVATION_RETRY_LIMIT then
+		return
+	end
+
 	local state = getCharacterLifecycleState(player)
 	local fallbackGeneration = state.fallbackGeneration
+	if state.activationRetryAttempt >= retryAttempt then
+		return
+	end
 
-	task.delay(CHARACTER_APPEARANCE_FALLBACK_SECONDS, function()
+	state.activationRetryAttempt = retryAttempt
+
+	task.delay(CHARACTER_ACTIVATION_RETRY_SECONDS, function()
 		local activeState = characterLifecycleStates[player]
 		if activeState == nil or activeState.fallbackGeneration ~= fallbackGeneration then
 			return
 		end
 
-		if activeState.currentCharacter ~= character or activeState.appearanceLoadedCharacter == character then
+		if activeState.currentCharacter ~= character or activeState.activeRuntimeCharacter == character then
 			return
 		end
 
-		tryActivateCharacterRuntime(player, character, source)
+		local _, failureKind = tryActivateCharacterRuntime(player, character, source, options)
+		if failureKind == "placeholder_character" then
+			scheduleCharacterActivationRetry(player, character, source, retryAttempt + 1, options)
+			return
+		end
+
+		if activeState.activationRetryAttempt == retryAttempt then
+			activeState.activationRetryAttempt = 0
+		end
+	end)
+end
+
+local function queueCharacterActivation(
+	player: Player,
+	character: Model,
+	source: string,
+	options: { forceReapply: boolean? }?
+)
+	task.defer(function()
+		local _, failureKind = tryActivateCharacterRuntime(player, character, source, options)
+		if failureKind == "placeholder_character" then
+			scheduleCharacterActivationRetry(player, character, source, 1, options)
+		end
 	end)
 end
 
@@ -2349,36 +2410,97 @@ function BodyPartService:OnStart()
 	updatedRemote = ensureUpdatedRemote()
 
 	getStateRemote.OnServerInvoke = function(player: Player)
+		local allowed = RequestLimiter:Allow(player, "remote.body_parts.get_state")
+		if not allowed then
+			return buildRateLimitResponse("You're refreshing your inventory too quickly.", BodyPartService:GetClientState(player))
+		end
+
 		return handleGetState(player)
 	end
 	getExistenceRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.body_parts.existence")
+		if not allowed then
+			return {
+				ok = false,
+				message = "You're checking existence counts too quickly.",
+			}
+		end
+
 		return handleGetTotalInExistence(player, payload)
 	end
 	getPlayerInspectSummaryRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.body_parts.inspect")
+		if not allowed then
+			return {
+				ok = false,
+				message = "You're inspecting players too quickly.",
+			}
+		end
+
 		return handleGetPlayerInspectSummary(player, payload)
 	end
 	equipRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.body_parts.equip")
+		if not allowed then
+			return buildRateLimitResponse("You're equipping body parts too quickly.", BodyPartService:GetClientState(player))
+		end
+
 		return handleEquip(player, payload)
 	end
 	equipBestRemote.OnServerInvoke = function(player: Player)
+		local allowed = RequestLimiter:Allow(player, "remote.body_parts.equip_best")
+		if not allowed then
+			return buildRateLimitResponse("You're equipping loadouts too quickly.", BodyPartService:GetClientState(player))
+		end
+
 		return handleEquipBest(player)
 	end
 	unequipRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.body_parts.unequip")
+		if not allowed then
+			return buildRateLimitResponse("You're unequipping body parts too quickly.", BodyPartService:GetClientState(player))
+		end
+
 		return handleUnequip(player, payload)
 	end
 	setAutoSizeEnabledRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.body_parts.auto_size")
+		if not allowed then
+			return buildRateLimitResponse("You're toggling auto size too quickly.", BodyPartService:GetClientState(player))
+		end
+
 		return handleSetAutoSizeEnabled(player, payload)
 	end
 	clearRemote.OnServerInvoke = function(player: Player)
+		local allowed = RequestLimiter:Allow(player, "remote.body_parts.clear")
+		if not allowed then
+			return buildRateLimitResponse("You're clearing loadouts too quickly.", BodyPartService:GetClientState(player))
+		end
+
 		return handleClear(player)
 	end
 	toggleFavoriteRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.body_parts.favorite")
+		if not allowed then
+			return buildRateLimitResponse("You're changing favorites too quickly.", BodyPartService:GetClientState(player))
+		end
+
 		return handleToggleFavorite(player, payload)
 	end
 	sellOwnedRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.body_parts.sell_one")
+		if not allowed then
+			return buildRateLimitResponse("You're selling body parts too quickly.", BodyPartService:GetClientState(player))
+		end
+
 		return handleSellOwned(player, payload)
 	end
 	sellAllRemote.OnServerInvoke = function(player: Player)
+		local allowed = RequestLimiter:Allow(player, "remote.body_parts.sell_all")
+		if not allowed then
+			return buildRateLimitResponse("You're bulk selling too quickly.", BodyPartService:GetClientState(player))
+		end
+
 		return handleSellAll(player)
 	end
 
@@ -2429,19 +2551,11 @@ function BodyPartService:OnStart()
 		end
 
 		state.pendingRuntimeApply = true
-		if state.appearanceLoadedCharacter == character or state.activeRuntimeCharacter == character then
-			tryActivateCharacterRuntime(player, character, "PlayerDataLoaded", {
-				forceReapply = didChange or state.activeRuntimeCharacter ~= character,
-			})
-		else
-			logDeferredCharacterActivation(
-				player,
-				"PlayerDataLoaded",
-				"Current character has not reached CharacterAppearanceLoaded yet."
-			)
-			if didChange then
-				notifyLoadoutChanged(player)
-			end
+		queueCharacterActivation(player, character, "PlayerDataLoaded", {
+			forceReapply = didChange or state.activeRuntimeCharacter ~= character,
+		})
+		if didChange and state.activeRuntimeCharacter ~= character then
+			notifyLoadoutChanged(player)
 		end
 	end)
 end
@@ -2462,7 +2576,7 @@ function BodyPartService:OnPlayerAdded(player: Player)
 
 	characterAddedConnections[player] = player.CharacterAdded:Connect(function(character)
 		markCurrentCharacter(player, character)
-		scheduleCharacterActivationFallback(player, character, "CharacterAddedFallback")
+		queueCharacterActivation(player, character, "CharacterAdded")
 	end)
 
 	characterAppearanceLoadedConnections[player] = player.CharacterAppearanceLoaded:Connect(function(character)
@@ -2478,9 +2592,7 @@ function BodyPartService:OnPlayerAdded(player: Player)
 
 		activeState.appearanceLoadedCharacter = character
 		activeState.pendingRuntimeApply = true
-		task.defer(function()
-			tryActivateCharacterRuntime(player, character, "CharacterAppearanceLoaded")
-		end)
+		queueCharacterActivation(player, character, "CharacterAppearanceLoaded")
 	end)
 
 	if player.Character then
@@ -2488,7 +2600,7 @@ function BodyPartService:OnPlayerAdded(player: Player)
 		if character and character:IsA("Model") then
 			markCurrentCharacter(player, character)
 			state.pendingRuntimeApply = true
-			scheduleCharacterActivationFallback(player, character, "ExistingCharacterFallback")
+			queueCharacterActivation(player, character, "ExistingCharacter")
 		end
 	end
 end

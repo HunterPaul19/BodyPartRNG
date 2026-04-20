@@ -304,6 +304,7 @@ function PlayerStatsPresentation.BuildAdminSections(summary: any): { [string]: s
 			string.format("Roll Region Changes: %s", formatNumberish(settings.rollRegionChanges)),
 			string.format("Quick Roll Toggles: %s", formatNumberish(settings.quickRollToggleCount)),
 			string.format("Auto-Sell Toggles: %s", formatNumberish(settings.autoSellToggleCount)),
+			string.format("Cutscene Toggles: %s", formatNumberish(settings.cutsceneToggleCount)),
 		}, "\n"),
 	}
 end

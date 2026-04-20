@@ -12,7 +12,15 @@ local STARTUP_WATCHDOG_SECONDS = 3
 local CLIENT_STARTUP_PHASE_DEFINITIONS = {
 	{
 		label = "Phase1.CoreUI",
-		names = { "UIController", "FrameController", "HUDWindowController", "MainInterfaceController" },
+		names = {
+			"UIController",
+			"FrameController",
+			"HUDWindowController",
+			"MainInterfaceController",
+			"CombatPhysicsController",
+			"BossHealthBarController",
+			"BossArenaStudioPickerController",
+		},
 	},
 	{
 		label = "Phase2.HUDPanels",

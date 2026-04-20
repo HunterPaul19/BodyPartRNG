@@ -7,10 +7,12 @@ local Workspace = game:GetService("Workspace")
 local Globals = require(ReplicatedStorage.Lists.Globals)
 local Schema = require(ReplicatedStorage.Lists.Schema)
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
+local RateLimitTelemetry = require(script.Parent.Parent.Common.RateLimitTelemetry)
 
 local RENDER_REFRESH_TIME = 10
-local ROLLS_FLUSH_TIME = 10
-local LEGACY_SYNC_REFRESH_TIME = 30
+local ROLLS_FLUSH_TIME = 60
+local LEGACY_SYNC_REFRESH_TIME = 120
+local MONEY_MIN_FLUSH_DELTA = 100
 local MAX_FETCH_ENTRIES = 1000
 local ORDERED_STORE_PAGE_SIZE = 100
 local DEFAULT_VISIBLE_ENTRY_COUNT = 10
@@ -32,6 +34,7 @@ local BOARD_CONFIGS = {
 		key = ROLLS_KEY,
 		format = "Rolls",
 		useDirtySync = true,
+		minFlushIntervalSeconds = ROLLS_FLUSH_TIME,
 		modelPaths = { "Map.RollsLeaderboard" },
 		infoTitle = "Rolls",
 		headerValueLabelNames = { "Rolls", "Value" },
@@ -40,6 +43,8 @@ local BOARD_CONFIGS = {
 	MoneyLeaderboard = {
 		key = MONEY_KEY,
 		format = "Money",
+		minFlushIntervalSeconds = LEGACY_SYNC_REFRESH_TIME,
+		minFlushDelta = MONEY_MIN_FLUSH_DELTA,
 		modelPaths = { "Map.MoneyLeaderboard" },
 		infoTitle = "Money",
 		headerValueLabelNames = { "Money", "Value", "Rolls" },
@@ -52,6 +57,7 @@ local thumbnailCache = {}
 local orderedStores = {}
 local orderedStoreNames = {}
 local lastSyncedValues = {}
+local lastSyncedAt = {}
 local rollsLiveValues = {}
 local rollsDirtyValues = {}
 local rollsLastFlushedValues = {}
@@ -583,6 +589,22 @@ local function clearRollsTracking(userId: number)
 	rollsLastFlushedValues[userId] = nil
 end
 
+local function getBoardSyncMaps(boardName)
+	local boardValues = lastSyncedValues[boardName]
+	if not boardValues then
+		boardValues = {}
+		lastSyncedValues[boardName] = boardValues
+	end
+
+	local boardTimes = lastSyncedAt[boardName]
+	if not boardTimes then
+		boardTimes = {}
+		lastSyncedAt[boardName] = boardTimes
+	end
+
+	return boardValues, boardTimes
+end
+
 local function syncRollsValueToStore(boardName, storeName, store, userId, value)
 	local normalizedValue = normalizeBoardValue(value)
 	local success, errorMessage = pcall(function()
@@ -597,10 +619,14 @@ local function syncRollsValueToStore(boardName, storeName, store, userId, value)
 			normalizedValue,
 			tostring(errorMessage)
 		))
+		RateLimitTelemetry.Increment("data_store_error", "leaderboard_ordered_write", 1)
 		return false
 	end
 
 	rollsLastFlushedValues[userId] = normalizedValue
+	local boardValues, boardTimes = getBoardSyncMaps(boardName)
+	boardValues[userId] = normalizedValue
+	boardTimes[userId] = os.clock()
 	if rollsDirtyValues[userId] == normalizedValue then
 		rollsDirtyValues[userId] = nil
 	end
@@ -608,17 +634,29 @@ local function syncRollsValueToStore(boardName, storeName, store, userId, value)
 	return true
 end
 
-local function syncPlayerValueToStore(dataService, boardName, config, storeName, store, player)
+local function syncPlayerValueToStore(dataService, boardName, config, storeName, store, player, options)
 	local userId = player.UserId
-	local boardValues = lastSyncedValues[boardName]
-	if not boardValues then
-		boardValues = {}
-		lastSyncedValues[boardName] = boardValues
-	end
+	local boardValues, boardTimes = getBoardSyncMaps(boardName)
 
 	local value = normalizeBoardValue(dataService:Get(player, config.key))
 	if boardValues[userId] == value then
 		return
+	end
+
+	local forceSync = typeof(options) == "table" and options.force == true
+	local minFlushIntervalSeconds = tonumber(config.minFlushIntervalSeconds)
+	if not forceSync and minFlushIntervalSeconds and minFlushIntervalSeconds > 0 then
+		local lastSyncAtSeconds = tonumber(boardTimes[userId]) or 0
+		if lastSyncAtSeconds > 0 and (os.clock() - lastSyncAtSeconds) < minFlushIntervalSeconds then
+			return
+		end
+	end
+
+	local minFlushDelta = tonumber(config.minFlushDelta)
+	if not forceSync and minFlushDelta and minFlushDelta > 0 and boardValues[userId] ~= nil then
+		if math.abs(value - boardValues[userId]) < minFlushDelta then
+			return
+		end
 	end
 
 	local success, errorMessage = pcall(function()
@@ -633,15 +671,17 @@ local function syncPlayerValueToStore(dataService, boardName, config, storeName,
 			value,
 			tostring(errorMessage)
 		))
+		RateLimitTelemetry.Increment("data_store_error", "leaderboard_ordered_write", 1)
 		return
 	end
 
 	boardValues[userId] = value
+	boardTimes[userId] = os.clock()
 end
 
-local function pushChangedPlayerData(dataService, boardName, config, storeName, store)
+local function pushChangedPlayerData(dataService, boardName, config, storeName, store, options)
 	for _, player in ipairs(Players:GetPlayers()) do
-		syncPlayerValueToStore(dataService, boardName, config, storeName, store, player)
+		syncPlayerValueToStore(dataService, boardName, config, storeName, store, player, options)
 	end
 end
 
@@ -673,6 +713,7 @@ local function getOrderedStoreEntries(boardName, storeName, store)
 			storeName,
 			tostring(pages)
 		))
+		RateLimitTelemetry.Increment("data_store_error", "leaderboard_ordered_list", 1)
 		return {}
 	end
 
@@ -717,6 +758,7 @@ local function getOrderedStoreEntries(boardName, storeName, store)
 				storeName,
 				tostring(advanceError)
 			))
+			RateLimitTelemetry.Increment("data_store_error", "leaderboard_ordered_list", 1)
 			break
 		end
 	end
@@ -766,7 +808,7 @@ local function getOrderedEntriesForBoard(dataService, boardName, config, storeNa
 	return retryStudioRollEntries(dataService, boardName, config, storeName, store, entries)
 end
 
-local function syncLegacyBoards(dataService)
+local function syncLegacyBoards(dataService, options)
 	if not shouldUseOrderedStores() then
 		return
 	end
@@ -776,7 +818,7 @@ local function syncLegacyBoards(dataService)
 			local store = orderedStores[boardName]
 			local storeName = orderedStoreNames[boardName]
 			if store then
-				pushChangedPlayerData(dataService, boardName, config, storeName, store)
+				pushChangedPlayerData(dataService, boardName, config, storeName, store, options)
 			end
 		end
 	end
@@ -818,7 +860,9 @@ function Leaderboards.flushPlayer(dataService, player)
 				local currentValue = if liveValue ~= nil then liveValue else dataService:Get(player, config.key)
 				syncRollsValueToStore(boardName, storeName, store, player.UserId, currentValue)
 			else
-				syncPlayerValueToStore(dataService, boardName, config, storeName, store, player)
+				syncPlayerValueToStore(dataService, boardName, config, storeName, store, player, {
+					force = true,
+				})
 			end
 		end
 	end
@@ -878,7 +922,9 @@ function Leaderboards.start(dataService)
 		end
 	end
 
-	syncLegacyBoards(dataService)
+	syncLegacyBoards(dataService, {
+		force = true,
+	})
 	if shouldUseOrderedStores() then
 		local rollsBoardName = "RollsLeaderboard"
 		local rollsConfig = BOARD_CONFIGS[rollsBoardName]

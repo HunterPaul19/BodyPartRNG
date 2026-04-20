@@ -12,6 +12,7 @@ local RollMath = require(ReplicatedStorage.Shared.Rolling.RollMath)
 local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
 local PotionService = require(script.Parent.PotionService)
+local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local APPRAISAL_FOLDER_NAME = "Appraisal"
@@ -297,10 +298,24 @@ function AppraisalService:OnStart()
 	updatedRemote = ensureUpdatedRemote()
 
 	getStateRemote.OnServerInvoke = function(player: Player)
+		local allowed = RequestLimiter:Allow(player, "remote.appraisal.get_state")
+		if not allowed then
+			return response(false, "You're refreshing appraisal too quickly.", self._state)
+		end
+
 		return self:GetState(player)
 	end
 
 	performAppraisalRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.appraisal.perform")
+		if not allowed then
+			return {
+				ok = false,
+				message = "You're appraising body parts too quickly.",
+				state = self:GetState(player),
+			}
+		end
+
 		return self:PerformAppraisal(player, payload)
 	end
 

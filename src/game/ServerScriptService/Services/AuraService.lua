@@ -7,6 +7,7 @@ local AuraConfig = require(ReplicatedStorage.Shared.Config.AuraConfig)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
+local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local AURAS_REMOTES_FOLDER_NAME = "Auras"
@@ -406,15 +407,38 @@ function AuraService:OnStart()
 	getExistenceRemote = ensureRemoteFunction(getExistenceRemote, GET_EXISTENCE_REMOTE_NAME)
 
 	getStateRemote.OnServerInvoke = function(player: Player)
+		local allowed = RequestLimiter:Allow(player, "remote.aura.get_state")
+		if not allowed then
+			return response(false, "You're refreshing your aura state too quickly.", AuraService:GetAuraState(player))
+		end
+
 		return handleGetAuraState(player)
 	end
 	equipRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.aura.equip")
+		if not allowed then
+			return response(false, "You're equipping auras too quickly.", AuraService:GetAuraState(player))
+		end
+
 		return handleEquipOwnedAura(player, payload)
 	end
 	toggleFavoriteRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.aura.favorite")
+		if not allowed then
+			return response(false, "You're changing aura favorites too quickly.", AuraService:GetAuraState(player))
+		end
+
 		return handleToggleFavoriteOwnedAura(player, payload)
 	end
 	getExistenceRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.aura.existence")
+		if not allowed then
+			return {
+				ok = false,
+				message = "You're checking aura counts too quickly.",
+			}
+		end
+
 		return handleGetTotalInExistenceForAura(player, payload)
 	end
 

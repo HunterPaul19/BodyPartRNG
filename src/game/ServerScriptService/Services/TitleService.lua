@@ -5,6 +5,7 @@ local Schema = require(ReplicatedStorage.Lists.Schema)
 local TitleConfig = require(ReplicatedStorage.Shared.Config.TitleConfig)
 local TitleUtil = require(ReplicatedStorage.Shared.Titles.TitleUtil)
 local DataService = require(script.Parent.DataService)
+local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local TITLES_REMOTES_FOLDER_NAME = "Titles"
@@ -148,6 +149,11 @@ local TitleService = {}
 function TitleService:OnStart()
 	local remote = ensureSetEquippedTitleRemote()
 	remote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.title.set_equipped")
+		if not allowed then
+			return buildResponse(false, "You're changing titles too quickly.")
+		end
+
 		if not waitForPlayerData(player, 10) then
 			return buildResponse(false, "Player data is not ready yet.")
 		end

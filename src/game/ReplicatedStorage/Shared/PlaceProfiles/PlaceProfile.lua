@@ -1,5 +1,6 @@
 local RunService = game:GetService("RunService")
 
+local PreloadProfiles = require(script.Parent.PreloadProfiles)
 local RouteConfig = require(script.Parent.RouteConfig)
 
 local ALL_SERVICE_NAMES = {
@@ -9,6 +10,7 @@ local ALL_SERVICE_NAMES = {
 	"AuraService",
 	"BodyPartService",
 	"ChatTagService",
+	"CombatPhysicsBootstrapService",
 	"DataService",
 	"DayNightCycleService",
 	"DiagnosticsService",
@@ -35,6 +37,7 @@ local ALL_CONTROLLER_NAMES = {
 	"AutoSellRollController",
 	"BodyPartBuildLockController",
 	"ChatTagController",
+	"CombatPhysicsController",
 	"DataController",
 	"DayNightCycleController",
 	"DialogueController",
@@ -73,13 +76,17 @@ local ALL_FRAME_NAMES = {
 	"AdminPanel",
 	"AppraisalUI",
 	"AutoSell",
+	"ConfirmationFrame",
 	"Gifting",
 	"Help",
 	"Index",
 	"Inventory",
 	"MerchantTeleportFrame",
 	"PlayerInfo",
+	"PotionSellFrame",
 	"RobuxStore",
+	"SellWarningFrame",
+	"ShopUI",
 	"Titles",
 }
 
@@ -125,7 +132,7 @@ local FEATURE_TO_EXCLUSIONS = {
 		services = { "AppraisalService" },
 	},
 	inventory = {
-		frames = { "Inventory" },
+		frames = { "Inventory", "PotionSellFrame", "SellWarningFrame" },
 		controllers = { "InventoryController" },
 	},
 	loadout = {
@@ -133,7 +140,7 @@ local FEATURE_TO_EXCLUSIONS = {
 		controllers = { "InventoryController" },
 	},
 	merchant_shop = {
-		frames = { "MerchantTeleportFrame" },
+		frames = { "MerchantTeleportFrame", "ShopUI" },
 		controllers = {
 			"MerchantPresentationController",
 			"MerchantShopController",
@@ -183,6 +190,17 @@ local FEATURE_TO_EXCLUSIONS = {
 	},
 }
 
+type PreloadRootSpec = {
+	name: string,
+	required: boolean,
+}
+
+type PreloadSpec = {
+	mainInterfaceRoots: { PreloadRootSpec },
+	modalRootRoots: { PreloadRootSpec },
+	gameAssetPaths: { string },
+}
+
 type PlaceProfileShape = {
 	id: string,
 	displayName: string,
@@ -194,6 +212,7 @@ type PlaceProfileShape = {
 	excludedFrames: { [string]: boolean },
 	excludedServices: { [string]: boolean },
 	excludedControllers: { [string]: boolean },
+	preloadSpec: PreloadSpec,
 	routes: { [string]: { placeId: number, profileId: string } },
 }
 
@@ -203,7 +222,10 @@ local PROFILE_DEFINITIONS = {
 		placeIds = { RouteConfig.PlaceIds.main },
 		requiresMainInterface = true,
 		requiresPlayerDataReplica = true,
-		excludedFeatures = {},
+		excludedFeatures = {
+			"boss_fight_flow",
+			"boss_lobby_flow",
+		},
 		excludedPanels = {},
 		excludedFrames = {},
 		excludedServices = {},
@@ -215,6 +237,7 @@ local PROFILE_DEFINITIONS = {
 		requiresMainInterface = true,
 		requiresPlayerDataReplica = true,
 		excludedFeatures = {
+			"boss_fight_flow",
 			"rolling",
 		},
 		excludedPanels = {},
@@ -258,6 +281,8 @@ local PROFILE_DEFINITIONS = {
 		excludedFeatures = {
 			"appraisal",
 			"auto_sell",
+			"boss_fight_flow",
+			"boss_lobby_flow",
 			"dialogue",
 			"help",
 			"index",
@@ -368,6 +393,10 @@ local function buildProfile(profileId: string, definition: any): PlaceProfileSha
 		excludedFrames = table.freeze(excludedFrames),
 		excludedServices = table.freeze(excludedServices),
 		excludedControllers = table.freeze(excludedControllers),
+		preloadSpec = PreloadProfiles.BuildPreloadSpec({
+			requiresMainInterface = definition.requiresMainInterface == true,
+			excludedFeatures = excludedFeatures,
+		}),
 		routes = table.freeze(RouteConfig.BuildRoutesForProfile(profileId)),
 	}
 
@@ -464,6 +493,10 @@ end
 
 function PlaceProfile.RequiresPlayerDataReplica(): boolean
 	return PlaceProfile.GetActiveProfile().requiresPlayerDataReplica == true
+end
+
+function PlaceProfile.GetPreloadSpec(): PreloadSpec
+	return PlaceProfile.GetActiveProfile().preloadSpec
 end
 
 function PlaceProfile.GetFeatureUnavailableMessage(featureId: string): string

@@ -11,6 +11,7 @@ local Schema = require(ReplicatedStorage.Lists.Schema)
 local DataService = require(script.Parent.DataService)
 local PotionService = require(script.Parent.PotionService)
 local PurchaseReceiptService = require(script.Parent.PurchaseReceiptService)
+local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local MERCHANT_SHOP_FOLDER_NAME = "MerchantShop"
@@ -932,14 +933,33 @@ function MerchantShopService:OnStart()
 	teleportToMerchantRemote = ensureRemoteFunction(teleportToMerchantRemote, TELEPORT_TO_MERCHANT_REMOTE_NAME)
 
 	getShopStateRemote.OnServerInvoke = function(player: Player)
+		local allowed = RequestLimiter:Allow(player, "remote.merchant.get_state")
+		if not allowed then
+			return response(false, "You're refreshing the merchant too quickly.", self:_resolveCurrentState(player))
+		end
+
 		return self:GetShopState(player)
 	end
 
 	purchaseShopItemRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.merchant.purchase")
+		if not allowed then
+			return response(false, "You're buying from the merchant too quickly.", self:_resolveCurrentState(player))
+		end
+
 		return self:PurchaseShopItem(player, payload)
 	end
 
 	teleportToMerchantRemote.OnServerInvoke = function(player: Player)
+		local allowed = RequestLimiter:Allow(player, "remote.merchant.teleport")
+		if not allowed then
+			return {
+				ok = false,
+				message = "You're teleporting to the merchant too quickly.",
+				shopState = self:_resolveCurrentState(player),
+			}
+		end
+
 		return self:TeleportToMerchant(player)
 	end
 

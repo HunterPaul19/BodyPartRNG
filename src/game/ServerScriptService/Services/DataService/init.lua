@@ -58,6 +58,7 @@ local SELECTED_ROLL_REGION_KEY = Schema.SelectedRollRegion and Schema.SelectedRo
 local QUICK_ROLL_ENABLED_KEY = Schema.QuickRollEnabled and Schema.QuickRollEnabled.key or nil
 local AUTO_SIZE_ENABLED_KEY = Schema.AutoSizeEnabled and Schema.AutoSizeEnabled.key or nil
 local AUTO_SELL_RARITIES_KEY = Schema.AutoSellRarities and Schema.AutoSellRarities.key or nil
+local CUTSCENE_RARITIES_KEY = Schema.CutsceneRarities and Schema.CutsceneRarities.key or nil
 
 local ATTR_BY_KEY: { [string]: string } = {}
 if MONEY_KEY then
@@ -690,6 +691,9 @@ local function normalizeProfileData(profile: any)
 	end
 	if AUTO_SELL_RARITIES_KEY then
 		data[AUTO_SELL_RARITIES_KEY] = RollingConfig.NormalizeAutoSellState(data[AUTO_SELL_RARITIES_KEY])
+	end
+	if CUTSCENE_RARITIES_KEY then
+		data[CUTSCENE_RARITIES_KEY] = RollingConfig.NormalizeCutsceneState(data[CUTSCENE_RARITIES_KEY])
 	end
 	if BODY_PARTS_KEY then
 		data[BODY_PARTS_KEY] = cloneOwnedBodyPartsState(data[BODY_PARTS_KEY])
@@ -1345,6 +1349,45 @@ function DataService:SetAutoSellRarityEnabled(player: Player, displayRarity: any
 		"%s auto-sell %s.",
 		normalizedRarity,
 		if enabled == true then "enabled" else "disabled"
+	)
+end
+
+function DataService:GetCutsceneRarities(player: Player): { [string]: boolean }
+	if not CUTSCENE_RARITIES_KEY then
+		return RollingConfig.CreateDefaultCutsceneState()
+	end
+
+	return RollingConfig.NormalizeCutsceneState(self:Get(player, CUTSCENE_RARITIES_KEY))
+end
+
+function DataService:IsCutsceneEnabledForRarity(player: Player, displayRarity: any): boolean
+	local normalizedRarity = RollingConfig.NormalizeDisplayRarity(displayRarity)
+	return self:GetCutsceneRarities(player)[normalizedRarity] ~= false
+end
+
+function DataService:SetCutsceneRarityEnabled(player: Player, displayRarity: any, enabled: boolean): (boolean, string?)
+	if not CUTSCENE_RARITIES_KEY then
+		return false, "Cutscene persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return false, "Player data is not loaded."
+	end
+
+	local normalizedRarity = RollingConfig.ResolveDisplayRarity(displayRarity)
+	if not RollingConfig.IsValidDisplayRarity(normalizedRarity) then
+		return false, "That cutscene rarity does not exist."
+	end
+
+	self:Set(player, CUTSCENE_RARITIES_KEY, function(currentValue)
+		local cutsceneState = RollingConfig.NormalizeCutsceneState(currentValue)
+		cutsceneState[normalizedRarity] = enabled ~= false
+		return cutsceneState
+	end)
+
+	return true, string.format(
+		"%s cutscenes %s.",
+		normalizedRarity,
+		if enabled ~= false then "enabled" else "disabled"
 	)
 end
 

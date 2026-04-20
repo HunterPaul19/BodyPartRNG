@@ -80,14 +80,18 @@ function RollingConfig.GetDisplayRarityBandMultiplier(value: any): (string, numb
 	return displayRarity, bandMultiplier
 end
 
-function RollingConfig.CreateDefaultAutoSellState(): { [string]: boolean }
+local function createDefaultRarityState(defaultEnabled: boolean): { [string]: boolean }
 	local state = {}
 
 	for _, rarity in ipairs(RollingConfig.DisplayRarityOrder) do
-		state[rarity] = false
+		state[rarity] = defaultEnabled == true
 	end
 
 	return state
+end
+
+function RollingConfig.CreateDefaultAutoSellState(): { [string]: boolean }
+	return createDefaultRarityState(false)
 end
 
 function RollingConfig.NormalizeAutoSellState(value: any): { [string]: boolean }
@@ -99,6 +103,24 @@ function RollingConfig.NormalizeAutoSellState(value: any): { [string]: boolean }
 
 	for _, rarity in ipairs(RollingConfig.DisplayRarityOrder) do
 		normalizedState[rarity] = value[rarity] == true
+	end
+
+	return normalizedState
+end
+
+function RollingConfig.CreateDefaultCutsceneState(): { [string]: boolean }
+	return createDefaultRarityState(true)
+end
+
+function RollingConfig.NormalizeCutsceneState(value: any): { [string]: boolean }
+	local normalizedState = RollingConfig.CreateDefaultCutsceneState()
+
+	if typeof(value) ~= "table" then
+		return normalizedState
+	end
+
+	for _, rarity in ipairs(RollingConfig.DisplayRarityOrder) do
+		normalizedState[rarity] = value[rarity] ~= false
 	end
 
 	return normalizedState

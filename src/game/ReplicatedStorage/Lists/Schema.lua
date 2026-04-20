@@ -121,4 +121,9 @@ return {
 		key = "autoSellRarities",
 		value = RollingConfig.CreateDefaultAutoSellState(),
 	},
+
+	CutsceneRarities = {
+		key = "cutsceneRarities",
+		value = RollingConfig.CreateDefaultCutsceneState(),
+	},
 }

@@ -41,6 +41,7 @@ PlayerStats.SETTING_CHANGE_KINDS = {
 	roll_region = "rollRegionChanges",
 	quick_roll = "quickRollToggleCount",
 	auto_sell = "autoSellToggleCount",
+	cutscene = "cutsceneToggleCount",
 }
 
 local function toWholeNumber(value: any, minimum: number?): number
@@ -256,6 +257,7 @@ function PlayerStats.CreateEmpty(): any
 			rollRegionChanges = 0,
 			quickRollToggleCount = 0,
 			autoSellToggleCount = 0,
+			cutsceneToggleCount = 0,
 		},
 	}
 end
@@ -377,6 +379,7 @@ function PlayerStats.Normalize(value: any, options: any?): any
 	normalized.settings.rollRegionChanges = math.max(0, toWholeNumber(settings.rollRegionChanges, 0))
 	normalized.settings.quickRollToggleCount = math.max(0, toWholeNumber(settings.quickRollToggleCount, 0))
 	normalized.settings.autoSellToggleCount = math.max(0, toWholeNumber(settings.autoSellToggleCount, 0))
+	normalized.settings.cutsceneToggleCount = math.max(0, toWholeNumber(settings.cutsceneToggleCount, 0))
 
 	return normalized
 end

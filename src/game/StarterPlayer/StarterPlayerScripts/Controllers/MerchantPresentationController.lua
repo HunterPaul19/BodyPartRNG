@@ -86,7 +86,7 @@ local MerchantPresentationController = {
 	_activeRoot = nil :: GuiObject?,
 	_activeCameraPart = nil :: BasePart?,
 	_cameraSnapshot = nil :: CameraSnapshot?,
-	_mainInterfaceWasEnabled = true,
+	_mainInterfaceDisabledBySession = false,
 	_autoRotateSnapshot = nil :: boolean?,
 	_parallaxCurrent = Vector2.zero,
 	_parallaxGoal = Vector2.zero,
@@ -550,6 +550,26 @@ function MerchantPresentationController:_setMainInterfaceEnabled(enabled: boolea
 	mainInterface.Enabled = enabled
 end
 
+function MerchantPresentationController:_beginMainInterfaceSession()
+	if self._mainInterfaceDisabledBySession then
+		return
+	end
+
+	local mainInterface = self:_getMainInterface()
+	if mainInterface.Enabled then
+		mainInterface.Enabled = false
+		self._mainInterfaceDisabledBySession = true
+	end
+end
+
+function MerchantPresentationController:_restoreMainInterfaceSession()
+	if self._mainInterfaceDisabledBySession then
+		self:_setMainInterfaceEnabled(true)
+	end
+
+	self._mainInterfaceDisabledBySession = false
+end
+
 function MerchantPresentationController:_freezePlayer()
 	local controls = self._controls
 	if not controls then
@@ -788,9 +808,45 @@ function MerchantPresentationController:_hideOverlay()
 	overlay.BackgroundTransparency = 1
 end
 
+function MerchantPresentationController:_restorePresentationState()
+	local root = self._activeRoot
+	if root then
+		self:_restoreShopRoot(root)
+	end
+
+	local backdrop = self:_ensureBackdrop()
+	backdrop.Visible = false
+	backdrop.Active = false
+	backdrop.BackgroundTransparency = 1
+
+	self:_stopCameraParallax()
+	self:_restoreCamera()
+	self:_restorePlayer()
+	self:_setBlurSize(0, nil, false)
+	self:_restoreMainInterfaceSession()
+end
+
+function MerchantPresentationController:_resetTransitionState()
+	self._activeFrameName = nil
+	self._activeRoot = nil
+	self._isOpen = false
+	self._transitioning = false
+	self._mainInterfaceDisabledBySession = false
+end
+
+function MerchantPresentationController:_recoverTransition(transitionName: string, err: any, closedFrameName: string?)
+	warn(string.format("[MerchantPresentationController] %s transition failed: %s", transitionName, tostring(err)))
+	self:_restorePresentationState()
+	self:_hideOverlay()
+	self:_resetTransitionState()
+
+	if closedFrameName then
+		self.Closed:Fire(closedFrameName)
+	end
+end
+
 function MerchantPresentationController:_midpointOpen(frameName: string, root: GuiObject, options: OpenOptions?)
-	self._mainInterfaceWasEnabled = self:_getMainInterface().Enabled
-	self:_setMainInterfaceEnabled(false)
+	self:_beginMainInterfaceSession()
 	self:_freezePlayer()
 
 	local backdrop = self:_ensureBackdrop()
@@ -809,24 +865,7 @@ function MerchantPresentationController:_midpointOpen(frameName: string, root: G
 end
 
 function MerchantPresentationController:_midpointClose()
-	local root = self._activeRoot
-	if root then
-		self:_restoreShopRoot(root)
-	end
-
-	local backdrop = self:_ensureBackdrop()
-	backdrop.Visible = false
-	backdrop.Active = false
-	backdrop.BackgroundTransparency = 1
-
-	self:_stopCameraParallax()
-	self:_restoreCamera()
-	self:_restorePlayer()
-	self:_setBlurSize(0, nil, false)
-	self:_setMainInterfaceEnabled(self._mainInterfaceWasEnabled)
-	if self._activeFrameName then
-		self.Closed:Fire(self._activeFrameName)
-	end
+	self:_restorePresentationState()
 end
 
 function MerchantPresentationController:OnStart()
@@ -861,11 +900,18 @@ function MerchantPresentationController:Open(frameName: string, options: OpenOpt
 	self._activeFrameName = frameName
 	self._activeRoot = root
 
-	self:_playOpenBlackout()
-	self:_midpointOpen(frameName, root, options)
-	self:_playOpenReveal(root)
-	self:_hideOverlay()
-	self:_startCameraParallax(if options then options.cameraPart else nil)
+	local ok, err = xpcall(function()
+		self:_playOpenBlackout()
+		self:_midpointOpen(frameName, root, options)
+		self:_playOpenReveal(root)
+		self:_hideOverlay()
+		self:_startCameraParallax(if options then options.cameraPart else nil)
+	end, debug.traceback)
+
+	if not ok then
+		self:_recoverTransition("open", err, nil)
+		return false
+	end
 
 	self._isOpen = true
 	self._transitioning = false
@@ -879,18 +925,29 @@ function MerchantPresentationController:Close(): boolean
 		return false
 	end
 
+	local closingFrameName = self._activeFrameName
 	self._transitioning = true
-	self:_playCloseBlackout()
-	self:_midpointClose()
-	tweenAsync(self:_ensureOverlay(), CLOSE_REVEAL_TWEEN, {
-		BackgroundTransparency = 1,
-	})
-	self:_hideOverlay()
 
-	self._activeFrameName = nil
-	self._activeRoot = nil
-	self._isOpen = false
-	self._transitioning = false
+	local ok, err = xpcall(function()
+		self:_playCloseBlackout()
+		self:_midpointClose()
+		tweenAsync(self:_ensureOverlay(), CLOSE_REVEAL_TWEEN, {
+			BackgroundTransparency = 1,
+		})
+		self:_hideOverlay()
+	end, debug.traceback)
+
+	if not ok then
+		self:_recoverTransition("close", err, closingFrameName)
+		return false
+	end
+
+	self:_resetTransitionState()
+
+	if closingFrameName then
+		self.Closed:Fire(closingFrameName)
+	end
+
 	return true
 end
 

@@ -6,6 +6,7 @@ local Signal = require(ReplicatedStorage.Common.Signal)
 local PotionRuntimeBonuses = require(ReplicatedStorage.Shared.Character.PotionRuntimeBonuses)
 local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
 local DataService = require(script.Parent.DataService)
+local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local POTIONS_FOLDER_NAME = "Potions"
@@ -467,10 +468,38 @@ function PotionService:OnStart()
 	sellPotionRemote = ensureRemoteFunction(sellPotionRemote, SELL_POTION_REMOTE_NAME)
 	updatedRemote = ensureUpdatedRemote()
 
-	getStateRemote.OnServerInvoke = handleGetPotionState
-	usePotionRemote.OnServerInvoke = handleUsePotion
-	toggleFavoriteRemote.OnServerInvoke = handleToggleFavoriteOwnedPotion
-	sellPotionRemote.OnServerInvoke = handleSellOwnedPotion
+	getStateRemote.OnServerInvoke = function(player: Player)
+		local allowed = RequestLimiter:Allow(player, "remote.potions.get_state")
+		if not allowed then
+			return response(false, "You're refreshing potion state too quickly.", PotionService:GetPotionState(player))
+		end
+
+		return handleGetPotionState(player)
+	end
+	usePotionRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.potions.use")
+		if not allowed then
+			return response(false, "You're using potions too quickly.", PotionService:GetPotionState(player))
+		end
+
+		return handleUsePotion(player, payload)
+	end
+	toggleFavoriteRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.potions.favorite")
+		if not allowed then
+			return response(false, "You're changing potion favorites too quickly.", PotionService:GetPotionState(player))
+		end
+
+		return handleToggleFavoriteOwnedPotion(player, payload)
+	end
+	sellPotionRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.potions.sell")
+		if not allowed then
+			return response(false, "You're selling potions too quickly.", PotionService:GetPotionState(player))
+		end
+
+		return handleSellOwnedPotion(player, payload)
+	end
 
 	if not expiryLoopStarted then
 		expiryLoopStarted = true

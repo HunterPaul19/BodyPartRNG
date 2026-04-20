@@ -10,6 +10,8 @@ local Signal = require(ReplicatedStorage.Common.Signal)
 local MarketplaceCatalog = require(ReplicatedStorage.Lists.RobuxPurchases)
 local MarketplaceState = require(ReplicatedStorage.Shared.Marketplace.State)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
+local RequestLimiter = require(script.Parent.Common.RequestLimiter)
+local RateLimitTelemetry = require(script.Parent.Common.RateLimitTelemetry)
 
 local MARKETPLACE_KEY = Schema.Marketplace and Schema.Marketplace.key or "marketplace"
 local REMOTES_FOLDER_NAME = "Remotes"
@@ -20,6 +22,9 @@ local GET_OFFER_PRESENTATIONS_REMOTE_NAME = "GetOfferPresentations"
 local PROMPT_OFFER_PURCHASE_REMOTE_NAME = "PromptOfferPurchase"
 local PROMPT_GIFT_PURCHASE_REMOTE_NAME = "PromptGiftPurchase"
 local MARKETPLACE_UPDATED_REMOTE_NAME = "Updated"
+local PASS_OWNERSHIP_CACHE_TTL_SECONDS = 300
+local PASS_OWNERSHIP_RETRY_BACKOFF_SECONDS = 30
+local PASS_VALIDATION_CACHE_TTL_SECONDS = 300
 
 local PurchaseReceipt = {}
 
@@ -41,6 +46,22 @@ local promptGiftPurchaseRemote: RemoteFunction? = nil
 local marketplaceUpdatedRemote: RemoteEvent? = nil
 local ownedOfferCache: { [Player]: { [string]: boolean } } = {}
 local invalidPassWarnings: { [string]: boolean } = {}
+local cachedPassValidationByKey: {
+	[string]: {
+		isValid: boolean,
+		message: string?,
+		expiresAt: number,
+	},
+} = {}
+local cachedPassOwnershipByUserId: {
+	[number]: {
+		[string]: {
+			isOwned: boolean,
+			expiresAt: number,
+			nextRetryAt: number,
+		},
+	},
+} = {}
 
 local function ensureRemotesFolder(): Folder
 	if remotesFolder and remotesFolder.Parent == ReplicatedStorage then
@@ -270,6 +291,76 @@ local function hasPermanentOwnershipInState(state: any, offer: any): boolean
 	return typeof(state.entitlementsByKey) == "table" and state.entitlementsByKey[offerKey] ~= nil
 end
 
+local function cachePassOwnership(userId: number, offerKey: string, isOwned: boolean, ttlSeconds: number?, retryAfterSeconds: number?)
+	local resolvedUserId = math.max(0, math.floor(tonumber(userId) or 0))
+	local resolvedOfferKey = normalizeString(offerKey)
+	if resolvedUserId <= 0 or resolvedOfferKey == "" then
+		return
+	end
+
+	local ownershipByOfferKey = cachedPassOwnershipByUserId[resolvedUserId]
+	if ownershipByOfferKey == nil then
+		ownershipByOfferKey = {}
+		cachedPassOwnershipByUserId[resolvedUserId] = ownershipByOfferKey
+	end
+
+	local now = os.clock()
+	ownershipByOfferKey[resolvedOfferKey] = {
+		isOwned = isOwned == true,
+		expiresAt = now + math.max(1, math.floor(tonumber(ttlSeconds) or PASS_OWNERSHIP_CACHE_TTL_SECONDS)),
+		nextRetryAt = now + math.max(0, math.floor(tonumber(retryAfterSeconds) or 0)),
+	}
+end
+
+local function getCachedPassOwnership(userId: number, offerKey: string): (boolean?, boolean)
+	local resolvedUserId = math.max(0, math.floor(tonumber(userId) or 0))
+	local resolvedOfferKey = normalizeString(offerKey)
+	local ownershipByOfferKey = cachedPassOwnershipByUserId[resolvedUserId]
+	local cachedEntry = ownershipByOfferKey and ownershipByOfferKey[resolvedOfferKey] or nil
+	if cachedEntry == nil then
+		return nil, false
+	end
+
+	local now = os.clock()
+	if now < cachedEntry.expiresAt then
+		return cachedEntry.isOwned == true, true
+	end
+
+	return cachedEntry.isOwned == true, now < cachedEntry.nextRetryAt
+end
+
+local function queryGamePassOwnership(userId: number, offer: any): (boolean?, string?)
+	if typeof(offer) ~= "table" then
+		return nil, "Marketplace offer is missing."
+	end
+
+	local sale = offer.selfPurchase
+	if typeof(sale) ~= "table" or sale.saleKind ~= "pass" or typeof(sale.robloxId) ~= "number" then
+		return nil, "Marketplace offer is not a pass."
+	end
+
+	local cachedOwnership, canReuseCachedOwnership = getCachedPassOwnership(userId, offer.offerKey)
+	if canReuseCachedOwnership then
+		return cachedOwnership == true, nil
+	end
+
+	local ok, has = pcall(MarketplaceService.UserOwnsGamePassAsync, MarketplaceService, userId, sale.robloxId)
+	if ok then
+		cachePassOwnership(userId, offer.offerKey, has == true)
+		return has == true, nil
+	end
+
+	RateLimitTelemetry.Increment("platform_error", "user_owns_game_pass", 1)
+	cachePassOwnership(
+		userId,
+		offer.offerKey,
+		cachedOwnership == true,
+		PASS_OWNERSHIP_RETRY_BACKOFF_SECONDS,
+		PASS_OWNERSHIP_RETRY_BACKOFF_SECONDS
+	)
+	return cachedOwnership, tostring(has)
+end
+
 local function validatePassSale(offer: any, sale: any): (boolean, string?)
 	if typeof(offer) ~= "table" then
 		return false, "Marketplace offer is missing."
@@ -281,10 +372,21 @@ local function validatePassSale(offer: any, sale: any): (boolean, string?)
 		return false, string.format("%s is missing a numeric gamepass id.", getOfferDisplayName(offer.offerKey))
 	end
 
+	local validationCacheKey = string.format("%s:%d", tostring(offer.offerKey), math.floor(sale.robloxId))
+	local cachedValidation = cachedPassValidationByKey[validationCacheKey]
+	if cachedValidation and os.clock() < cachedValidation.expiresAt then
+		return cachedValidation.isValid == true, cachedValidation.message
+	end
+
 	local ok, info = pcall(function()
 		return MarketplaceService:GetProductInfo(sale.robloxId, Enum.InfoType.GamePass)
 	end)
 	if ok and typeof(info) == "table" then
+		cachedPassValidationByKey[validationCacheKey] = {
+			isValid = true,
+			message = nil,
+			expiresAt = os.clock() + PASS_VALIDATION_CACHE_TTL_SECONDS,
+		}
 		return true, nil
 	end
 
@@ -312,6 +414,11 @@ local function validatePassSale(offer: any, sale: any): (boolean, string?)
 		))
 	end
 
+	cachedPassValidationByKey[validationCacheKey] = {
+		isValid = false,
+		message = failureMessage,
+		expiresAt = os.clock() + PASS_VALIDATION_CACHE_TTL_SECONDS,
+	}
 	return false, failureMessage
 end
 
@@ -368,6 +475,9 @@ local function markPurchaseRecorded(player: Player, offer: any, sale: any, conte
 	end)
 
 	rebuildOwnedOfferCache(player, finalState)
+	if offer.kind == "pass" then
+		cachePassOwnership(player.UserId, offer.offerKey, true)
+	end
 
 	if offer.grantMode == "repeatable" then
 		return purchaseWasNew, finalState
@@ -506,7 +616,7 @@ local function isPlayerLoaded(player: Player): boolean
 	return DataService:Get(player) ~= nil
 end
 
-local function resolvePassOwnership(player: Player, offer: any): boolean
+local function resolvePassOwnership(player: Player, offer: any, options: any?): boolean
 	if typeof(offer) ~= "table" then
 		return false
 	end
@@ -516,8 +626,14 @@ local function resolvePassOwnership(player: Player, offer: any): boolean
 		return getOwnedOffers(player)[offer.offerKey] == true
 	end
 
-	local ok, has = pcall(MarketplaceService.UserOwnsGamePassAsync, MarketplaceService, player.UserId, sale.robloxId)
-	if ok and has then
+	local forceRefresh = typeof(options) == "table" and options.forceRefresh == true
+	local cachedOwnership, hasReusableCache = getCachedPassOwnership(player.UserId, offer.offerKey)
+	if not forceRefresh and hasReusableCache then
+		return cachedOwnership == true or getOwnedOffers(player)[offer.offerKey] == true
+	end
+
+	local has, queryError = queryGamePassOwnership(player.UserId, offer)
+	if has == true then
 		local context = makePurchaseContext(offer, sale, {
 			source = "join",
 			purchaseKind = "self",
@@ -527,10 +643,20 @@ local function resolvePassOwnership(player: Player, offer: any): boolean
 		return true
 	end
 
+	if queryError ~= nil and string.find(string.lower(queryError), "toomanyrequests", 1, true) ~= nil then
+		warn(string.format(
+			"[PurchaseReceipt] UserOwnsGamePassAsync backed off for %s(%d) offer=%s: %s",
+			player.Name,
+			player.UserId,
+			tostring(offer.offerKey),
+			queryError
+		))
+	end
+
 	return getOwnedOffers(player)[offer.offerKey] == true
 end
 
-local function ownsOffer(player: Player, offer: any): boolean
+local function ownsOffer(player: Player, offer: any, options: any?): boolean
 	if typeof(player) ~= "Instance" or not player:IsA("Player") or typeof(offer) ~= "table" then
 		return false
 	end
@@ -539,8 +665,8 @@ local function ownsOffer(player: Player, offer: any): boolean
 		return true
 	end
 
-	if offer.kind == "pass" then
-		return resolvePassOwnership(player, offer)
+	if offer.kind == "pass" and typeof(options) == "table" and options.allowPassRefresh == true then
+		return resolvePassOwnership(player, offer, options)
 	end
 
 	return false
@@ -576,8 +702,8 @@ local function hasDuplicateGiftOwnership(recipientUserId: number, offer: any): b
 
 	local sale = offer and offer.selfPurchase
 	if offer and offer.kind == "pass" and typeof(sale) == "table" and sale.saleKind == "pass" and typeof(sale.robloxId) == "number" then
-		local ok, has = pcall(MarketplaceService.UserOwnsGamePassAsync, MarketplaceService, recipientUserId, sale.robloxId)
-		if ok and has then
+		local has = queryGamePassOwnership(recipientUserId, offer)
+		if has == true then
 			return true
 		end
 	end
@@ -627,7 +753,9 @@ local function reconcileOwnedOffersOnJoin(player: Player)
 
 	for _, offer in pairs(MarketplaceCatalog.Offers) do
 		if offer.kind == "pass" then
-			resolvePassOwnership(player, offer)
+			resolvePassOwnership(player, offer, {
+				forceRefresh = true,
+			})
 		end
 	end
 
@@ -896,7 +1024,15 @@ function PurchaseReceipt:OnStart()
 	marketplaceUpdatedRemote = ensureMarketplaceRemoteEvent(marketplaceUpdatedRemote, MARKETPLACE_UPDATED_REMOTE_NAME)
 	MarketplaceService.ProcessReceipt = processProductReceipt
 	MarketplaceService.PromptGamePassPurchaseFinished:Connect(onPromptGamePassFinished)
-	getOfferInfoRemote.OnServerInvoke = function(_player: Player, offerKey: string)
+	getOfferInfoRemote.OnServerInvoke = function(player: Player, offerKey: string)
+		local allowed = RequestLimiter:Allow(player, "remote.marketplace.offer_info")
+		if not allowed then
+			return {
+				ok = false,
+				message = "You're opening marketplace items too quickly.",
+			}
+		end
+
 		local payload = self:GetOfferClientView(offerKey)
 		if payload then
 			return {
@@ -911,12 +1047,31 @@ function PurchaseReceipt:OnStart()
 		}
 	end
 	getOfferPresentationsRemote.OnServerInvoke = function(player: Player, offerKeys: any)
+		local allowed = RequestLimiter:Allow(player, "remote.marketplace.offer_presentations")
+		if not allowed then
+			return {
+				ok = false,
+				message = "You're refreshing marketplace items too quickly.",
+				offers = {},
+			}
+		end
+
 		return {
 			ok = true,
 			offers = self:GetOfferPresentations(player, offerKeys),
 		}
 	end
 	promptOfferPurchaseRemote.OnServerInvoke = function(player: Player, offerKey: string)
+		local allowed = RequestLimiter:Allow(player, "remote.marketplace.prompt_purchase")
+		if not allowed then
+			return {
+				ok = false,
+				message = "You're opening purchase prompts too quickly.",
+				promptOpened = false,
+				offer = self:GetOfferClientView(offerKey),
+			}
+		end
+
 		local ok, message, promptOpened = self:PromptOfferPurchase(player, offerKey)
 		return {
 			ok = ok,
@@ -926,6 +1081,15 @@ function PurchaseReceipt:OnStart()
 		}
 	end
 	promptGiftPurchaseRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.marketplace.prompt_gift")
+		if not allowed then
+			return {
+				ok = false,
+				message = "You're opening gift prompts too quickly.",
+				offer = self:GetOfferClientView(typeof(payload) == "table" and payload.offerKey or ""),
+			}
+		end
+
 		if typeof(payload) ~= "table" then
 			return {
 				ok = false,
@@ -951,6 +1115,7 @@ end
 
 function PurchaseReceipt:OnPlayerRemoving(player: Player)
 	ownedOfferCache[player] = nil
+	cachedPassOwnershipByUserId[player.UserId] = nil
 end
 
 function PurchaseReceipt:GetOffer(offerKey: string)
@@ -1039,7 +1204,9 @@ function PurchaseReceipt:PromptOfferPurchase(player: Player, offerKey: string): 
 		return false, string.format("%s is not configured for self purchase.", getOfferDisplayName(offerKey)), false
 	end
 
-	if offer.grantMode ~= "repeatable" and ownsOffer(player, offer) then
+	if offer.grantMode ~= "repeatable" and ownsOffer(player, offer, {
+		allowPassRefresh = true,
+	}) then
 		return true, string.format("%s already owned.", getOfferDisplayName(offerKey)), false
 	end
 

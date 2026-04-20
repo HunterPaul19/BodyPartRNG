@@ -9,13 +9,17 @@ local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
 local LOCAL_PLAYER = Players.LocalPlayer
 local WINDOW_NAME = "AutoSell"
 local AUTO_SELL_DATA_KEY = "autoSellRarities"
+local CUTSCENE_DATA_KEY = "cutsceneRarities"
 local REMOTES_FOLDER_NAME = "Remotes"
 local ROLLING_FOLDER_NAME = "Rolling"
 local TOGGLE_AUTO_SELL_RARITY_REMOTE_NAME = "ToggleAutoSellRarity"
+local TOGGLE_CUTSCENE_RARITY_REMOTE_NAME = "ToggleCutsceneRarity"
 
 type RarityButtonSet = {
 	disabled: GuiButton,
 	enabled: GuiButton,
+	cutsceneOff: GuiButton,
+	cutsceneOn: GuiButton,
 }
 
 local AutoSellController = {}
@@ -30,15 +34,20 @@ function AutoSellController:_ensureState()
 		openButton = nil,
 		rarityButtons = {},
 	}
-	self._toggleRemote = nil :: RemoteFunction?
+	self._autoSellToggleRemote = nil :: RemoteFunction?
+	self._cutsceneToggleRemote = nil :: RemoteFunction?
 end
 
 function AutoSellController:_getAutoSellState(): { [string]: boolean }
 	return RollingConfig.NormalizeAutoSellState(DataController:Get(AUTO_SELL_DATA_KEY))
 end
 
+function AutoSellController:_getCutsceneState(): { [string]: boolean }
+	return RollingConfig.NormalizeCutsceneState(DataController:Get(CUTSCENE_DATA_KEY))
+end
+
 function AutoSellController:_ensureRemotes(): boolean
-	if self._toggleRemote then
+	if self._autoSellToggleRemote and self._cutsceneToggleRemote then
 		return true
 	end
 
@@ -53,23 +62,34 @@ function AutoSellController:_ensureRemotes(): boolean
 	end
 
 	local toggleRemote = rollingFolder:FindFirstChild(TOGGLE_AUTO_SELL_RARITY_REMOTE_NAME)
+	local cutsceneToggleRemote = rollingFolder:FindFirstChild(TOGGLE_CUTSCENE_RARITY_REMOTE_NAME)
 	if not (toggleRemote and toggleRemote:IsA("RemoteFunction")) then
 		return false
 	end
+	if not (cutsceneToggleRemote and cutsceneToggleRemote:IsA("RemoteFunction")) then
+		return false
+	end
 
-	self._toggleRemote = toggleRemote
+	self._autoSellToggleRemote = toggleRemote
+	self._cutsceneToggleRemote = cutsceneToggleRemote
 	return true
 end
 
 function AutoSellController:_syncRarityButtons()
 	local autoSellState = self:_getAutoSellState()
+	local cutsceneState = self:_getCutsceneState()
 
 	for rarity, buttonSet: RarityButtonSet in pairs(self._ui.rarityButtons) do
 		local isEnabled = autoSellState[rarity] == true
+		local cutscenesEnabled = cutsceneState[rarity] ~= false
 		buttonSet.enabled.Visible = isEnabled
 		buttonSet.enabled.Active = isEnabled
 		buttonSet.disabled.Visible = not isEnabled
 		buttonSet.disabled.Active = not isEnabled
+		buttonSet.cutsceneOn.Visible = cutscenesEnabled
+		buttonSet.cutsceneOn.Active = cutscenesEnabled
+		buttonSet.cutsceneOff.Visible = not cutscenesEnabled
+		buttonSet.cutsceneOff.Active = not cutscenesEnabled
 	end
 end
 
@@ -79,7 +99,7 @@ function AutoSellController:_toggleRarity(rarity: string, enabled: boolean)
 	end
 
 	local ok, result = pcall(function()
-		return self._toggleRemote:InvokeServer({
+		return self._autoSellToggleRemote:InvokeServer({
 			rarity = rarity,
 			enabled = enabled == true,
 		})
@@ -92,6 +112,28 @@ function AutoSellController:_toggleRarity(rarity: string, enabled: boolean)
 
 	if typeof(result) == "table" and result.ok ~= true then
 		warn(string.format("[AutoSellController] Failed to toggle %s auto-sell: %s", rarity, tostring(result.message)))
+	end
+end
+
+function AutoSellController:_toggleCutsceneRarity(rarity: string, enabled: boolean)
+	if not self:_ensureRemotes() then
+		return
+	end
+
+	local ok, result = pcall(function()
+		return self._cutsceneToggleRemote:InvokeServer({
+			rarity = rarity,
+			enabled = enabled ~= false,
+		})
+	end)
+
+	if not ok then
+		warn(string.format("[AutoSellController] Failed to toggle %s cutscenes: %s", rarity, tostring(result)))
+		return
+	end
+
+	if typeof(result) == "table" and result.ok ~= true then
+		warn(string.format("[AutoSellController] Failed to toggle %s cutscenes: %s", rarity, tostring(result.message)))
 	end
 end
 
@@ -109,6 +151,14 @@ function AutoSellController:_bindRarityButtons()
 
 		UIController:CreateButton(buttonSet.enabled, function()
 			self:_toggleRarity(rarity, false)
+		end)
+
+		UIController:CreateButton(buttonSet.cutsceneOff, function()
+			self:_toggleCutsceneRarity(rarity, true)
+		end)
+
+		UIController:CreateButton(buttonSet.cutsceneOn, function()
+			self:_toggleCutsceneRarity(rarity, false)
 		end)
 	end
 end
@@ -142,10 +192,19 @@ function AutoSellController:_cacheUi(playerGui: PlayerGui)
 		if row and row:IsA("GuiObject") then
 			local disabledButton = row:WaitForChild("Disabled", 30)
 			local enabledButton = row:WaitForChild("Enabled", 30)
-			if disabledButton:IsA("GuiButton") and enabledButton:IsA("GuiButton") then
+			local cutsceneOffButton = row:WaitForChild("CutsceneToggleOFF", 30)
+			local cutsceneOnButton = row:WaitForChild("CutsceneToggleON", 30)
+			if
+				disabledButton:IsA("GuiButton")
+				and enabledButton:IsA("GuiButton")
+				and cutsceneOffButton:IsA("GuiButton")
+				and cutsceneOnButton:IsA("GuiButton")
+			then
 				rarityButtons[rarity] = {
 					disabled = disabledButton,
 					enabled = enabledButton,
+					cutsceneOff = cutsceneOffButton,
+					cutsceneOn = cutsceneOnButton,
 				}
 			end
 		end
@@ -171,7 +230,7 @@ function AutoSellController:OnStart()
 	end)
 
 	DataController.DataUpdated:Connect(function(key)
-		if key == AUTO_SELL_DATA_KEY then
+		if key == AUTO_SELL_DATA_KEY or key == CUTSCENE_DATA_KEY then
 			self:_syncRarityButtons()
 		end
 	end)

@@ -18,7 +18,8 @@ end
 local PlaceProfile = require(placeProfileModule)
 
 local MIN_DISPLAY_SECONDS = 1.5
-local MAIN_INTERFACE_TIMEOUT = 10
+local GUI_ROOT_TIMEOUT = 10
+local PRELOAD_ROOT_TIMEOUT = 5
 local FADE_DURATION = 0.35
 local OPTIONAL_PRELOAD_TIMEOUT = 5
 
@@ -70,6 +71,7 @@ local skipRequested = false
 local totalAssets = 0
 local loadedAssets = 0
 local preloadCompleted = false
+local preloadFailureMessage = nil
 local isDismissing = false
 local skipConnection: RBXScriptConnection? = nil
 
@@ -148,6 +150,128 @@ local function collectPreloadInstances(root: Instance): { Instance }
 	for _, descendant in ipairs(root:GetDescendants()) do
 		if isPreloadCandidate(descendant) then
 			add(descendant)
+		end
+	end
+
+	return instances
+end
+
+local function formatPreloadRootNames(rootSpecs): string
+	local rootNames = {}
+	for _, rootSpec in ipairs(rootSpecs) do
+		if typeof(rootSpec) == "table" and typeof(rootSpec.name) == "string" then
+			table.insert(rootNames, rootSpec.name)
+		end
+	end
+
+	return table.concat(rootNames, ", ")
+end
+
+local function resolveGuiRoot(playerGuiRoot: PlayerGui, rootName: string, timeout: number): GuiBase2d?
+	local root = playerGuiRoot:FindFirstChild(rootName)
+	if root == nil and timeout > 0 then
+		root = playerGuiRoot:WaitForChild(rootName, timeout)
+	end
+
+	if root and root:IsA("GuiBase2d") then
+		return root
+	end
+
+	return nil
+end
+
+local function collectProfileGuiInstances(
+	rootName: string,
+	container: Instance,
+	rootSpecs,
+	allowMissingRoots: boolean
+): { Instance }
+	local instances = {}
+
+	for _, rootSpec in ipairs(rootSpecs) do
+		local childName = if typeof(rootSpec) == "table" then rootSpec.name else nil
+		local isRequired = typeof(rootSpec) == "table" and rootSpec.required == true
+		if typeof(childName) ~= "string" or childName == "" then
+			continue
+		end
+
+		local child = container:FindFirstChild(childName)
+		if child == nil then
+			child = container:WaitForChild(childName, PRELOAD_ROOT_TIMEOUT)
+		end
+
+		if child == nil then
+			if isRequired then
+				error(
+					string.format(
+						"%s Required PlayerGui.%s.%s did not appear within %d seconds.",
+						formatContextPrefix(),
+						rootName,
+						childName,
+						PRELOAD_ROOT_TIMEOUT
+					),
+					0
+				)
+			end
+
+			if allowMissingRoots then
+				warn(string.format(
+					"%s Optional PlayerGui.%s.%s was not found; skipping preload for that root.",
+					formatContextPrefix(),
+					rootName,
+					childName
+				))
+			end
+		else
+			for _, instance in ipairs(collectPreloadInstances(child)) do
+				table.insert(instances, instance)
+			end
+		end
+	end
+
+	return instances
+end
+
+local function resolveGameAssetInstance(relativePath: string): Instance?
+	if typeof(relativePath) ~= "string" or relativePath == "" then
+		return nil
+	end
+
+	local gameAssets = ReplicatedStorage:FindFirstChild("GameAssets")
+	if not (gameAssets and gameAssets:IsA("Folder")) then
+		return nil
+	end
+
+	local current: Instance? = gameAssets
+	for segment in string.gmatch(relativePath, "[^/]+") do
+		if current == nil then
+			return nil
+		end
+
+		current = current:FindFirstChild(segment)
+		if current == nil then
+			return nil
+		end
+	end
+
+	return current
+end
+
+local function collectProfileGameAssetInstances(relativePaths): { Instance }
+	local instances = {}
+
+	for _, relativePath in ipairs(relativePaths) do
+		local resolved = resolveGameAssetInstance(relativePath)
+		if resolved == nil then
+			warn(string.format(
+				"%s Optional ReplicatedStorage.GameAssets.%s was not found; skipping preload for that asset path.",
+				formatContextPrefix(),
+				string.gsub(relativePath, "/", ".")
+			))
+		else
+			for _, instance in ipairs(collectPreloadInstances(resolved)) do
+				table.insert(instances, instance)
+			end
 		end
 	end
 
@@ -287,39 +411,88 @@ end)
 preloadInstances(collectPreloadInstances(loadingScreen), false)
 waitForGameLoaded()
 
-local requiresMainInterface = PlaceProfile.RequiresMainInterface()
-local mainInterface = nil
+local preloadSpec = PlaceProfile.GetPreloadSpec()
+print(string.format(
+	"%s PreloadSpec MainInterface=[%s] ModalRoot=[%s] GameAssets=[%s]",
+	formatContextPrefix(),
+	formatPreloadRootNames(preloadSpec.mainInterfaceRoots),
+	formatPreloadRootNames(preloadSpec.modalRootRoots),
+	table.concat(preloadSpec.gameAssetPaths, ", ")
+))
 
-if requiresMainInterface then
-	mainInterface = playerGui:WaitForChild("MainInterface", MAIN_INTERFACE_TIMEOUT)
-	if not (mainInterface and mainInterface:IsA("ScreenGui")) then
-		error(
-			string.format(
-				"%s Required PlayerGui.MainInterface did not appear within %d seconds. This place should include the shared MainInterface content.",
-				formatContextPrefix(),
-				MAIN_INTERFACE_TIMEOUT
-			),
-			0
-		)
-	end
-else
-	mainInterface = playerGui:FindFirstChild("MainInterface")
-end
+task.spawn(function()
+	local ok, err = pcall(function()
+		local instancesToPreload = {}
 
-if mainInterface and mainInterface:IsA("ScreenGui") then
-	task.spawn(function()
-		preloadInstances(collectPreloadInstances(mainInterface), true)
-		preloadCompleted = true
+		if #preloadSpec.mainInterfaceRoots > 0 then
+			local mainInterface = resolveGuiRoot(playerGui, "MainInterface", GUI_ROOT_TIMEOUT)
+			if not (mainInterface and mainInterface:IsA("ScreenGui")) then
+				error(
+					string.format(
+						"%s Required PlayerGui.MainInterface did not appear within %d seconds. This place should include the shared MainInterface content.",
+						formatContextPrefix(),
+						GUI_ROOT_TIMEOUT
+					),
+					0
+				)
+			end
+
+			for _, instance in ipairs(collectProfileGuiInstances(
+				"MainInterface",
+				mainInterface,
+				preloadSpec.mainInterfaceRoots,
+				true
+			)) do
+				table.insert(instancesToPreload, instance)
+			end
+		end
+
+		if #preloadSpec.modalRootRoots > 0 then
+			local modalRoot = resolveGuiRoot(playerGui, "ModalRoot", GUI_ROOT_TIMEOUT)
+			if not (modalRoot and modalRoot:IsA("ScreenGui")) then
+				error(
+					string.format(
+						"%s Required PlayerGui.ModalRoot did not appear within %d seconds. This place should include the shared ModalRoot content.",
+						formatContextPrefix(),
+						GUI_ROOT_TIMEOUT
+					),
+					0
+				)
+			end
+
+			for _, instance in ipairs(collectProfileGuiInstances(
+				"ModalRoot",
+				modalRoot,
+				preloadSpec.modalRootRoots,
+				true
+			)) do
+				table.insert(instancesToPreload, instance)
+			end
+		end
+
+		for _, instance in ipairs(collectProfileGameAssetInstances(preloadSpec.gameAssetPaths)) do
+			table.insert(instancesToPreload, instance)
+		end
+
+		preloadInstances(instancesToPreload, true)
 	end)
-elseif not requiresMainInterface then
+
+	if not ok then
+		preloadFailureMessage = tostring(err)
+	end
+
 	preloadCompleted = true
-end
+end)
 
 waitForMinimumDisplay()
 
 local preloadDeadline = os.clock() + OPTIONAL_PRELOAD_TIMEOUT
 while not preloadCompleted and not skipRequested and os.clock() < preloadDeadline do
 	task.wait(0.05)
+end
+
+if preloadFailureMessage ~= nil then
+	error(preloadFailureMessage, 0)
 end
 
 if not preloadCompleted and not skipRequested then

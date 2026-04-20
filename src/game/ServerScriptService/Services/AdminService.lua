@@ -13,6 +13,7 @@ local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catal
 local MerchantShopService = require(script.Parent.MerchantShopService)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 local PotionService = require(script.Parent.PotionService)
+local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 local RollService = require(script.Parent.RollService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
@@ -775,6 +776,11 @@ end
 function AdminService:OnStart()
 	local remote = ensureAdminActionRemote()
 	remote.OnServerInvoke = function(player: Player, request: any)
+		local allowed = RequestLimiter:Allow(player, "remote.admin")
+		if not allowed then
+			return response(false, "RATE_LIMITED", "You're sending admin actions too quickly.")
+		end
+
 		local ok, result = pcall(function()
 			return self:HandleAction(player, request)
 		end)

@@ -17,6 +17,7 @@ local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
 local PotionService = require(script.Parent.PotionService)
 local PurchaseReceiptService = require(script.Parent.PurchaseReceiptService)
+local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 local StatsService = require(script.Parent.StatsService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
@@ -27,6 +28,7 @@ local SELECT_ROLL_REGION_REMOTE_NAME = "SelectRollRegion"
 local PERFORM_ROLL_REMOTE_NAME = "PerformRoll"
 local TOGGLE_QUICK_ROLL_REMOTE_NAME = "ToggleQuickRoll"
 local TOGGLE_AUTO_SELL_RARITY_REMOTE_NAME = "ToggleAutoSellRarity"
+local TOGGLE_CUTSCENE_RARITY_REMOTE_NAME = "ToggleCutsceneRarity"
 local FINALIZE_AUTO_SELL_ROLL_REMOTE_NAME = "FinalizeAutoSellRoll"
 local PROMPT_QUICK_ROLL_PURCHASE_REMOTE_NAME = "PromptQuickRollPurchase"
 local UPDATED_REMOTE_NAME = "RollingUpdated"
@@ -41,6 +43,7 @@ local selectRollRegionRemote: RemoteFunction? = nil
 local performRollRemote: RemoteFunction? = nil
 local toggleQuickRollRemote: RemoteFunction? = nil
 local toggleAutoSellRarityRemote: RemoteFunction? = nil
+local toggleCutsceneRarityRemote: RemoteFunction? = nil
 local finalizeAutoSellRollRemote: RemoteFunction? = nil
 local promptQuickRollPurchaseRemote: RemoteFunction? = nil
 local updatedRemote: RemoteEvent? = nil
@@ -76,6 +79,7 @@ local function buildUnavailableRollingState(message: string?): { [string]: any }
 			enabled = false,
 		},
 		autoSellRarities = RollingConfig.CreateDefaultAutoSellState(),
+		cutsceneRarities = RollingConfig.CreateDefaultCutsceneState(),
 		message = message or getRollingUnavailableMessage(),
 	}
 end
@@ -96,6 +100,7 @@ local function destroyRollingRemotes()
 	performRollRemote = nil
 	toggleQuickRollRemote = nil
 	toggleAutoSellRarityRemote = nil
+	toggleCutsceneRarityRemote = nil
 	finalizeAutoSellRollRemote = nil
 	promptQuickRollPurchaseRemote = nil
 	updatedRemote = nil
@@ -120,6 +125,10 @@ local function response(ok: boolean, message: string, state: any?, rollResult: a
 		state = state,
 		rollResult = rollResult,
 	}
+end
+
+local function buildRateLimitResponse(message: string, state: any?)
+	return response(false, message, state)
 end
 
 local function markDeltaState(state: { [string]: any })
@@ -269,6 +278,10 @@ end
 
 local function buildAutoSellState(player: Player)
 	return DataService:GetAutoSellRarities(player)
+end
+
+local function buildCutsceneState(player: Player)
+	return DataService:GetCutsceneRarities(player)
 end
 
 local function getEffectiveBonuses(player: Player)
@@ -487,8 +500,25 @@ local function resolveCutscenePlayback(player: Player, setId: string, displayRar
 	local cutsceneTier = RollCutsceneConfig.ResolveTier(normalizedRarity)
 	local hasSeenCutscene = DataService:HasSeenBundleCutscene(player, setId)
 	local shouldPlayCutscene = RollCutsceneConfig.ShouldPlayForSet(normalizedRarity, setId, hasSeenCutscene)
+	local isAlwaysPlaySet = RollCutsceneConfig.IsAlwaysPlaySetId(setId)
+	local cutsceneEnabledForRarity = DataService:IsCutsceneEnabledForRarity(player, normalizedRarity)
 
-	if shouldPlayCutscene and not RollCutsceneConfig.IsAlwaysPlaySetId(setId) then
+	if not shouldPlayCutscene then
+		return false, cutsceneTier
+	end
+
+	if not cutsceneEnabledForRarity then
+		if not isAlwaysPlaySet then
+			local didMarkSeen = DataService:MarkBundleCutsceneSeen(player, setId)
+			if not didMarkSeen then
+				warn(string.format("[RollService] Failed to persist seen cutscene state for %s on set %s.", player.Name, setId))
+			end
+		end
+
+		return false, cutsceneTier
+	end
+
+	if not isAlwaysPlaySet then
 		local didMarkSeen = DataService:MarkBundleCutsceneSeen(player, setId)
 		if not didMarkSeen then
 			warn(string.format("[RollService] Failed to persist seen cutscene state for %s on set %s.", player.Name, setId))
@@ -788,6 +818,7 @@ function RollService:GetRollingState(player: Player, message: string?)
 		quickRoll = quickRollState,
 		effectiveRollCooldown = effectiveRollCooldown,
 		autoSellRarities = buildAutoSellState(player),
+		cutsceneRarities = buildCutsceneState(player),
 		message = message,
 	}
 end
@@ -840,6 +871,7 @@ function RollService:GetRollingDeltaState(player: Player, message: string?)
 		quickRoll = quickRollState,
 		effectiveRollCooldown = effectiveRollCooldown,
 		autoSellRarities = buildAutoSellState(player),
+		cutsceneRarities = buildCutsceneState(player),
 		message = message,
 	})
 end
@@ -943,6 +975,33 @@ function RollService:ToggleAutoSellRarity(player: Player, displayRarity: any, en
 		"%s auto-sell %s.",
 		normalizedRarity,
 		if enabled == true then "enabled" else "disabled"
+	)
+end
+
+function RollService:ToggleCutsceneRarity(player: Player, displayRarity: any, enabled: boolean): (boolean, string)
+	if not isRollingEnabled() then
+		return false, getRollingUnavailableMessage()
+	end
+
+	local normalizedRarity = RollingConfig.ResolveDisplayRarity(displayRarity)
+	if not normalizedRarity then
+		return false, "That cutscene rarity does not exist."
+	end
+
+	local nextEnabled = enabled ~= false
+	local wasEnabled = DataService:IsCutsceneEnabledForRarity(player, normalizedRarity)
+	local ok, message = DataService:SetCutsceneRarityEnabled(player, normalizedRarity, nextEnabled)
+	if not ok then
+		return false, message or "Failed to update cutscenes."
+	end
+	if wasEnabled ~= nextEnabled then
+		StatsService:RecordSettingChange(player, "cutscene")
+	end
+
+	return true, message or string.format(
+		"%s cutscenes %s.",
+		normalizedRarity,
+		if nextEnabled then "enabled" else "disabled"
 	)
 end
 
@@ -1288,6 +1347,15 @@ local function handleToggleAutoSellRarity(player: Player, payload: any)
 	return response(ok, message, RollService:GetRollingState(player))
 end
 
+local function handleToggleCutsceneRarity(player: Player, payload: any)
+	if typeof(payload) ~= "table" then
+		return response(false, "Cutscene payload must be a table.", RollService:GetRollingState(player))
+	end
+
+	local ok, message = RollService:ToggleCutsceneRarity(player, payload.rarity, payload.enabled ~= false)
+	return response(ok, message, RollService:GetRollingState(player))
+end
+
 local function handleFinalizeAutoSellRoll(player: Player, payload: any)
 	local ok, message = RollService:FinalizeAutoSellRoll(player, payload)
 	return response(ok, message, RollService:GetRollingDeltaState(player, message))
@@ -1315,11 +1383,17 @@ function RollService:OnStart()
 	performRollRemote = ensureRemoteFunction(performRollRemote, PERFORM_ROLL_REMOTE_NAME)
 	toggleQuickRollRemote = ensureRemoteFunction(toggleQuickRollRemote, TOGGLE_QUICK_ROLL_REMOTE_NAME)
 	toggleAutoSellRarityRemote = ensureRemoteFunction(toggleAutoSellRarityRemote, TOGGLE_AUTO_SELL_RARITY_REMOTE_NAME)
+	toggleCutsceneRarityRemote = ensureRemoteFunction(toggleCutsceneRarityRemote, TOGGLE_CUTSCENE_RARITY_REMOTE_NAME)
 	finalizeAutoSellRollRemote = ensureRemoteFunction(finalizeAutoSellRollRemote, FINALIZE_AUTO_SELL_ROLL_REMOTE_NAME)
 	promptQuickRollPurchaseRemote = ensureRemoteFunction(promptQuickRollPurchaseRemote, PROMPT_QUICK_ROLL_PURCHASE_REMOTE_NAME)
 	updatedRemote = ensureUpdatedRemote()
 
 	getStateRemote.OnServerInvoke = function(player: Player)
+		local allowed = RequestLimiter:Allow(player, "remote.roll.get_state")
+		if not allowed then
+			return buildRateLimitResponse("You're refreshing the rolling state too quickly.", self:GetRollingState(player))
+		end
+
 		local ok, result = pcall(function()
 			return handleGetState(player)
 		end)
@@ -1331,6 +1405,11 @@ function RollService:OnStart()
 		return response(false, "Failed to load rolling state.", self:GetRollingState(player))
 	end
 	selectRollTypeRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.roll.select_type")
+		if not allowed then
+			return buildRateLimitResponse("You're changing roll types too quickly.", self:GetRollingState(player))
+		end
+
 		local ok, result = pcall(function()
 			return handleSelectRollType(player, payload)
 		end)
@@ -1342,6 +1421,11 @@ function RollService:OnStart()
 		return response(false, "Failed to select the roll type.", self:GetRollingState(player))
 	end
 	selectRollRegionRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.roll.select_region")
+		if not allowed then
+			return buildRateLimitResponse("You're changing roll regions too quickly.", self:GetRollingState(player))
+		end
+
 		local ok, result = pcall(function()
 			return handleSelectRollRegion(player, payload)
 		end)
@@ -1353,6 +1437,11 @@ function RollService:OnStart()
 		return response(false, "Failed to select the roll region.", self:GetRollingState(player))
 	end
 	toggleQuickRollRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.roll.quick_roll")
+		if not allowed then
+			return buildRateLimitResponse("You're toggling Quick Roll too quickly.", self:GetRollingState(player))
+		end
+
 		local ok, result = pcall(function()
 			return handleToggleQuickRoll(player, payload)
 		end)
@@ -1364,6 +1453,11 @@ function RollService:OnStart()
 		return response(false, "Failed to update Quick Roll.", self:GetRollingState(player))
 	end
 	toggleAutoSellRarityRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.roll.auto_sell")
+		if not allowed then
+			return buildRateLimitResponse("You're updating auto-sell too quickly.", self:GetRollingState(player))
+		end
+
 		local ok, result = pcall(function()
 			return handleToggleAutoSellRarity(player, payload)
 		end)
@@ -1374,7 +1468,28 @@ function RollService:OnStart()
 		warn(string.format("[RollService] ToggleAutoSellRarity failed for %s: %s", player.Name, tostring(result)))
 		return response(false, "Failed to update auto-sell.", self:GetRollingState(player))
 	end
+	toggleCutsceneRarityRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.roll.cutscene")
+		if not allowed then
+			return buildRateLimitResponse("You're updating cutscene settings too quickly.", self:GetRollingState(player))
+		end
+
+		local ok, result = pcall(function()
+			return handleToggleCutsceneRarity(player, payload)
+		end)
+		if ok then
+			return result
+		end
+
+		warn(string.format("[RollService] ToggleCutsceneRarity failed for %s: %s", player.Name, tostring(result)))
+		return response(false, "Failed to update cutscenes.", self:GetRollingState(player))
+	end
 	finalizeAutoSellRollRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.roll.finalize_auto_sell")
+		if not allowed then
+			return buildRateLimitResponse("You're finalizing auto-sell too quickly.", self:GetRollingState(player))
+		end
+
 		local ok, result = pcall(function()
 			return handleFinalizeAutoSellRoll(player, payload)
 		end)
@@ -1386,6 +1501,11 @@ function RollService:OnStart()
 		return response(false, "Failed to finalize auto-sell.", self:GetRollingState(player))
 	end
 	promptQuickRollPurchaseRemote.OnServerInvoke = function(player: Player)
+		local allowed = RequestLimiter:Allow(player, "remote.roll.prompt_quick_roll")
+		if not allowed then
+			return buildRateLimitResponse("You're opening the Quick Roll prompt too quickly.", self:GetRollingState(player))
+		end
+
 		local ok, result = pcall(function()
 			return handlePromptQuickRollPurchase(player)
 		end)
@@ -1397,6 +1517,11 @@ function RollService:OnStart()
 		return response(false, "Failed to open the Quick Roll purchase prompt.", self:GetRollingState(player))
 	end
 	performRollRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.roll.perform")
+		if not allowed then
+			return response(false, "You're rolling too quickly.", self:GetRollingState(player))
+		end
+
 		local ok, result = pcall(function()
 			return handlePerformRoll(player, payload)
 		end)
