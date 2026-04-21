@@ -80,24 +80,10 @@ local function freezeMoveDefinition(moveDefinition: any)
 		animationFolderName = nil
 	end
 
-	local minRange = normalizePositiveNumber(moveDefinition.minRange, 0)
-	local maxRange = normalizePositiveNumber(moveDefinition.maxRange, minRange)
-
-	if maxRange < minRange then
-		error(string.format(
-			"[BossDefinitionBuilder] Boss move '%s' has maxRange %.2f smaller than minRange %.2f.",
-			moveId,
-			maxRange,
-			minRange
-		), 0)
-	end
-
 	return table.freeze({
 		id = moveId,
 		tags = table.freeze(tags),
 		cooldownSeconds = normalizePositiveNumber(moveDefinition.cooldownSeconds, 1),
-		minRange = minRange,
-		maxRange = maxRange,
 		weight = math.max(0.01, normalizePositiveNumber(moveDefinition.weight, 1)),
 		rootDuringCast = moveDefinition.rootDuringCast == true,
 		castTimeSeconds = normalizePositiveNumber(moveDefinition.castTimeSeconds, 0),

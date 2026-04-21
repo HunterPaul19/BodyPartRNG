@@ -31,7 +31,7 @@ return function(data, context, knockbackID)
 	local character = context.character
 	local rootPart = context.rootPart
 
-	local collisionGroupToken = context:pushCollisionGroup(Constants.COLLISION_GROUPS.HitboxNoCollide)
+	local collisionGroupToken = context:pushCollisionGroup(Constants.COLLISION_GROUPS.BodyPhysics)
 	local function restoreCollisionGroup()
 		if collisionGroupToken then
 			context:popCollisionGroup(collisionGroupToken)

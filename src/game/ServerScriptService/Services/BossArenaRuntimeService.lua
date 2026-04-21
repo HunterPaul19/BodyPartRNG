@@ -1085,19 +1085,7 @@ function BossArenaRuntimeService:_cancelActiveCast(encounter: EncounterState)
 	invokeLifecycleCancel(activeCast.move.id, activeCast.lifecycleHandle)
 end
 
-function BossArenaRuntimeService:_usesHardRangeGate(moveDefinition: any): boolean
-	return moveDefinition.moduleId == "Common.BasicM1" or typeof(moveDefinition.module.GetSelectionWeight) ~= "function"
-end
-
 function BossArenaRuntimeService:_getMoveSelectionWeight(moveDefinition: any, context: any): number?
-	if context.distanceToTarget ~= nil then
-		if self:_usesHardRangeGate(moveDefinition) then
-			if context.distanceToTarget < moveDefinition.minRange or context.distanceToTarget > moveDefinition.maxRange then
-				return nil
-			end
-		end
-	end
-
 	local canUseOk, canUse, reason = pcall(function()
 		return moveDefinition.module.CanUse(context)
 	end)

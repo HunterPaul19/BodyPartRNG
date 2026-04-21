@@ -130,6 +130,11 @@ local function buildMapIncludeList()
 	return include, hasExplicitMap
 end
 
+function RaycastUtil.hasExplicitMapRoots()
+	local _, hasExplicitMap = buildMapIncludeList()
+	return hasExplicitMap
+end
+
 local function buildBaseParams(profileName)
 	local params = RaycastParams.new()
 	params.IgnoreWater = true
@@ -274,7 +279,12 @@ function RaycastUtil.raycastSupportSurface(origin, direction, options)
 		ignoreWater = ignoreWater,
 		extraInclude = options.extraInclude,
 	})
-	return workspace:Raycast(origin, direction, fallbackParams)
+	local fallbackResult = workspace:Raycast(origin, direction, fallbackParams)
+	if fallbackResult and isValidSupportSurface(fallbackResult, character) then
+		return fallbackResult
+	end
+
+	return nil
 end
 
 function RaycastUtil.clearCache()

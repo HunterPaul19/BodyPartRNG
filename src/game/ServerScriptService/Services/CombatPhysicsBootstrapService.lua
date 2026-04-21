@@ -69,10 +69,15 @@ end
 local function ensureCollisionGroups()
 	local collisionGroups = Constants.COLLISION_GROUPS
 
+	ensureCollisionGroup(collisionGroups.BodyPhysics)
 	ensureCollisionGroup(collisionGroups.Hitbox)
 	ensureCollisionGroup(collisionGroups.HitboxNoCollide)
 	ensureCollisionGroup(collisionGroups.Ragdoll)
 
+	setCollidable(collisionGroups.BodyPhysics, collisionGroups.BodyPhysics, false)
+	setCollidable(collisionGroups.BodyPhysics, collisionGroups.Hitbox, false)
+	setCollidable(collisionGroups.BodyPhysics, collisionGroups.HitboxNoCollide, false)
+	setCollidable(collisionGroups.BodyPhysics, collisionGroups.Ragdoll, false)
 	setCollidable(collisionGroups.Hitbox, collisionGroups.Hitbox, false)
 	setCollidable(collisionGroups.Hitbox, collisionGroups.HitboxNoCollide, false)
 	setCollidable(collisionGroups.HitboxNoCollide, collisionGroups.HitboxNoCollide, false)
@@ -81,9 +86,17 @@ local function ensureCollisionGroups()
 
 	for _, externalGroupName in ipairs({ "Default", "Players" }) do
 		if isCollisionGroupRegistered(externalGroupName) then
-			setCollidable(collisionGroups.HitboxNoCollide, externalGroupName, false)
-			setCollidable(collisionGroups.Hitbox, externalGroupName, true)
-			setCollidable(collisionGroups.Ragdoll, externalGroupName, true)
+			if externalGroupName == "Players" then
+				setCollidable(collisionGroups.BodyPhysics, externalGroupName, false)
+				setCollidable(collisionGroups.HitboxNoCollide, externalGroupName, false)
+				setCollidable(collisionGroups.Hitbox, externalGroupName, true)
+				setCollidable(collisionGroups.Ragdoll, externalGroupName, true)
+			else
+				setCollidable(collisionGroups.BodyPhysics, externalGroupName, true)
+				setCollidable(collisionGroups.HitboxNoCollide, externalGroupName, false)
+				setCollidable(collisionGroups.Hitbox, externalGroupName, true)
+				setCollidable(collisionGroups.Ragdoll, externalGroupName, true)
+			end
 		end
 	end
 end

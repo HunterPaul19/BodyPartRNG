@@ -425,7 +425,7 @@ local function invokeKnockback(character, knockbackType, data)
 			if character:GetAttribute("Owner") then
 				context:createState("HardIFrames", (data.RagdollDuration or data.Duration or 0.2) + 2)
 			end
-			local collisionGroupToken = context:pushCollisionGroup(Constants.COLLISION_GROUPS.HitboxNoCollide)
+			local collisionGroupToken = context:pushCollisionGroup(Constants.COLLISION_GROUPS.BodyPhysics)
 
 			local payloadData = cloneForClient(data) or {}
 			payloadData.AuthorityMode = "SharedClientSim"

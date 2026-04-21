@@ -107,7 +107,7 @@ return function(data, context, knockbackID)
 	end
 
 	context:clearBodymovers()
-	local collisionGroupToken = context:pushCollisionGroup(Constants.COLLISION_GROUPS.HitboxNoCollide)
+	local collisionGroupToken = context:pushCollisionGroup(Constants.COLLISION_GROUPS.BodyPhysics)
 
 	local function restoreCollisionGroup()
 		if collisionGroupToken then

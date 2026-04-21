@@ -175,14 +175,23 @@ function BodyMoverUtil.anticipateLand(character, distanceFromGround, onLand, tim
 
 		local result
 		if groundMode == "DeterministicMap" then
-			result = workspace:Raycast(
-				rootPart.Position,
-				Vector3.new(0, -1, 0) * distance,
-				RaycastUtil.getDeterministicGroundParams({
-					ignoreWater = options.ignoreWater,
+			if RaycastUtil.hasExplicitMapRoots() then
+				result = workspace:Raycast(
+					rootPart.Position,
+					Vector3.new(0, -1, 0) * distance,
+					RaycastUtil.getDeterministicGroundParams({
+						ignoreWater = options.ignoreWater,
+						extraInclude = options.extraInclude,
+					})
+				)
+			else
+				result = RaycastUtil.raycastSupportSurface(rootPart.Position, Vector3.new(0, -1, 0) * distance, {
+					character = character,
+					extraExclude = appendExcludeList({}, options.extraExclude),
 					extraInclude = options.extraInclude,
+					ignoreWater = options.ignoreWater,
 				})
-			)
+			end
 		else
 			result = RaycastUtil.raycastSupportSurface(rootPart.Position, Vector3.new(0, -1, 0) * distance, {
 				character = character,

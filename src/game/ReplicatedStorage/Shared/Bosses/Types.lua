@@ -13,8 +13,6 @@ export type BossMoveDefinition = {
 	id: string,
 	tags: { string },
 	cooldownSeconds: number,
-	minRange: number,
-	maxRange: number,
 	weight: number,
 	rootDuringCast: boolean,
 	castTimeSeconds: number,

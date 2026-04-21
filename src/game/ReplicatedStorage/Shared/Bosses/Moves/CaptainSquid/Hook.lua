@@ -284,18 +284,13 @@ function Hook.CanUse(context)
 		return false, "No focus target"
 	end
 
-	local distance = tonumber(context.distanceToTarget)
-	if distance == nil or distance > HOOK_RANGE_STUDS then
-		return false, "Target out of hook range"
-	end
-
 	return true
 end
 
 function Hook.GetSelectionWeight(context)
 	local distance = tonumber(context.distanceToTarget)
-	if distance == nil or distance > HOOK_RANGE_STUDS then
-		return 0
+	if distance == nil then
+		return 1
 	end
 
 	return getWeightedValue(distance, {
@@ -306,6 +301,7 @@ function Hook.GetSelectionWeight(context)
 		{ distance = 65, weight = 0.48 },
 		{ distance = 85, weight = 0.36 },
 		{ distance = 100, weight = 0.24 },
+		{ distance = 140, weight = 0.12 },
 	})
 end
 

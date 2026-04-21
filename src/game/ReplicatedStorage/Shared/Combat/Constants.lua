@@ -7,6 +7,7 @@ local Constants = {
 		KnockbackObserverDispatch = "KnockbackObserverDispatch",
 	},
 	COLLISION_GROUPS = {
+		BodyPhysics = "CombatBodyPhysics",
 		Hitbox = "CombatHitbox",
 		HitboxNoCollide = "CombatHitboxNoCollide",
 		Ragdoll = "CombatRagdoll",

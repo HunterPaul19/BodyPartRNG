@@ -7,7 +7,8 @@ local MechaPunch = require(ReplicatedStorage.Shared.Bosses.Moves.MechArmouredMob
 local MissileBarrage = require(ReplicatedStorage.Shared.Bosses.Moves.MechArmouredMobileSuitBipedColourable.MissileBarrage)
 
 return BossConfigFactory.Create({
-	bossId = "Mech Armoured Mobile Suit Biped Colourable",
+	bossId = "Destroyer 3000",
+	displayName = "Destroyer 3000",
 	arenaId = "Spire",
 	walkSpeed = 14,
 	aggroRadius = 122,
@@ -17,7 +18,6 @@ return BossConfigFactory.Create({
 	retargetSwapBuffer = 8,
 	m1 = {
 		cooldownSeconds = 3.0,
-		maxRange = 12,
 		weight = 2,
 	},
 	moves = {
@@ -25,10 +25,8 @@ return BossConfigFactory.Create({
 			label = "Mecha Kick",
 			tags = { BossMoveTags.CloseSingle },
 			module = MechaKick,
-			moduleId = "Moves.MechArmouredMobileSuitBipedColourable.MechaKick",
+			moduleId = "Moves.Destroyer3000.MechaKick",
 			cooldownSeconds = 6.0,
-			minRange = 0,
-			maxRange = 13,
 			weight = 2,
 			rootDuringCast = true,
 			castTimeSeconds = 0.25,
@@ -38,10 +36,8 @@ return BossConfigFactory.Create({
 			label = "Missile Barrage",
 			tags = { BossMoveTags.RangedSingle },
 			module = MissileBarrage,
-			moduleId = "Moves.MechArmouredMobileSuitBipedColourable.MissileBarrage",
+			moduleId = "Moves.Destroyer3000.MissileBarrage",
 			cooldownSeconds = 8.5,
-			minRange = 16,
-			maxRange = 110,
 			weight = 1,
 			rootDuringCast = true,
 			castTimeSeconds = 0.8,
@@ -51,10 +47,8 @@ return BossConfigFactory.Create({
 			label = "Mecha Punch",
 			tags = { BossMoveTags.AOE },
 			module = MechaPunch,
-			moduleId = "Moves.MechArmouredMobileSuitBipedColourable.MechaPunch",
+			moduleId = "Moves.Destroyer3000.MechaPunch",
 			cooldownSeconds = 12.0,
-			minRange = 0,
-			maxRange = 20,
 			weight = 0.75,
 			rootDuringCast = true,
 			castTimeSeconds = 0.7,
