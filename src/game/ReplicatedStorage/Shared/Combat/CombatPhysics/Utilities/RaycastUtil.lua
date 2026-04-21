@@ -23,6 +23,85 @@ local function appendInstances(target, extra)
 	return target
 end
 
+local function buildExcludeList(character, extraExclude)
+	local exclude = {}
+	if character then
+		table.insert(exclude, character)
+	end
+	appendInstances(exclude, extraExclude)
+	return exclude
+end
+
+local function createExcludeParams(filterList, ignoreWater)
+	local params = RaycastParams.new()
+	params.IgnoreWater = ignoreWater ~= nil and ignoreWater or true
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = shallowCopy(filterList)
+	return params
+end
+
+local function findHumanoidModel(instance)
+	local current = instance
+	while current and current ~= workspace do
+		if current:IsA("Model") and current:FindFirstChildOfClass("Humanoid") then
+			return current
+		end
+		current = current.Parent
+	end
+	return nil
+end
+
+local function isTransientSupportPart(instance)
+	if not instance or not instance:IsA("BasePart") then
+		return false
+	end
+
+	if instance.Name == "CombatPhysicsDebug" or instance.Name == "RagdollCollider" then
+		return true
+	end
+
+	local visuals = workspace:FindFirstChild("Visuals")
+	if visuals and instance:IsDescendantOf(visuals) and not instance.CanCollide then
+		return true
+	end
+
+	return false
+end
+
+local function isValidSupportSurface(result, character)
+	local instance = result and result.Instance
+	if not instance then
+		return false
+	end
+
+	if instance == workspace.Terrain then
+		return true
+	end
+
+	if not instance:IsA("BasePart") then
+		return false
+	end
+
+	if character and instance:IsDescendantOf(character) then
+		return false
+	end
+
+	if isTransientSupportPart(instance) then
+		return false
+	end
+
+	if not instance.CanCollide then
+		return false
+	end
+
+	local humanoidModel = findHumanoidModel(instance)
+	if humanoidModel then
+		return false
+	end
+
+	return true
+end
+
 local function buildMapIncludeList()
 	local include = { workspace.Terrain }
 	local hasExplicitMap = false
@@ -124,6 +203,14 @@ function RaycastUtil.getGroundParams(character)
 	return params
 end
 
+function RaycastUtil.getBroadGroundParams(character, options)
+	options = type(options) == "table" and options or {}
+	return createExcludeParams(
+		buildExcludeList(character, options.extraExclude),
+		options.ignoreWater
+	)
+end
+
 function RaycastUtil.getDeterministicGroundParams(options)
 	local params = RaycastParams.new()
 	local include, hasExplicitMap = buildMapIncludeList()
@@ -135,6 +222,59 @@ function RaycastUtil.getDeterministicGroundParams(options)
 	params.FilterDescendantsInstances = include
 	params.IgnoreWater = options and options.ignoreWater ~= nil and options.ignoreWater or true
 	return params
+end
+
+function RaycastUtil.raycastSupportSurface(origin, direction, options)
+	if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" or direction.Magnitude <= 0 then
+		return nil
+	end
+
+	options = type(options) == "table" and options or {}
+	local character = options.character
+	local ignoreWater = options.ignoreWater
+	local maxHits = math.max(1, options.maxHits or 12)
+	local stepOffset = math.max(0.01, options.stepOffset or 0.05)
+	local excludeList = buildExcludeList(character, options.extraExclude)
+	local currentOrigin = origin
+	local rayUnit = direction.Unit
+	local remainingDistance = direction.Magnitude
+
+	for _ = 1, maxHits do
+		local result = workspace:Raycast(
+			currentOrigin,
+			rayUnit * remainingDistance,
+			createExcludeParams(excludeList, ignoreWater)
+		)
+		if not result then
+			break
+		end
+
+		if isValidSupportSurface(result, character) then
+			return result
+		end
+
+		if result.Instance then
+			table.insert(excludeList, result.Instance)
+		end
+
+		local travelled = (result.Position - currentOrigin).Magnitude
+		remainingDistance -= travelled + stepOffset
+		if remainingDistance <= 0 then
+			break
+		end
+
+		currentOrigin = result.Position + (rayUnit * stepOffset)
+	end
+
+	if options.fallbackToMap == false then
+		return nil
+	end
+
+	local fallbackParams = RaycastUtil.getDeterministicGroundParams({
+		ignoreWater = ignoreWater,
+		extraInclude = options.extraInclude,
+	})
+	return workspace:Raycast(origin, direction, fallbackParams)
 end
 
 function RaycastUtil.clearCache()

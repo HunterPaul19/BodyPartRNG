@@ -29,6 +29,10 @@ local ACTION_CONFIGS: { [string]: ActionConfig } = {
 		limit = 2,
 		windowSeconds = 1,
 	},
+	["remote.boss_arena.player_m1"] = {
+		limit = 3,
+		windowSeconds = 1,
+	},
 	["remote.appraisal.get_state"] = {
 		limit = 2,
 		windowSeconds = 1,

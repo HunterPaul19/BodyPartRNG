@@ -204,7 +204,10 @@ local function applyClientOwnedFallback(record, reason)
 
 	context.ragdoll = Ragdoll.getOrCreate(character)
 	BodyMoverUtil.clear(character)
-	context:setCollisionGroup(Constants.COLLISION_GROUPS.Hitbox)
+	if record.collisionGroupToken then
+		context:popCollisionGroup(record.collisionGroupToken)
+		record.collisionGroupToken = nil
+	end
 	context:createState("AntiStunned", 0.4)
 	context:createState("IFrames", 0.15)
 
@@ -244,7 +247,10 @@ local function finalizeClientOwned(record, accepted, reason, finalRootCFrame)
 	if accepted then
 		local context = CharacterPhysicsContext.fromCharacter(record.character)
 		if context then
-			context:setCollisionGroup(Constants.COLLISION_GROUPS.Hitbox)
+			if record.collisionGroupToken then
+				context:popCollisionGroup(record.collisionGroupToken)
+				record.collisionGroupToken = nil
+			end
 			local recordData = record.data or {}
 			context:createState("IFrames", recordData.IFrames or (record.character:GetAttribute("Owner") and 1 or 0.2))
 			context:createState("AntiStunned", recordData.AntiStun ~= nil and recordData.AntiStun or 0.6)
@@ -419,7 +425,7 @@ local function invokeKnockback(character, knockbackType, data)
 			if character:GetAttribute("Owner") then
 				context:createState("HardIFrames", (data.RagdollDuration or data.Duration or 0.2) + 2)
 			end
-			context:setCollisionGroup(Constants.COLLISION_GROUPS.HitboxNoCollide)
+			local collisionGroupToken = context:pushCollisionGroup(Constants.COLLISION_GROUPS.HitboxNoCollide)
 
 			local payloadData = cloneForClient(data) or {}
 			payloadData.AuthorityMode = "SharedClientSim"
@@ -447,6 +453,7 @@ local function invokeKnockback(character, knockbackType, data)
 				maxDistance = maxDistance,
 				maxDuration = maxDuration,
 				data = payloadData,
+				collisionGroupToken = collisionGroupToken,
 				lastSnapshotBroadcast = 0,
 				lastRootCFrame = context.rootPart and context.rootPart.CFrame or nil,
 			}

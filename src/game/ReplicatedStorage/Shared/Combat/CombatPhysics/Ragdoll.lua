@@ -4,6 +4,7 @@ local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Constants = require(ReplicatedStorage.Shared.Combat.Constants)
+local CollisionGroupOverrides = require(script.Parent.Utilities.CollisionGroupOverrides)
 local Trove = require(script.Parent.Utilities.Trove)
 local StateUtil = require(script.Parent.Utilities.StateUtil)
 local RaycastUtil = require(script.Parent.Utilities.RaycastUtil)
@@ -32,6 +33,7 @@ Ragdoll.__index = Ragdoll
 
 local registry = setmetatable({}, { __mode = "k" })
 local RAGDOLL_RECOVERY_LOCK_TIME = 0.2
+local RAGDOLL_RECOVERY_STABILIZE_TIME = 0.5
 local DEBUG_DEFAULT = true
 
 local function shouldDebug(character)
@@ -104,7 +106,41 @@ local function setNetworkOwner(rootPart, player, character)
 	end
 end
 
-local function settleCharacterForRecovery(character, rootPart, humanoid)
+local function getLowestRecoveryBottomY(character)
+	local lowestBottomY = nil
+
+	for _, instance in ipairs(character:GetDescendants()) do
+		if instance:IsA("BasePart") and instance.Name ~= "RagdollCollider" then
+			local accessory = instance:FindFirstAncestorWhichIsA("Accessory")
+			local visualProxyFolder = instance:FindFirstAncestor("CharacterBodyParts")
+			if not accessory and not visualProxyFolder then
+				local bottomY = instance.Position.Y - (instance.Size.Y * 0.5)
+				if lowestBottomY == nil or bottomY < lowestBottomY then
+					lowestBottomY = bottomY
+				end
+			end
+		end
+	end
+
+	return lowestBottomY
+end
+
+local function measureRecoveryRootOffset(character, rootPart)
+	local raycast = RaycastUtil.raycastSupportSurface(
+		rootPart.Position + Vector3.new(0, 5, 0),
+		Vector3.new(0, -40, 0),
+		{
+			character = character,
+		}
+	)
+	if not raycast then
+		return nil
+	end
+
+	return math.max(0, rootPart.Position.Y - raycast.Position.Y)
+end
+
+local function settleCharacterForRecovery(character, rootPart, humanoid, recoveryRootOffset)
 	for _, instance in ipairs(character:GetDescendants()) do
 		if instance:IsA("BasePart") then
 			instance.AssemblyLinearVelocity = Vector3.zero
@@ -113,14 +149,28 @@ local function settleCharacterForRecovery(character, rootPart, humanoid)
 	end
 
 	local targetPosition = rootPart.Position
-	local raycast = workspace:Raycast(
+	local raycast = RaycastUtil.raycastSupportSurface(
 		rootPart.Position + Vector3.new(0, 5, 0),
 		Vector3.new(0, -25, 0),
-		RaycastUtil.getGroundParams(character)
+		{
+			character = character,
+		}
 	)
 
 	if raycast then
-		local minimumHeight = raycast.Position.Y + math.max(2.5, humanoid.HipHeight + 1)
+		local floorY = raycast.Position.Y
+		local lowestBottomY = getLowestRecoveryBottomY(character)
+		if lowestBottomY then
+			local lift = (floorY + 0.15) - lowestBottomY
+			if lift > 0 then
+				targetPosition = targetPosition + Vector3.new(0, lift, 0)
+			end
+		end
+
+		local minimumHeight = floorY + rootPart.Size.Y * 0.5 + math.max(0, humanoid.HipHeight) + 0.15
+		if recoveryRootOffset then
+			minimumHeight = math.max(minimumHeight, floorY + recoveryRootOffset)
+		end
 		if targetPosition.Y < minimumHeight then
 			targetPosition = Vector3.new(targetPosition.X, minimumHeight, targetPosition.Z)
 		end
@@ -130,7 +180,55 @@ local function settleCharacterForRecovery(character, rootPart, humanoid)
 	end
 
 	local flatLook = getFlatLookDirection(rootPart)
-	rootPart.CFrame = CFrame.lookAt(targetPosition, targetPosition + flatLook)
+	local targetRootCFrame = CFrame.lookAt(targetPosition, targetPosition + flatLook)
+	local currentPivot = character:GetPivot()
+	local rootOffset = currentPivot:ToObjectSpace(rootPart.CFrame)
+	character:PivotTo(targetRootCFrame * rootOffset:Inverse())
+end
+
+local function stabilizeCharacterAfterRecovery(self, disableToken)
+	task.spawn(function()
+		local deadline = os.clock() + RAGDOLL_RECOVERY_STABILIZE_TIME
+		while os.clock() < deadline do
+			if self._disableToken ~= disableToken then
+				return
+			end
+			if not self._character or self._character.Parent == nil then
+				return
+			end
+
+			local humanoid = self._character:FindFirstChildOfClass("Humanoid")
+			local rootPart = self._character:FindFirstChild("HumanoidRootPart")
+			if not humanoid or not rootPart or humanoid.Health <= 0 then
+				return
+			end
+
+			local support = RaycastUtil.raycastSupportSurface(
+				rootPart.Position + Vector3.new(0, 5, 0),
+				Vector3.new(0, -12, 0),
+				{
+					character = self._character,
+					fallbackToMap = false,
+				}
+			)
+			if not support then
+				return
+			end
+
+			if humanoid.FloorMaterial ~= Enum.Material.Air and humanoid:GetState() ~= Enum.HumanoidStateType.Freefall then
+				return
+			end
+
+			humanoid.PlatformStand = false
+			humanoid.AutoRotate = true
+			settleCharacterForRecovery(self._character, rootPart, humanoid, self._recoveryRootOffset)
+			rootPart.AssemblyLinearVelocity = Vector3.zero
+			rootPart.AssemblyAngularVelocity = Vector3.zero
+			humanoid:ChangeState(Enum.HumanoidStateType.Running)
+
+			task.wait(0.1)
+		end
+	end)
 end
 
 local function createCollider(part1)
@@ -159,25 +257,6 @@ local function createCollider(part1)
 
 	collider.Parent = part1
 	return collider, true
-end
-
-local function captureCollisionGroups(self)
-	for _, instance in ipairs(self._character:GetDescendants()) do
-		if instance:IsA("BasePart") and self._collisionGroupCache[instance] == nil then
-			self._collisionGroupCache[instance] = instance.CollisionGroup
-		end
-	end
-end
-
-local function restoreCollisionGroups(self)
-	for part, originalGroup in pairs(self._collisionGroupCache) do
-		if part and part.Parent then
-			pcall(function()
-				part.CollisionGroup = originalGroup
-			end)
-		end
-	end
-	table.clear(self._collisionGroupCache)
 end
 
 function Ragdoll:getCharacter()
@@ -244,10 +323,13 @@ function Ragdoll:Disable(absolute)
 			motors += 1
 		end
 	end
-	restoreCollisionGroups(self)
+	if self._collisionOverrideToken then
+		CollisionGroupOverrides.Pop(self._character, self._collisionOverrideToken)
+		self._collisionOverrideToken = nil
+	end
 	log(self._character, "Disable toggles", "socketsOff", sockets, "motorsOn", motors, "weldsDestroyed", weldsDestroyed)
 
-	settleCharacterForRecovery(self._character, rootPart, humanoid)
+	settleCharacterForRecovery(self._character, rootPart, humanoid, self._recoveryRootOffset)
 
 	humanoid:SetStateEnabled(Enum.HumanoidStateType.GettingUp, true)
 	humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
@@ -275,14 +357,18 @@ function Ragdoll:Disable(absolute)
 			currentRoot.AssemblyLinearVelocity = Vector3.zero
 			currentRoot.AssemblyAngularVelocity = Vector3.zero
 		end
-		if currentHumanoid and currentHumanoid.Health > 0 then
+		if currentHumanoid and currentRoot and currentHumanoid.Health > 0 then
 			currentHumanoid.PlatformStand = false
 			currentHumanoid.AutoRotate = true
-			currentHumanoid:ChangeState(Enum.HumanoidStateType.RunningNoPhysics)
+			settleCharacterForRecovery(self._character, currentRoot, currentHumanoid, self._recoveryRootOffset)
+			currentRoot.AssemblyLinearVelocity = Vector3.zero
+			currentRoot.AssemblyAngularVelocity = Vector3.zero
+			currentHumanoid:ChangeState(Enum.HumanoidStateType.Running)
 		end
 		if currentRoot then
 			setNetworkOwner(currentRoot, player, self._character)
 		end
+		stabilizeCharacterAfterRecovery(self, disableToken)
 
 		self._character:SetAttribute("Ragdoll", nil)
 		self._character:SetAttribute("RagdollRecovering", nil)
@@ -325,6 +411,8 @@ function Ragdoll:Enable(attacker, duration)
 		log(self._character, "Enable short-circuit: already active cache", self._ragdollCache)
 		return
 	end
+
+	self._recoveryRootOffset = measureRecoveryRootOffset(self._character, rootPart)
 
 	self._state = "Enabled"
 	self._disableToken += 1
@@ -398,11 +486,10 @@ function Ragdoll:Enable(attacker, duration)
 	end
 
 	CollectionService:AddTag(self._character, "Ragdoll")
-	captureCollisionGroups(self)
+	self._collisionOverrideToken = CollisionGroupOverrides.Push(self._character, Constants.COLLISION_GROUPS.Ragdoll)
 
 	local socketsOn = 0
 	local motorsOff = 0
-	local partsRagdollGroup = 0
 	for _, instance in ipairs(self._character:GetDescendants()) do
 		if instance:IsA("BallSocketConstraint") and instance.Name == "RagdollSocket" then
 			instance.Enabled = true
@@ -410,12 +497,9 @@ function Ragdoll:Enable(attacker, duration)
 		elseif instance:IsA("Motor6D") and instance.Name ~= "Neck" then
 			instance.Enabled = false
 			motorsOff += 1
-		elseif instance:IsA("BasePart") then
-			instance.CollisionGroup = Constants.COLLISION_GROUPS.Ragdoll
-			partsRagdollGroup += 1
 		end
 	end
-	log(self._character, "Enable toggles", "socketsOn", socketsOn, "motorsOff", motorsOff, "partsRagdoll", partsRagdollGroup)
+	log(self._character, "Enable toggles", "socketsOn", socketsOn, "motorsOff", motorsOff)
 end
 
 function Ragdoll:BuildRig()
@@ -495,8 +579,9 @@ function Ragdoll.new(character)
 		_state = "Disabled",
 		_ragdollCache = 0,
 		_disableToken = 0,
+		_recoveryRootOffset = nil,
 		_trove = Trove.new(),
-		_collisionGroupCache = {},
+		_collisionOverrideToken = nil,
 	}, Ragdoll)
 
 	self:BuildRig()

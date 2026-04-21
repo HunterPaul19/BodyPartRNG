@@ -36,6 +36,7 @@ local ALL_CONTROLLER_NAMES = {
 	"AutoSellController",
 	"AutoSellRollController",
 	"BodyPartBuildLockController",
+	"BossArenaMovePresentationController",
 	"ChatTagController",
 	"CombatPhysicsController",
 	"DataController",

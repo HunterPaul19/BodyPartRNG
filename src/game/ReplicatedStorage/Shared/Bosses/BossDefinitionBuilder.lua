@@ -75,6 +75,11 @@ local function freezeMoveDefinition(moveDefinition: any)
 		moduleId = moveId
 	end
 
+	local animationFolderName = normalizeString(moveDefinition.animationFolderName)
+	if animationFolderName == "" then
+		animationFolderName = nil
+	end
+
 	local minRange = normalizePositiveNumber(moveDefinition.minRange, 0)
 	local maxRange = normalizePositiveNumber(moveDefinition.maxRange, minRange)
 
@@ -97,6 +102,7 @@ local function freezeMoveDefinition(moveDefinition: any)
 		rootDuringCast = moveDefinition.rootDuringCast == true,
 		castTimeSeconds = normalizePositiveNumber(moveDefinition.castTimeSeconds, 0),
 		recoverySeconds = normalizePositiveNumber(moveDefinition.recoverySeconds, 0),
+		animationFolderName = animationFolderName,
 		module = moduleValue,
 		moduleId = moduleId,
 	})

@@ -1,6 +1,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Loader = require(ReplicatedStorage.Loader)
+local EmitModule = require(ReplicatedStorage.Shared.Effects.EmitModule)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 local SoundUtil = require(ReplicatedStorage.Shared.Audio.SoundUtil)
@@ -19,6 +20,8 @@ local CLIENT_STARTUP_PHASE_DEFINITIONS = {
 			"MainInterfaceController",
 			"CombatPhysicsController",
 			"BossHealthBarController",
+			"BossArenaM1Controller",
+			"BossArenaMovePresentationController",
 			"BossArenaStudioPickerController",
 		},
 	},
@@ -148,6 +151,8 @@ local loaderContext = {
 	runtime = "Client",
 	source = script:GetFullName(),
 }
+
+EmitModule.init()
 
 local loadedModules = Loader.LoadDescendants(StarterPlayerScripts.Controllers, shouldLoadController, loaderContext)
 local startupPhases = buildStartupPhases(loadedModules, script:GetFullName())

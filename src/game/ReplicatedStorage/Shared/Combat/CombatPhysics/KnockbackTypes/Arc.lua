@@ -31,7 +31,14 @@ return function(data, context, knockbackID)
 	local character = context.character
 	local rootPart = context.rootPart
 
-	context:setCollisionGroup(Constants.COLLISION_GROUPS.HitboxNoCollide)
+	local collisionGroupToken = context:pushCollisionGroup(Constants.COLLISION_GROUPS.HitboxNoCollide)
+	local function restoreCollisionGroup()
+		if collisionGroupToken then
+			context:popCollisionGroup(collisionGroupToken)
+			collisionGroupToken = nil
+		end
+	end
+
 	if data.KnockbackStart then
 		data.KnockbackStart()
 	end
@@ -42,6 +49,7 @@ return function(data, context, knockbackID)
 	local nextCF = initialCF * CFrame.new(0, 0, distance)
 	local raycastResult = workspace:Raycast(nextCF.Position, Vector3.new(0, -1000, 0), RaycastUtil.getParams("Map"))
 	if not raycastResult then
+		restoreCollisionGroup()
 		return
 	end
 
@@ -78,6 +86,7 @@ return function(data, context, knockbackID)
 
 	local bodyVelocity = BodyMoverUtil.createVelocity(rootPart)
 	if not bodyVelocity then
+		restoreCollisionGroup()
 		return
 	end
 	bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
@@ -85,6 +94,7 @@ return function(data, context, knockbackID)
 	local bodyGyro = BodyMoverUtil.createGyro(rootPart)
 	if not bodyGyro then
 		bodyVelocity:Destroy()
+		restoreCollisionGroup()
 		return
 	end
 	bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
@@ -95,8 +105,14 @@ return function(data, context, knockbackID)
 	context:createState("Stunned")
 	context:createState("PlatformStanding")
 
+	local landedData = data.Landed
+	local groundMode = type(data.GroundMode) == "string" and data.GroundMode or "Default"
+	local delayTime = landedData and (landedData.Delay or 0.2) or 0.2
+	local distanceFromGround = landedData and (landedData.DistanceFromGround or 2) or 2
+	local onLand = landedData and landedData.OnLand or nil
 	local localLanded = false
 	local broken = false
+	local restoreFallbackDuration = math.max(2, (#points * delta) + delayTime + 1)
 
 	local cancelEvent = CancelToken.new(function()
 		if bodyVelocity and bodyVelocity.Parent then
@@ -125,11 +141,6 @@ return function(data, context, knockbackID)
 		bodyGyro.CFrame = updateCFrame
 	end
 
-	local landedData = data.Landed
-	local delayTime = landedData and (landedData.Delay or 0.2) or 0.2
-	local distanceFromGround = landedData and (landedData.DistanceFromGround or 2) or 2
-	local onLand = landedData and landedData.OnLand or nil
-
 	task.delay(delayTime, function()
 		BodyMoverUtil.anticipateLand(character, distanceFromGround, function()
 			if not cancelEvent.Cancelled then
@@ -137,14 +148,19 @@ return function(data, context, knockbackID)
 			end
 			localLanded = true
 			if character:GetAttribute("KnockbackID") == knockbackID then
-				context:setCollisionGroup(Constants.COLLISION_GROUPS.Hitbox)
+				restoreCollisionGroup()
 				context:createState("AntiStunned", data.AntiStun ~= nil and data.AntiStun or 0.4)
 				if onLand then
 					onLand()
 				end
+			else
+				restoreCollisionGroup()
 			end
-		end, 5)
+		end, 5, {
+			groundMode = groundMode,
+		})
 	end)
+	task.delay(restoreFallbackDuration, restoreCollisionGroup)
 
 	if bodyVelocity and bodyVelocity.Parent then
 		bodyVelocity:Destroy()

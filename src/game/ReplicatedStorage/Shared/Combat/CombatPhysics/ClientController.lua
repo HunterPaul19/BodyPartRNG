@@ -15,6 +15,8 @@ local SNAPSHOT_SEND_INTERVAL = 1 / 20
 local END_RECONCILE_BLEND_TIME = 0.12
 local PRE_SETTLE_DRIFT_WARN = 5
 local VISUAL_FOLDER_NAME = "CombatPhysicsClientVisuals"
+local DEFAULT_LANDED_DISABLE_RAGDOLL_DELAY = 2
+local DEFAULT_LANDED_DISABLE_TIMEOUT_BUFFER = 0.75
 local activeByID = {}
 local activeByTarget = setmetatable({}, { __mode = "k" })
 
@@ -135,10 +137,25 @@ local function waitForRagdollEnd(character, data)
 		return true, 0
 	end
 
+	local knockbackType = data and data.__KnockbackType
 	local landed = type(data) == "table" and data.Landed or nil
 	local timeout = 5
 	if type(landed) == "table" and type(landed.DisableRagdollTimeout) == "number" then
 		timeout = math.max(0.5, landed.DisableRagdollTimeout + 0.25)
+	elseif knockbackType == "Default" then
+		local landedDelay = type(landed) == "table" and landed.DisableRagdollDelay or nil
+		if typeof(landedDelay) ~= "number" then
+			landedDelay = DEFAULT_LANDED_DISABLE_RAGDOLL_DELAY
+		else
+			landedDelay = math.max(0, landedDelay)
+		end
+
+		local delayTime = type(landed) == "table" and (landed.Delay or 0.2) or 0.15
+		local moverDuration = tonumber(data.Duration) or tonumber(data.MoverDuration) or 0.25
+		timeout = math.max(
+			4,
+			moverDuration + delayTime + landedDelay + DEFAULT_LANDED_DISABLE_TIMEOUT_BUFFER
+		)
 	elseif type(data.RagdollDuration) == "number" then
 		timeout = math.max(1, data.RagdollDuration + 1)
 	end
@@ -273,6 +290,7 @@ local function handleStart(payload)
 		and character == localPlayer.Character
 
 	local data = table.clone(payloadData)
+	data.__KnockbackType = knockbackType
 	local simulationCharacter = character
 	local proxyCharacter = nil
 	local hiddenParts = nil

@@ -3,34 +3,36 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local BossConfigFactory = require(ReplicatedStorage.Shared.Bosses.ConfigFactory)
 local BossMoveTags = require(ReplicatedStorage.Shared.Bosses.MoveTags)
 local FireBurst = require(ReplicatedStorage.Shared.Bosses.Moves.FlameGuardGeneral.FireBurst)
-local FlameSwing = require(ReplicatedStorage.Shared.Bosses.Moves.FlameGuardGeneral.FlameSwing)
+local FlameSlash = require(ReplicatedStorage.Shared.Bosses.Moves.FlameGuardGeneral.FlameSlash)
 local PrometheusSlash = require(ReplicatedStorage.Shared.Bosses.Moves.FlameGuardGeneral.PrometheusSlash)
 
 return BossConfigFactory.Create({
 	bossId = "Flame Guard General",
 	arenaId = "Spire",
+	scaleMultiplier = 12.5,
 	walkSpeed = 13,
 	aggroRadius = 118,
 	leashRadius = 176,
 	retargetCadenceSeconds = 0.45,
-	abilityCadenceSeconds = 3.0,
+	abilityCadenceSeconds = 4.5,
 	retargetSwapBuffer = 9,
 	m1 = {
+		animationFolderName = "FlameGuardGeneral",
 		cooldownSeconds = 3.0,
 		maxRange = 12,
 		weight = 2,
 	},
 	moves = {
 		{
-			label = "Flame Swing",
+			label = "Flame Slash",
 			tags = { BossMoveTags.CloseSingle },
-			module = FlameSwing,
-			moduleId = "Moves.FlameGuardGeneral.FlameSwing",
+			module = FlameSlash,
+			moduleId = "Moves.FlameGuardGeneral.FlameSlash",
 			cooldownSeconds = 6.0,
 			minRange = 0,
 			maxRange = 13,
 			weight = 2,
-			rootDuringCast = false,
+			rootDuringCast = true,
 			castTimeSeconds = 0.3,
 			recoverySeconds = 0.45,
 		},
@@ -57,8 +59,8 @@ return BossConfigFactory.Create({
 			maxRange = 30,
 			weight = 0.75,
 			rootDuringCast = true,
-			castTimeSeconds = 0.95,
-			recoverySeconds = 0.85,
+			castTimeSeconds = 1.2,
+			recoverySeconds = 2.8,
 		},
 	},
 })

@@ -3,6 +3,7 @@ local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 
 local Signal = require(ReplicatedStorage.Common.Signal)
@@ -14,10 +15,14 @@ Hitbox._activeHitboxes = {}
 Hitbox.HitboxTypes = {}
 
 local VISUALIZER_FOLDER_NAME = "VisualizedHitboxes"
+local BODY_PART_VISUALS_FOLDER_NAME = "CharacterBodyParts"
 local GROUND_DISTANCE = 200
 local GROUND_STATE_THRESHOLD = 2
+local OBB_EPSILON = 1e-6
+local GROUND_SHOCKWAVE_RAYCAST_LIFT = 8
+local GROUND_SHOCKWAVE_SPECIAL_MESH_DIAMETER_PER_PART_STUD = 85
 local ROOT_PART_NAMES = { "HumanoidRootPart", "UpperTorso", "LowerTorso", "Torso", "Head" }
-local CHARACTER_CONTAINER_NAMES = { "Mobs", "Characters", "NPCs", "ActiveBoss" }
+local CHARACTER_CONTAINER_NAMES = { "Bosses", "Mobs", "Characters", "NPCs", "ActiveBoss" }
 
 local function spawnSafe(callback, ...)
 	if typeof(callback) ~= "function" then
@@ -103,6 +108,15 @@ local function removeFromArray(array, value)
 	if index then
 		table.remove(array, index)
 	end
+end
+
+local function addUniqueInstance(target, seen, instance)
+	if typeof(instance) ~= "Instance" or seen[instance] == true then
+		return
+	end
+
+	seen[instance] = true
+	table.insert(target, instance)
 end
 
 local function getVisualizerFolder()
@@ -301,6 +315,59 @@ local function getCharacterContainers()
 	return containers
 end
 
+local function appendLivePlayerCharacters(target, seen)
+	for _, player in ipairs(Players:GetPlayers()) do
+		local character = player.Character
+		if character and character.Parent then
+			addUniqueInstance(target, seen, character)
+		end
+	end
+end
+
+local function appendWorkspaceCharacterModels(target, seen)
+	for _, child in ipairs(Workspace:GetChildren()) do
+		if child:IsA("Model") and resolveHumanoid(child) then
+			addUniqueInstance(target, seen, child)
+		end
+	end
+end
+
+local function getCharacterQueryRoots()
+	local roots = {}
+	local seen = {}
+
+	appendLivePlayerCharacters(roots, seen)
+	appendWorkspaceCharacterModels(roots, seen)
+
+	for _, container in ipairs(getCharacterContainers()) do
+		addUniqueInstance(roots, seen, container)
+	end
+
+	return roots
+end
+
+local function collectPotentialCharacterModels()
+	local characters = {}
+	local seen = {}
+
+	appendLivePlayerCharacters(characters, seen)
+	appendWorkspaceCharacterModels(characters, seen)
+
+	for _, container in ipairs(getCharacterContainers()) do
+		if container:IsA("Model") and resolveHumanoid(container) then
+			addUniqueInstance(characters, seen, container)
+		end
+
+		for _, child in ipairs(container:GetChildren()) do
+			if child:IsA("Model") and resolveHumanoid(child) then
+				addUniqueInstance(characters, seen, child)
+			end
+		end
+	end
+
+	return characters
+end
+
 local function buildMapOverlapParams(maxParts)
 	local include = {}
 	appendMapRoots(include)
@@ -334,15 +401,15 @@ local function buildBreakablesOverlapParams(maxParts)
 end
 
 local function buildCharacterOverlapParams(excludeInstances, maxParts)
-	local containers = getCharacterContainers()
-	if #containers > 0 then
-		return buildIncludeParams(containers, maxParts)
+	local roots = getCharacterQueryRoots()
+	if #roots > 0 then
+		return buildIncludeParams(roots, maxParts)
 	end
 	return buildExcludeParams(excludeInstances, maxParts)
 end
 
 local function buildMapAndCharactersOverlapParams(excludeInstances, maxParts)
-	local include = getCharacterContainers()
+	local include = getCharacterQueryRoots()
 	appendMapRoots(include)
 
 	if #include > 0 then
@@ -380,6 +447,524 @@ local function getGroundDistance(model, rootPart)
 	end
 
 	return math.huge
+end
+
+local function addUniquePart(target, seen, part)
+	if typeof(part) ~= "Instance" or not part:IsA("BasePart") or seen[part] == true then
+		return
+	end
+
+	seen[part] = true
+	table.insert(target, part)
+end
+
+local function resolveGroundAlignedPosition(sourcePosition, ignoreInstances)
+	local rayOrigin = sourcePosition + Vector3.new(0, GROUND_SHOCKWAVE_RAYCAST_LIFT, 0)
+	local rayDirection = Vector3.new(0, -(GROUND_DISTANCE + (GROUND_SHOCKWAVE_RAYCAST_LIFT * 2)), 0)
+	local raycastResult = Workspace:Raycast(rayOrigin, rayDirection, buildMapRaycastParams(ignoreInstances))
+
+	if raycastResult then
+		return raycastResult.Position
+	end
+
+	return sourcePosition
+end
+
+local function updateStandardVisualizer(visualizer, hitboxLocation, hitboxSize, hitboxRadius)
+	if typeof(visualizer) ~= "Instance" or not visualizer:IsA("BasePart") or not hitboxLocation then
+		return
+	end
+
+	if hitboxRadius then
+		visualizer.Shape = Enum.PartType.Ball
+		visualizer.Size = Vector3.one * (hitboxRadius * 2)
+	else
+		visualizer.Shape = Enum.PartType.Block
+		visualizer.Size = hitboxSize
+	end
+
+	visualizer.CFrame = hitboxLocation
+end
+
+local function resolveInstanceByPath(path)
+	if typeof(path) ~= "string" or path == "" then
+		return nil
+	end
+
+	local current = game
+	for segment in string.gmatch(path, "[^%.]+") do
+		current = current:FindFirstChild(segment)
+		if current == nil then
+			return nil
+		end
+	end
+
+	return current
+end
+
+local function resolveGroundShockwaveVisualTemplate(self)
+	local template = self.Data.VisualTemplate
+	if typeof(template) == "function" then
+		local ok, resolved = pcall(template)
+		if ok then
+			template = resolved
+		else
+			template = nil
+		end
+	end
+
+	if typeof(template) == "Instance" then
+		return template
+	end
+
+	local templatePath = self.Data.VisualTemplatePath
+	if typeof(templatePath) == "string" and templatePath ~= "" then
+		return resolveInstanceByPath(templatePath)
+	end
+
+	return nil
+end
+
+local function resolveGroundShockwaveState(self)
+	local hitboxCFrame, cframeError = resolveCFrame(self.Data.HitboxCFrame)
+	if not hitboxCFrame then
+		self:_warnInvalidQuery("Missing or invalid HitboxCFrame (" .. tostring(cframeError) .. ")")
+		return nil
+	end
+
+	local startRadius, startRadiusError = resolveNumber(self.Data.StartRadius)
+	if not startRadius then
+		self:_warnInvalidQuery("Missing or invalid StartRadius (" .. tostring(startRadiusError) .. ")")
+		return nil
+	end
+
+	local endRadius = startRadius
+	if self.Data.EndRadius ~= nil then
+		local resolvedEndRadius, endRadiusError = resolveNumber(self.Data.EndRadius)
+		if not resolvedEndRadius then
+			self:_warnInvalidQuery("Missing or invalid EndRadius (" .. tostring(endRadiusError) .. ")")
+			return nil
+		end
+		endRadius = resolvedEndRadius
+	end
+
+	local ringThickness, thicknessError = resolveNumber(self.Data.RingThickness)
+	if not ringThickness then
+		self:_warnInvalidQuery("Missing or invalid RingThickness (" .. tostring(thicknessError) .. ")")
+		return nil
+	end
+
+	local hitboxHeight, heightError = resolveNumber(self.Data.HitboxHeight)
+	if not hitboxHeight then
+		self:_warnInvalidQuery("Missing or invalid HitboxHeight (" .. tostring(heightError) .. ")")
+		return nil
+	end
+
+	local groundOffset = tonumber(self.Data.GroundOffset)
+	if groundOffset == nil then
+		groundOffset = 0.15
+	end
+
+	local sourceCFrame = hitboxCFrame * (self.Data.HitboxOffset or CFrame.new())
+	local ignoreInstances = {}
+	local character = self:GetCharacter()
+	if character then
+		table.insert(ignoreInstances, character)
+	end
+	if self.Visualizer then
+		table.insert(ignoreInstances, self.Visualizer)
+	end
+
+	local alignedGroundPosition = resolveGroundAlignedPosition(sourceCFrame.Position, ignoreInstances)
+	local groundPosition = Vector3.new(
+		sourceCFrame.Position.X,
+		alignedGroundPosition.Y + groundOffset,
+		sourceCFrame.Position.Z
+	)
+
+	local duration = tonumber(self.Data.Time) or 0
+	local alpha = 1
+	if duration > 0 and self.HitboxInitilization then
+		alpha = math.clamp((os.clock() - self.HitboxInitilization) / duration, 0, 1)
+	end
+
+	local currentRadius = math.max(0, startRadius + ((endRadius - startRadius) * alpha))
+	local outerRadius = math.max(0, currentRadius + (ringThickness * 0.5))
+	local queryPosition = groundPosition + Vector3.new(0, hitboxHeight * 0.5, 0)
+
+	return {
+		Alpha = alpha,
+		GroundPosition = groundPosition,
+		QueryCFrame = CFrame.new(queryPosition),
+		QuerySize = Vector3.new(outerRadius * 2, hitboxHeight, outerRadius * 2),
+		GroundY = groundPosition.Y,
+		CurrentRadius = currentRadius,
+		InnerRadius = math.max(0, currentRadius - (ringThickness * 0.5)),
+		OuterRadius = outerRadius,
+		HitboxHeight = math.max(0.1, hitboxHeight),
+		RingThickness = math.max(0.1, ringThickness),
+	}
+end
+
+local function resolveGroundShockwaveVisualizerSize(baseSize, usesSpecialMeshScale, outerRadius, hitboxHeight)
+	local baseDiameter = math.max(baseSize.X, baseSize.Z)
+	if baseDiameter <= 0.001 then
+		return nil
+	end
+
+	local scale = (outerRadius * 2) / baseDiameter
+	local visualHeight = math.max(baseSize.Y, hitboxHeight)
+	local resolvedSize = Vector3.new(baseSize.X * scale, visualHeight, baseSize.Z * scale)
+	if usesSpecialMeshScale == true then
+		resolvedSize = resolvedSize / GROUND_SHOCKWAVE_SPECIAL_MESH_DIAMETER_PER_PART_STUD
+	end
+
+	return resolvedSize
+end
+
+local function buildGroundShockwaveVisualizer(self, shockwaveState)
+	local template = resolveGroundShockwaveVisualTemplate(self)
+	if typeof(template) ~= "Instance" then
+		warn("[Hitbox] GroundShockwave missing VisualTemplate/VisualTemplatePath asset.")
+		return
+	end
+
+	local visualizer = template:Clone()
+	visualizer.Name = "GroundShockwaveVisualizer"
+
+	if visualizer:IsA("BasePart") then
+		visualizer.Anchored = true
+		visualizer.CanCollide = false
+		visualizer.CanTouch = false
+		visualizer.CanQuery = false
+		visualizer.CastShadow = false
+		visualizer.Massless = true
+		local specialMesh = visualizer:FindFirstChildOfClass("SpecialMesh")
+		if specialMesh then
+			self._groundShockwaveVisualizerBaseSize = Vector3.new(
+				GROUND_SHOCKWAVE_SPECIAL_MESH_DIAMETER_PER_PART_STUD,
+				GROUND_SHOCKWAVE_SPECIAL_MESH_DIAMETER_PER_PART_STUD,
+				GROUND_SHOCKWAVE_SPECIAL_MESH_DIAMETER_PER_PART_STUD
+			)
+			self._groundShockwaveVisualizerUsesSpecialMeshScale = true
+		else
+			self._groundShockwaveVisualizerBaseSize = visualizer.Size
+			self._groundShockwaveVisualizerUsesSpecialMeshScale = false
+		end
+	elseif visualizer:IsA("Model") then
+		for _, descendant in ipairs(visualizer:GetDescendants()) do
+			if descendant:IsA("BasePart") then
+				descendant.Anchored = true
+				descendant.CanCollide = false
+				descendant.CanTouch = false
+				descendant.CanQuery = false
+				descendant.CastShadow = false
+				descendant.Massless = true
+			end
+		end
+		local _, baseSize = visualizer:GetBoundingBox()
+		self._groundShockwaveVisualizerBaseSize = baseSize
+		self._groundShockwaveVisualizerUsesSpecialMeshScale = false
+	else
+		warn("[Hitbox] GroundShockwave visual asset must be a BasePart or Model.")
+		visualizer:Destroy()
+		return
+	end
+
+	visualizer.Parent = getVisualizerFolder()
+	self.HitboxTrove:Add(visualizer)
+	self.Visualizer = visualizer
+
+	if visualizer:IsA("BasePart") then
+		local duration = math.max(0, tonumber(self.Data.Time) or 0)
+		local startSize = resolveGroundShockwaveVisualizerSize(
+			self._groundShockwaveVisualizerBaseSize,
+			self._groundShockwaveVisualizerUsesSpecialMeshScale,
+			shockwaveState.OuterRadius,
+			shockwaveState.HitboxHeight
+		)
+		if startSize then
+			visualizer.Size = startSize
+			local visualHeight = math.max(startSize.Y, shockwaveState.HitboxHeight)
+			local position = shockwaveState.GroundPosition + Vector3.new(0, visualHeight * 0.5, 0)
+			local rotation = if typeof(self.Data.VisualRotation) == "CFrame" then self.Data.VisualRotation else CFrame.new()
+			visualizer.CFrame = CFrame.new(position) * rotation
+		end
+		if duration > 0 and startSize then
+			local endRadius = select(1, resolveNumber(self.Data.EndRadius))
+			local ringThickness = select(1, resolveNumber(self.Data.RingThickness)) or shockwaveState.RingThickness
+			local hitboxHeight = select(1, resolveNumber(self.Data.HitboxHeight)) or shockwaveState.HitboxHeight
+			local finalOuterRadius = math.max(0, (endRadius or shockwaveState.CurrentRadius) + (ringThickness * 0.5))
+			local finalSize = resolveGroundShockwaveVisualizerSize(
+				self._groundShockwaveVisualizerBaseSize,
+				self._groundShockwaveVisualizerUsesSpecialMeshScale,
+				finalOuterRadius,
+				math.max(0.1, hitboxHeight)
+			)
+
+			if finalSize then
+				local tween = TweenService:Create(
+					visualizer,
+					TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out),
+					{ Size = finalSize }
+				)
+				self.HitboxTrove:Add(tween)
+				tween:Play()
+				self._groundShockwaveVisualizerTween = tween
+			end
+		end
+	end
+end
+
+local function updateGroundShockwaveVisualizer(self, shockwaveState, visualizerOverride)
+	local visualizer = visualizerOverride or self.Visualizer
+	if typeof(visualizer) ~= "Instance" then
+		return
+	end
+
+	local baseSize = self._groundShockwaveVisualizerBaseSize
+	if typeof(baseSize) ~= "Vector3" then
+		return
+	end
+
+	local baseDiameter = math.max(baseSize.X, baseSize.Z)
+	if baseDiameter <= 0.001 then
+		return
+	end
+
+	local resolvedSize = resolveGroundShockwaveVisualizerSize(
+		baseSize,
+		self._groundShockwaveVisualizerUsesSpecialMeshScale,
+		shockwaveState.OuterRadius,
+		shockwaveState.HitboxHeight
+	)
+	if not resolvedSize then
+		return
+	end
+	local position = shockwaveState.GroundPosition + Vector3.new(0, resolvedSize.Y * 0.5, 0)
+	local rotation = if typeof(self.Data.VisualRotation) == "CFrame" then self.Data.VisualRotation else CFrame.new()
+
+	if visualizer:IsA("BasePart") then
+		if not self._groundShockwaveVisualizerTween then
+			visualizer.Size = resolvedSize
+		end
+		visualizer.CFrame = CFrame.new(position) * rotation
+	elseif visualizer:IsA("Model") then
+		local scale = (shockwaveState.OuterRadius * 2) / baseDiameter
+		visualizer:ScaleTo(scale)
+		visualizer:PivotTo(CFrame.new(position) * rotation)
+	end
+
+	return resolvedSize
+end
+
+local function getVisualProxyParts(characterModel)
+	if typeof(characterModel) ~= "Instance" or not characterModel:IsA("Model") then
+		return {}
+	end
+
+	local folder = characterModel:FindFirstChild(BODY_PART_VISUALS_FOLDER_NAME)
+	if not (folder and folder:IsA("Folder")) then
+		return {}
+	end
+
+	local parts = {}
+	for _, descendant in ipairs(folder:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			table.insert(parts, descendant)
+		end
+	end
+
+	return parts
+end
+
+local function partIntersectsGroundShockwave(part, shockwaveState)
+	if typeof(part) ~= "Instance" or not part:IsA("BasePart") then
+		return false
+	end
+
+	local halfHeight = math.abs(part.Size.Y) * 0.5
+	local minY = part.Position.Y - halfHeight
+	local maxY = part.Position.Y + halfHeight
+	local hitboxMinY = shockwaveState.GroundY
+	local hitboxMaxY = shockwaveState.GroundY + shockwaveState.HitboxHeight
+	if maxY < hitboxMinY or minY > hitboxMaxY then
+		return false
+	end
+
+	local planarOffset = Vector3.new(
+		part.Position.X - shockwaveState.GroundPosition.X,
+		0,
+		part.Position.Z - shockwaveState.GroundPosition.Z
+	)
+	local planarDistance = planarOffset.Magnitude
+	local planarPadding = math.max(math.abs(part.Size.X), math.abs(part.Size.Z)) * 0.5
+
+	if planarDistance + planarPadding < shockwaveState.InnerRadius then
+		return false
+	end
+	if planarDistance - planarPadding > shockwaveState.OuterRadius then
+		return false
+	end
+
+	return true
+end
+
+local function characterIntersectsGroundShockwave(self, characterModel, shockwaveState, initialParts)
+	local humanoid = resolveHumanoid(characterModel)
+	local rootPart = resolveRootPart(characterModel, humanoid)
+	local parts = {}
+	local seen = {}
+
+	addUniquePart(parts, seen, rootPart)
+
+	if typeof(initialParts) == "table" then
+		for _, part in ipairs(initialParts) do
+			addUniquePart(parts, seen, part)
+		end
+	end
+
+	if self:_shouldDetectVisualProxyParts() then
+		for _, proxyPart in ipairs(getVisualProxyParts(characterModel)) do
+			addUniquePart(parts, seen, proxyPart)
+		end
+	end
+
+	for _, part in ipairs(parts) do
+		if partIntersectsGroundShockwave(part, shockwaveState) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function pointToObjectSpace(cframe, point)
+	return cframe:PointToObjectSpace(point)
+end
+
+local function sphereIntersectsBox(position, radius, boxCFrame, boxSize)
+	local half = boxSize * 0.5
+	local localPoint = pointToObjectSpace(boxCFrame, position)
+	local clampedX = math.clamp(localPoint.X, -half.X, half.X)
+	local clampedY = math.clamp(localPoint.Y, -half.Y, half.Y)
+	local clampedZ = math.clamp(localPoint.Z, -half.Z, half.Z)
+	local deltaX = localPoint.X - clampedX
+	local deltaY = localPoint.Y - clampedY
+	local deltaZ = localPoint.Z - clampedZ
+
+	return (deltaX * deltaX) + (deltaY * deltaY) + (deltaZ * deltaZ) <= (radius * radius)
+end
+
+local function boxesIntersect(cframeA, sizeA, cframeB, sizeB)
+	local a = { math.abs(sizeA.X) * 0.5, math.abs(sizeA.Y) * 0.5, math.abs(sizeA.Z) * 0.5 }
+	local b = { math.abs(sizeB.X) * 0.5, math.abs(sizeB.Y) * 0.5, math.abs(sizeB.Z) * 0.5 }
+
+	local axesA = { cframeA.XVector, cframeA.YVector, cframeA.ZVector }
+	local axesB = { cframeB.XVector, cframeB.YVector, cframeB.ZVector }
+	local rotation = { {}, {}, {} }
+	local absRotation = { {}, {}, {} }
+
+	for i = 1, 3 do
+		for j = 1, 3 do
+			local value = axesA[i]:Dot(axesB[j])
+			rotation[i][j] = value
+			absRotation[i][j] = math.abs(value) + OBB_EPSILON
+		end
+	end
+
+	local translationVector = cframeB.Position - cframeA.Position
+	local translation = {
+		translationVector:Dot(axesA[1]),
+		translationVector:Dot(axesA[2]),
+		translationVector:Dot(axesA[3]),
+	}
+
+	for i = 1, 3 do
+		local radiusA = a[i]
+		local radiusB = b[1] * absRotation[i][1] + b[2] * absRotation[i][2] + b[3] * absRotation[i][3]
+		if math.abs(translation[i]) > radiusA + radiusB then
+			return false
+		end
+	end
+
+	for j = 1, 3 do
+		local radiusA = a[1] * absRotation[1][j] + a[2] * absRotation[2][j] + a[3] * absRotation[3][j]
+		local radiusB = b[j]
+		local projectedTranslation =
+			math.abs(translation[1] * rotation[1][j] + translation[2] * rotation[2][j] + translation[3] * rotation[3][j])
+		if projectedTranslation > radiusA + radiusB then
+			return false
+		end
+	end
+
+	local radiusA = a[2] * absRotation[3][1] + a[3] * absRotation[2][1]
+	local radiusB = b[2] * absRotation[1][3] + b[3] * absRotation[1][2]
+	if math.abs(translation[3] * rotation[2][1] - translation[2] * rotation[3][1]) > radiusA + radiusB then
+		return false
+	end
+
+	radiusA = a[2] * absRotation[3][2] + a[3] * absRotation[2][2]
+	radiusB = b[1] * absRotation[1][3] + b[3] * absRotation[1][1]
+	if math.abs(translation[3] * rotation[2][2] - translation[2] * rotation[3][2]) > radiusA + radiusB then
+		return false
+	end
+
+	radiusA = a[2] * absRotation[3][3] + a[3] * absRotation[2][3]
+	radiusB = b[1] * absRotation[1][2] + b[2] * absRotation[1][1]
+	if math.abs(translation[3] * rotation[2][3] - translation[2] * rotation[3][3]) > radiusA + radiusB then
+		return false
+	end
+
+	radiusA = a[1] * absRotation[3][1] + a[3] * absRotation[1][1]
+	radiusB = b[2] * absRotation[2][3] + b[3] * absRotation[2][2]
+	if math.abs(translation[1] * rotation[3][1] - translation[3] * rotation[1][1]) > radiusA + radiusB then
+		return false
+	end
+
+	radiusA = a[1] * absRotation[3][2] + a[3] * absRotation[1][2]
+	radiusB = b[1] * absRotation[2][3] + b[3] * absRotation[2][1]
+	if math.abs(translation[1] * rotation[3][2] - translation[3] * rotation[1][2]) > radiusA + radiusB then
+		return false
+	end
+
+	radiusA = a[1] * absRotation[3][3] + a[3] * absRotation[1][3]
+	radiusB = b[1] * absRotation[2][2] + b[2] * absRotation[2][1]
+	if math.abs(translation[1] * rotation[3][3] - translation[3] * rotation[1][3]) > radiusA + radiusB then
+		return false
+	end
+
+	radiusA = a[1] * absRotation[2][1] + a[2] * absRotation[1][1]
+	radiusB = b[2] * absRotation[3][3] + b[3] * absRotation[3][2]
+	if math.abs(translation[2] * rotation[1][1] - translation[1] * rotation[2][1]) > radiusA + radiusB then
+		return false
+	end
+
+	radiusA = a[1] * absRotation[2][2] + a[2] * absRotation[1][2]
+	radiusB = b[1] * absRotation[3][3] + b[3] * absRotation[3][1]
+	if math.abs(translation[2] * rotation[1][2] - translation[1] * rotation[2][2]) > radiusA + radiusB then
+		return false
+	end
+
+	radiusA = a[1] * absRotation[2][3] + a[2] * absRotation[1][3]
+	radiusB = b[1] * absRotation[3][2] + b[2] * absRotation[3][1]
+	if math.abs(translation[2] * rotation[1][3] - translation[1] * rotation[2][3]) > radiusA + radiusB then
+		return false
+	end
+
+	return true
+end
+
+local function intersectsPartBounds(hitboxLocation, hitboxSize, hitboxRadius, part)
+	if typeof(part) ~= "Instance" or not part:IsA("BasePart") then
+		return false
+	end
+
+	if hitboxRadius then
+		return sphereIntersectsBox(hitboxLocation.Position, hitboxRadius, part.CFrame, part.Size)
+	end
+
+	return boxesIntersect(hitboxLocation, hitboxSize, part.CFrame, part.Size)
 end
 
 function Hitbox:_warnInvalidQuery(reason)
@@ -533,6 +1118,10 @@ function Hitbox:_dispatch(primaryName, ...)
 	end
 end
 
+function Hitbox:_shouldDetectVisualProxyParts()
+	return self.Data.DetectVisualProxyParts ~= false
+end
+
 function Hitbox:GetCharacter()
 	return resolveCharacterSource(self.Data.Character, self.Attack)
 end
@@ -597,6 +1186,42 @@ function Hitbox:CheckCanHit(characterModel)
 	return true
 end
 
+function Hitbox:_registerHitCharacter(characterModel, seenThisFrame)
+	if typeof(characterModel) ~= "Instance" or not characterModel:IsA("Model") then
+		return false
+	end
+	if seenThisFrame[characterModel] or not self:CheckCanHit(characterModel) then
+		return false
+	end
+
+	seenThisFrame[characterModel] = true
+	self.HasTargets = true
+	table.insert(self.HitCache, characterModel)
+	self:_scheduleCacheRelease(characterModel)
+	if #self.HitCache == 1 and self.Callbacks and self.Callbacks.FirstHitTarget then
+		spawnSafe(self.Callbacks.FirstHitTarget, characterModel)
+	end
+	table.insert(self.HitCharacters, characterModel)
+	return true
+end
+
+function Hitbox:_detectVisualProxyHits(hitboxLocation, hitboxSize, hitboxRadius, seenThisFrame)
+	if not self:_shouldDetectVisualProxyParts() then
+		return
+	end
+
+	for _, characterModel in ipairs(collectPotentialCharacterModels()) do
+		if not seenThisFrame[characterModel] and self:CheckCanHit(characterModel) then
+			for _, proxyPart in ipairs(getVisualProxyParts(characterModel)) do
+				if intersectsPartBounds(hitboxLocation, hitboxSize, hitboxRadius, proxyPart) then
+					self:_registerHitCharacter(characterModel, seenThisFrame)
+					break
+				end
+			end
+		end
+	end
+end
+
 function Hitbox.HitboxTypes.ReturnMapBaseParts(self)
 	self.HitboxTrove:Connect(RunService.Heartbeat, function()
 		local hitAssets = self:_queryParts("Map")
@@ -621,14 +1246,7 @@ function Hitbox.HitboxTypes.ReturnHitboxPart(self)
 			return
 		end
 
-		if hitboxRadius then
-			self.Visualizer.Shape = Enum.PartType.Ball
-			self.Visualizer.Size = Vector3.one * (hitboxRadius * 2)
-		else
-			self.Visualizer.Shape = Enum.PartType.Block
-			self.Visualizer.Size = hitboxSize
-		end
-		self.Visualizer.CFrame = hitboxLocation
+		updateStandardVisualizer(self.Visualizer, hitboxLocation, hitboxSize, hitboxRadius)
 		self:_dispatch("HitObject", self.Visualizer, { TimeHit = os.clock() })
 	end)
 end
@@ -665,14 +1283,7 @@ function Hitbox.HitboxTypes.SpacialQuery(self)
 		end
 
 		if self.Visualizer then
-			if hitboxRadius then
-				self.Visualizer.Shape = Enum.PartType.Ball
-				self.Visualizer.Size = Vector3.one * (hitboxRadius * 2)
-			else
-				self.Visualizer.Shape = Enum.PartType.Block
-				self.Visualizer.Size = hitboxSize
-			end
-			self.Visualizer.CFrame = hitboxLocation
+			updateStandardVisualizer(self.Visualizer, hitboxLocation, hitboxSize, hitboxRadius)
 		end
 
 		self.HitCharacters = {}
@@ -697,15 +1308,84 @@ function Hitbox.HitboxTypes.SpacialQuery(self)
 				hitPart:SetAttribute("Health", (tonumber(hitPart:GetAttribute("Health")) or 0) - (self.Data.CrystalDamage or 10))
 			else
 				local characterModel = resolveCharacterModelFromInstance(hitPart)
-				if characterModel and not seenThisFrame[characterModel] and self:CheckCanHit(characterModel) then
-					seenThisFrame[characterModel] = true
-					self.HasTargets = true
-					table.insert(self.HitCache, characterModel)
-					self:_scheduleCacheRelease(characterModel)
-					if #self.HitCache == 1 and self.Callbacks and self.Callbacks.FirstHitTarget then
-						spawnSafe(self.Callbacks.FirstHitTarget, characterModel)
-					end
-					table.insert(self.HitCharacters, characterModel)
+				if characterModel then
+					self:_registerHitCharacter(characterModel, seenThisFrame)
+				end
+			end
+		end
+
+		self:_detectVisualProxyHits(hitboxLocation, hitboxSize, hitboxRadius, seenThisFrame)
+
+		for _, characterModel in ipairs(self.HitCharacters) do
+			self:_dispatch("HitTarget", characterModel, { TimeHit = os.clock() })
+		end
+	end)
+end
+
+function Hitbox.HitboxTypes.GroundShockwave(self)
+	if not self.Visualizer then
+		self:Visible(true)
+	end
+
+	self.HitboxTrove:Connect(RunService.Heartbeat, function()
+		if self.Destroyed then
+			return
+		end
+
+		local shockwaveState = resolveGroundShockwaveState(self)
+		if not shockwaveState then
+			return
+		end
+
+		if self.Visualizer then
+			updateGroundShockwaveVisualizer(self, shockwaveState)
+		end
+
+		local overlapParams = self:_resolveOverlapParams("Hitbox")
+		local hitParts = {}
+		if Workspace.GetPartBoundsInRadius then
+			hitParts = Workspace:GetPartBoundsInRadius(shockwaveState.QueryCFrame.Position, shockwaveState.OuterRadius, overlapParams)
+				or {}
+		else
+			hitParts = Workspace:GetPartBoundsInBox(shockwaveState.QueryCFrame, shockwaveState.QuerySize, overlapParams) or {}
+		end
+
+		self.HitCharacters = {}
+		local seenThisFrame = {}
+		local partsByCharacter = {}
+
+		for _, hitPart in ipairs(hitParts) do
+			if self.Destroyed then
+				return
+			end
+
+			if self.Data.Character and hitPart:IsDescendantOf(self.Data.Character) then
+				continue
+			end
+
+			local characterModel = resolveCharacterModelFromInstance(hitPart)
+			if characterModel then
+				partsByCharacter[characterModel] = partsByCharacter[characterModel] or {}
+				if hitPart:IsA("BasePart") then
+					table.insert(partsByCharacter[characterModel], hitPart)
+				end
+			end
+		end
+
+		for characterModel, candidateParts in pairs(partsByCharacter) do
+			if self:CheckCanHit(characterModel)
+				and characterIntersectsGroundShockwave(self, characterModel, shockwaveState, candidateParts) then
+				self:_registerHitCharacter(characterModel, seenThisFrame)
+			end
+		end
+
+		if self:_shouldDetectVisualProxyParts() then
+			for _, characterModel in ipairs(collectPotentialCharacterModels()) do
+				if not seenThisFrame[characterModel]
+					and partsByCharacter[characterModel] == nil
+					and self:CheckCanHit(characterModel)
+					and characterIntersectsGroundShockwave(self, characterModel, shockwaveState, nil) then
+					self:_registerHitCharacter(characterModel, seenThisFrame)
 				end
 			end
 		end
@@ -724,14 +1404,7 @@ function Hitbox.HitboxTypes.Breakables(self)
 
 		local hitObjects, hitboxLocation, hitboxSize, hitboxRadius = self:_queryParts("Breakables")
 		if self.Visualizer then
-			if hitboxRadius then
-				self.Visualizer.Shape = Enum.PartType.Ball
-				self.Visualizer.Size = Vector3.one * (hitboxRadius * 2)
-			else
-				self.Visualizer.Shape = Enum.PartType.Block
-				self.Visualizer.Size = hitboxSize
-			end
-			self.Visualizer.CFrame = hitboxLocation
+			updateStandardVisualizer(self.Visualizer, hitboxLocation, hitboxSize, hitboxRadius)
 		end
 
 		for _, object in ipairs(hitObjects) do
@@ -853,6 +1526,18 @@ function Hitbox:Visible(enabled)
 			return self
 		end
 
+		local hitboxTypeName = self.Data.HitboxType or "SpacialQuery"
+		if hitboxTypeName == "GroundShockwave" then
+			local shockwaveState = resolveGroundShockwaveState(self)
+			if not shockwaveState then
+				return self
+			end
+
+			buildGroundShockwaveVisualizer(self, shockwaveState)
+			updateGroundShockwaveVisualizer(self, shockwaveState)
+			return self
+		end
+
 		local visualizer = Instance.new("Part")
 		visualizer.Name = "HitboxVisualizer"
 		visualizer.Anchored = true
@@ -883,6 +1568,9 @@ function Hitbox:Visible(enabled)
 			self.Visualizer:Destroy()
 			self.Visualizer = nil
 		end
+		self._groundShockwaveVisualizerBaseSize = nil
+		self._groundShockwaveVisualizerTween = nil
+		self._groundShockwaveVisualizerUsesSpecialMeshScale = nil
 	end
 
 	return self

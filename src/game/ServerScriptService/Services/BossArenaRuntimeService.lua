@@ -26,6 +26,7 @@ local PLAYER_SPAWN_RING_SIZE = 6
 local PLAYER_SPAWN_RING_RADIUS = 8
 
 type CastState = {
+	castId: string,
 	move: any,
 	startedAt: number,
 	executeAt: number,
@@ -33,6 +34,8 @@ type CastState = {
 	rootDuringCast: boolean,
 	executed: boolean,
 	targetUserId: number?,
+	lifecycleHandle: any?,
+	completedAt: number?,
 }
 
 type BossHealthState = {
@@ -65,7 +68,7 @@ type EncounterState = {
 	currentTargetUserId: number?,
 	lastRetargetAt: number,
 	lastMoveCommandAt: number,
-	lastAbilityStartedAt: number,
+	nextAbilityAvailableAt: number,
 	cooldowns: { [string]: number },
 	rng: Random,
 	spawnedAt: number,
@@ -88,6 +91,7 @@ local BossArenaRuntimeService = {
 	_encounter = nil :: EncounterState?,
 	_encounterStateListeners = {} :: { [(string?) -> ()]: boolean },
 	_bossHealthStateListeners = {} :: { [(BossHealthState?) -> ()]: boolean },
+	_movePresentationListeners = {} :: { [(any) -> ()]: boolean },
 }
 
 local function isEnabledForPlace(): boolean
@@ -96,6 +100,50 @@ end
 
 local function warnWithPrefix(message: string)
 	warn(string.format("[BossArenaRuntimeService] %s", message))
+end
+
+local function invokeLifecycleCancel(moveId: string, lifecycleHandle: any?)
+	if typeof(lifecycleHandle) ~= "table" or typeof(lifecycleHandle.Cancel) ~= "function" then
+		return
+	end
+
+	local ok, err = pcall(lifecycleHandle.Cancel)
+	if not ok then
+		warnWithPrefix(string.format("Boss move '%s' cancel failed: %s", moveId, tostring(err)))
+	end
+end
+
+local function invokeLifecycleIsComplete(moveId: string, lifecycleHandle: any?): boolean
+	if typeof(lifecycleHandle) ~= "table" or typeof(lifecycleHandle.IsComplete) ~= "function" then
+		return true
+	end
+
+	local ok, isComplete = pcall(lifecycleHandle.IsComplete)
+	if not ok then
+		warnWithPrefix(string.format("Boss move '%s' IsComplete failed: %s", moveId, tostring(isComplete)))
+		return true
+	end
+
+	return isComplete == true
+end
+
+local function invokeLifecycleRecoveryEndsAt(moveId: string, lifecycleHandle: any?): number?
+	if typeof(lifecycleHandle) ~= "table" or typeof(lifecycleHandle.GetRecoveryEndsAt) ~= "function" then
+		return nil
+	end
+
+	local ok, recoveryEndsAt = pcall(lifecycleHandle.GetRecoveryEndsAt)
+	if not ok then
+		warnWithPrefix(string.format("Boss move '%s' GetRecoveryEndsAt failed: %s", moveId, tostring(recoveryEndsAt)))
+		return nil
+	end
+
+	local resolvedRecoveryEndsAt = tonumber(recoveryEndsAt)
+	if resolvedRecoveryEndsAt == nil then
+		return nil
+	end
+
+	return resolvedRecoveryEndsAt
 end
 
 local function normalizeString(value: any): string
@@ -172,10 +220,10 @@ local function buildRosterUserIdSet(payload: any): { [number]: boolean }
 	return rosterUserIds
 end
 
-local function chooseWeightedMove(validMoves: { { move: any, context: any } }, rng: Random)
+local function chooseWeightedMove(validMoves: { { move: any, context: any, effectiveWeight: number } }, rng: Random)
 	local totalWeight = 0
 	for _, entry in ipairs(validMoves) do
-		totalWeight += math.max(0, tonumber(entry.move.weight) or 0)
+		totalWeight += math.max(0, tonumber(entry.effectiveWeight) or 0)
 	end
 
 	if totalWeight <= 0 then
@@ -186,7 +234,7 @@ local function chooseWeightedMove(validMoves: { { move: any, context: any } }, r
 	local accumulatedWeight = 0
 
 	for _, entry in ipairs(validMoves) do
-		accumulatedWeight += math.max(0, tonumber(entry.move.weight) or 0)
+		accumulatedWeight += math.max(0, tonumber(entry.effectiveWeight) or 0)
 		if threshold <= accumulatedWeight then
 			return entry
 		end
@@ -425,6 +473,7 @@ function BossArenaRuntimeService:_destroyLingeringArtifacts()
 end
 
 function BossArenaRuntimeService:_cleanupEncounterAssets(encounter: EncounterState)
+	self:_cancelActiveCast(encounter)
 	disconnectConnections(encounter.bossHealthConnections)
 
 	if encounter.animationController then
@@ -773,7 +822,7 @@ function BossArenaRuntimeService:_spawnBossEncounter(payload: any)
 		currentTargetUserId = nil,
 		lastRetargetAt = 0,
 		lastMoveCommandAt = 0,
-		lastAbilityStartedAt = 0,
+		nextAbilityAvailableAt = 0,
 		cooldowns = {},
 		rng = Random.new(),
 		spawnedAt = os.clock(),
@@ -968,7 +1017,9 @@ function BossArenaRuntimeService:_buildMoveContext(
 	encounter: EncounterState,
 	moveDefinition: any,
 	aliveTargets: { AliveTargetContext },
-	targetUserId: number?
+	targetUserId: number?,
+	castId: string?,
+	emitPresentation: ((action: string, payload: { [string]: any }?) -> ())?
 )
 	local targetPlayer = getPlayerByUserId(targetUserId)
 	local targetCharacter = if targetPlayer then targetPlayer.Character else nil
@@ -977,6 +1028,7 @@ function BossArenaRuntimeService:_buildMoveContext(
 
 	return {
 		now = os.clock(),
+		castId = castId or "",
 		bossDefinition = encounter.bossDefinition,
 		move = moveDefinition,
 		bossModel = encounter.bossModel,
@@ -990,13 +1042,59 @@ function BossArenaRuntimeService:_buildMoveContext(
 		targetRootPart = targetRootPart,
 		distanceToTarget = if targetRootPart then (targetRootPart.Position - encounter.bossRootPart.Position).Magnitude else nil,
 		aliveTargets = aliveTargets,
+		EmitPresentation = emitPresentation or function() end,
 	}
 end
 
-function BossArenaRuntimeService:_canUseMove(moveDefinition: any, context: any): boolean
+function BossArenaRuntimeService:_notifyMovePresentation(payload: any)
+	for callback in pairs(self._movePresentationListeners) do
+		local ok, err = pcall(callback, payload)
+		if not ok then
+			warnWithPrefix(string.format("Boss move presentation callback failed: %s", tostring(err)))
+		end
+	end
+end
+
+function BossArenaRuntimeService:_stampCastEndTimers(encounter: EncounterState, activeCast: CastState, endedAt: number)
+	local moveCooldownEndsAt = endedAt + math.max(0, tonumber(activeCast.move.cooldownSeconds) or 0)
+	local existingMoveCooldownEndsAt = tonumber(encounter.cooldowns[activeCast.move.id]) or 0
+	encounter.cooldowns[activeCast.move.id] = math.max(existingMoveCooldownEndsAt, moveCooldownEndsAt)
+
+	local nextAbilityAvailableAt = endedAt + math.max(0, tonumber(encounter.bossDefinition.abilityCadenceSeconds) or 0)
+	encounter.nextAbilityAvailableAt = math.max(encounter.nextAbilityAvailableAt, nextAbilityAvailableAt)
+end
+
+function BossArenaRuntimeService:_finishActiveCast(encounter: EncounterState)
+	local activeCast = encounter.activeCast
+	if activeCast == nil then
+		return
+	end
+
+	self:_stampCastEndTimers(encounter, activeCast, os.clock())
+	encounter.activeCast = nil
+end
+
+function BossArenaRuntimeService:_cancelActiveCast(encounter: EncounterState)
+	local activeCast = encounter.activeCast
+	if activeCast == nil then
+		return
+	end
+
+	self:_stampCastEndTimers(encounter, activeCast, os.clock())
+	encounter.activeCast = nil
+	invokeLifecycleCancel(activeCast.move.id, activeCast.lifecycleHandle)
+end
+
+function BossArenaRuntimeService:_usesHardRangeGate(moveDefinition: any): boolean
+	return moveDefinition.moduleId == "Common.BasicM1" or typeof(moveDefinition.module.GetSelectionWeight) ~= "function"
+end
+
+function BossArenaRuntimeService:_getMoveSelectionWeight(moveDefinition: any, context: any): number?
 	if context.distanceToTarget ~= nil then
-		if context.distanceToTarget < moveDefinition.minRange or context.distanceToTarget > moveDefinition.maxRange then
-			return false
+		if self:_usesHardRangeGate(moveDefinition) then
+			if context.distanceToTarget < moveDefinition.minRange or context.distanceToTarget > moveDefinition.maxRange then
+				return nil
+			end
 		end
 	end
 
@@ -1009,16 +1107,36 @@ function BossArenaRuntimeService:_canUseMove(moveDefinition: any, context: any):
 			moveDefinition.id,
 			tostring(canUse)
 		))
-		return false
+		return nil
 	end
 	if canUse ~= true then
 		if typeof(reason) == "string" and reason ~= "" then
-			return false
+			return nil
 		end
-		return false
+		return nil
 	end
 
-	return true
+	local effectiveWeight = tonumber(moveDefinition.weight) or 0
+	local getSelectionWeight = moveDefinition.module.GetSelectionWeight
+	if typeof(getSelectionWeight) == "function" then
+		local selectionWeightOk, selectionWeight = pcall(getSelectionWeight, context)
+		if not selectionWeightOk then
+			warnWithPrefix(string.format(
+				"Boss move '%s' GetSelectionWeight failed: %s",
+				moveDefinition.id,
+				tostring(selectionWeight)
+			))
+			return nil
+		end
+
+		effectiveWeight *= tonumber(selectionWeight) or 0
+	end
+
+	if effectiveWeight <= 0 then
+		return nil
+	end
+
+	return effectiveWeight
 end
 
 function BossArenaRuntimeService:_startCast(
@@ -1028,7 +1146,9 @@ function BossArenaRuntimeService:_startCast(
 	aliveTargets: { AliveTargetContext }
 )
 	local now = os.clock()
+	local castId = HttpService:GenerateGUID(false)
 	local castState: CastState = {
+		castId = castId,
 		move = moveDefinition,
 		startedAt = now,
 		executeAt = now + moveDefinition.castTimeSeconds,
@@ -1036,14 +1156,34 @@ function BossArenaRuntimeService:_startCast(
 		rootDuringCast = moveDefinition.rootDuringCast == true,
 		executed = false,
 		targetUserId = if targetContext then targetContext.player.UserId else nil,
+		lifecycleHandle = nil,
+		completedAt = nil,
 	}
 
 	encounter.activeCast = castState
-	encounter.lastAbilityStartedAt = now
-	encounter.cooldowns[moveDefinition.id] = now + moveDefinition.cooldownSeconds
 	self:_setState(encounter, "Casting")
 
-	local previewContext = self:_buildMoveContext(encounter, moveDefinition, aliveTargets, castState.targetUserId)
+	local function emitPresentation(action: string, payload: { [string]: any }?)
+		self:_notifyMovePresentation({
+			castId = castState.castId,
+			bossModel = encounter.bossModel,
+			bossId = encounter.bossId,
+			moveId = moveDefinition.id,
+			moduleId = moveDefinition.moduleId,
+			action = action,
+			payload = payload,
+			serverTime = Workspace:GetServerTimeNow(),
+		})
+	end
+
+	local previewContext = self:_buildMoveContext(
+		encounter,
+		moveDefinition,
+		aliveTargets,
+		castState.targetUserId,
+		castState.castId,
+		emitPresentation
+	)
 	print(string.format(
 		"[BossArenaRuntimeService] Boss '%s' in arena '%s' started cast '%s' targeting %s.",
 		encounter.bossId,
@@ -1051,6 +1191,28 @@ function BossArenaRuntimeService:_startCast(
 		moveDefinition.id,
 		if previewContext.targetPlayer then previewContext.targetPlayer.Name else "arena"
 	))
+
+	local startCast = moveDefinition.module.StartCast
+	if typeof(startCast) == "function" then
+		local startCastOk, lifecycleHandleOrError = pcall(startCast, previewContext)
+		if not startCastOk then
+			warnWithPrefix(string.format(
+				"Boss move '%s' StartCast failed: %s",
+				moveDefinition.id,
+				tostring(lifecycleHandleOrError)
+			))
+		else
+			if typeof(lifecycleHandleOrError) == "table" and typeof(lifecycleHandleOrError.IsComplete) == "function" then
+				castState.lifecycleHandle = lifecycleHandleOrError
+			elseif lifecycleHandleOrError ~= nil then
+				warnWithPrefix(string.format(
+					"Boss move '%s' StartCast returned an invalid lifecycle handle.",
+					moveDefinition.id
+				))
+			end
+			castState.executed = true
+		end
+	end
 end
 
 function BossArenaRuntimeService:_emitMoveStub(
@@ -1059,7 +1221,7 @@ function BossArenaRuntimeService:_emitMoveStub(
 	aliveTargets: { AliveTargetContext },
 	targetUserId: number?
 )
-	local context = self:_buildMoveContext(encounter, moveDefinition, aliveTargets, targetUserId)
+	local context = self:_buildMoveContext(encounter, moveDefinition, aliveTargets, targetUserId, "", nil)
 	local targetingOk, targetingData = pcall(function()
 		return moveDefinition.module.GetTargeting(context)
 	end)
@@ -1113,13 +1275,35 @@ function BossArenaRuntimeService:_updateCast(encounter: EncounterState, aliveTar
 
 	local now = os.clock()
 
+	if activeCast.lifecycleHandle ~= nil then
+		if activeCast.completedAt == nil then
+			if not invokeLifecycleIsComplete(activeCast.move.id, activeCast.lifecycleHandle) then
+				return
+			end
+
+			activeCast.completedAt = now
+			local recoveryEndsAt = invokeLifecycleRecoveryEndsAt(activeCast.move.id, activeCast.lifecycleHandle)
+			if recoveryEndsAt ~= nil and recoveryEndsAt > now then
+				activeCast.recoveryEndsAt = recoveryEndsAt
+			else
+				self:_finishActiveCast(encounter)
+				return
+			end
+		end
+
+		if now >= activeCast.recoveryEndsAt then
+			self:_finishActiveCast(encounter)
+		end
+		return
+	end
+
 	if not activeCast.executed and now >= activeCast.executeAt then
 		self:_emitMoveStub(encounter, activeCast.move, aliveTargets, activeCast.targetUserId)
 		activeCast.executed = true
 	end
 
 	if now >= activeCast.recoveryEndsAt then
-		encounter.activeCast = nil
+		self:_finishActiveCast(encounter)
 	end
 end
 
@@ -1135,7 +1319,7 @@ end
 function BossArenaRuntimeService:_updateMovement(encounter: EncounterState, targetContext: AliveTargetContext?)
 	local activeCast = encounter.activeCast
 
-	if activeCast ~= nil and activeCast.rootDuringCast then
+	if activeCast ~= nil then
 		self:_setState(encounter, "Casting")
 		self:_moveBossTo(encounter, encounter.bossRootPart.Position)
 		return
@@ -1171,7 +1355,7 @@ function BossArenaRuntimeService:_tryStartAbility(
 	if encounter.activeCast ~= nil then
 		return
 	end
-	if os.clock() - encounter.lastAbilityStartedAt < encounter.bossDefinition.abilityCadenceSeconds then
+	if os.clock() < encounter.nextAbilityAvailableAt then
 		return
 	end
 
@@ -1187,12 +1371,16 @@ function BossArenaRuntimeService:_tryStartAbility(
 			encounter,
 			moveDefinition,
 			aliveTargets,
-			if targetContext then targetContext.player.UserId else nil
+			if targetContext then targetContext.player.UserId else nil,
+			"",
+			nil
 		)
-		if self:_canUseMove(moveDefinition, context) then
+		local effectiveWeight = self:_getMoveSelectionWeight(moveDefinition, context)
+		if effectiveWeight ~= nil then
 			table.insert(validMoves, {
 				move = moveDefinition,
 				context = context,
+				effectiveWeight = effectiveWeight,
 			})
 		end
 	end
@@ -1229,6 +1417,7 @@ function BossArenaRuntimeService:_heartbeat()
 		return
 	end
 	if encounter.bossHumanoid.Health <= 0 then
+		self:_cancelActiveCast(encounter)
 		self:_setState(encounter, "Idle")
 		return
 	end
@@ -1290,6 +1479,20 @@ function BossArenaRuntimeService:GetActiveBossId(): string?
 	end
 
 	return encounter.bossId
+end
+
+function BossArenaRuntimeService:GetActiveBossModel(): Model?
+	local encounter = self._encounter
+	if encounter == nil then
+		return nil
+	end
+
+	local bossModel = encounter.bossModel
+	if bossModel == nil or bossModel.Parent == nil then
+		return nil
+	end
+
+	return bossModel
 end
 
 function BossArenaRuntimeService:GetBossHealthState(): BossHealthState?
@@ -1375,6 +1578,15 @@ function BossArenaRuntimeService:ConnectBossHealthStateChanged(callback: (BossHe
 
 	return function()
 		self._bossHealthStateListeners[callback] = nil
+	end
+end
+
+function BossArenaRuntimeService:ConnectMovePresentation(callback: (any) -> ()): () -> ()
+	assert(type(callback) == "function", "Boss move presentation callback must be a function.")
+	self._movePresentationListeners[callback] = true
+
+	return function()
+		self._movePresentationListeners[callback] = nil
 	end
 end
 

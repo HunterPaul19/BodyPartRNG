@@ -6,6 +6,8 @@ local CancelToken = require(script.Parent.Parent.Utilities.CancelToken)
 local DebugUtil = require(script.Parent.Parent.Utilities.DebugUtil)
 
 local DEBUG_DEFAULT = true
+local DEFAULT_LANDED_DISABLE_RAGDOLL_DELAY = 2
+local DEFAULT_LANDED_DISABLE_TIMEOUT_BUFFER = 0.75
 
 local function shouldDebug(character)
 	local workspaceDebug = workspace:GetAttribute("CombatPhysicsDebug")
@@ -44,6 +46,13 @@ local function log(character, ...)
 	print("[CombatPhysics.Knockback.Default][" .. label(character) .. "]", ...)
 end
 
+local function resolveDefaultLandedDisableTimeout(moverDuration, delayTime, landedDisableRagdollDelay)
+	return math.max(
+		4,
+		moverDuration + delayTime + landedDisableRagdollDelay + DEFAULT_LANDED_DISABLE_TIMEOUT_BUFFER
+	)
+end
+
 return function(data, context, knockbackID)
 	local character = context.character
 	local moverDuration = data.Duration or 0.2
@@ -55,6 +64,7 @@ return function(data, context, knockbackID)
 	local distanceFromGround = landedData and (landedData.DistanceFromGround or 2) or 2
 	local onLand = landedData and landedData.OnLand or nil
 
+	local hasExplicitLandedDisableDelay = false
 	local landedDisableRagdollDelay = landedData and landedData.DisableRagdollDelay or nil
 	if landedDisableRagdollDelay ~= nil then
 		if typeof(landedDisableRagdollDelay) ~= "number" then
@@ -65,16 +75,24 @@ return function(data, context, knockbackID)
 			landedDisableRagdollDelay = nil
 		else
 			landedDisableRagdollDelay = math.max(0, landedDisableRagdollDelay)
+			hasExplicitLandedDisableDelay = true
 		end
 	end
+	if landedDisableRagdollDelay == nil then
+		landedDisableRagdollDelay = DEFAULT_LANDED_DISABLE_RAGDOLL_DELAY
+	end
 
-	local useLandedRagdollDisable = landedDisableRagdollDelay ~= nil
+	local useLandedRagdollDisable = true
 	local landedDisableTimeout = landedData and landedData.DisableRagdollTimeout or nil
 	if useLandedRagdollDisable then
-		if typeof(landedDisableTimeout) ~= "number" then
-			landedDisableTimeout = math.max(ragdollDuration + 2, 4)
-		else
+		if typeof(landedDisableTimeout) == "number" then
 			landedDisableTimeout = math.max(0.25, landedDisableTimeout)
+		else
+			landedDisableTimeout = resolveDefaultLandedDisableTimeout(
+				moverDuration,
+				delayTime,
+				landedDisableRagdollDelay
+			)
 		end
 	end
 
@@ -89,7 +107,14 @@ return function(data, context, knockbackID)
 	end
 
 	context:clearBodymovers()
-	context:setCollisionGroup(Constants.COLLISION_GROUPS.HitboxNoCollide)
+	local collisionGroupToken = context:pushCollisionGroup(Constants.COLLISION_GROUPS.HitboxNoCollide)
+
+	local function restoreCollisionGroup()
+		if collisionGroupToken then
+			context:popCollisionGroup(collisionGroupToken)
+			collisionGroupToken = nil
+		end
+	end
 
 	if data.CanDashM1 then
 		local stateDuration = typeof(data.CanDashM1) == "number" and data.CanDashM1 or ragdollDuration / 3
@@ -105,6 +130,7 @@ return function(data, context, knockbackID)
 	local bodyVelocity = BodyMoverUtil.createVelocity(context.rootPart, data.VelocityParent)
 	if not bodyVelocity then
 		warn("[CombatPhysics.Knockback.Default] Failed to create BodyVelocity", character and character:GetFullName() or "nil")
+		restoreCollisionGroup()
 		return
 	end
 	bodyVelocity.MaxForce = maxForce
@@ -145,6 +171,7 @@ return function(data, context, knockbackID)
 			if character:GetAttribute("Ragdoll") then
 				context.ragdoll:Disable(true)
 			end
+			restoreCollisionGroup()
 		end)
 	end
 
@@ -162,12 +189,9 @@ return function(data, context, knockbackID)
 		data.KnockbackEnd()
 	end
 
-	local anticipateOptions = nil
-	if groundMode == "DeterministicMap" then
-		anticipateOptions = {
-			groundMode = "DeterministicMap",
-		}
-	end
+	local anticipateOptions = {
+		groundMode = groundMode,
+	}
 
 	task.delay(delayTime, function()
 		BodyMoverUtil.anticipateLand(character, distanceFromGround, function()
@@ -176,11 +200,13 @@ return function(data, context, knockbackID)
 			end
 
 			if character:GetAttribute("KnockbackID") == knockbackID then
-				context:setCollisionGroup(Constants.COLLISION_GROUPS.Hitbox)
 				context:createState("IFrames", data.IFrames or (character:GetAttribute("Owner") and 1 or 0.2))
 				context:createState("AntiStunned", data.AntiStun ~= nil and data.AntiStun or 0.6)
 
 				if useLandedRagdollDisable and context.ragdoll then
+					if not hasExplicitLandedDisableDelay then
+						log(character, "Using default grounded ragdoll delay", landedDisableRagdollDelay)
+					end
 					task.delay(landedDisableRagdollDelay, function()
 						if not character or character.Parent == nil then
 							return
@@ -189,12 +215,17 @@ return function(data, context, knockbackID)
 							return
 						end
 						context.ragdoll:Disable(true)
+						restoreCollisionGroup()
 					end)
+				else
+					restoreCollisionGroup()
 				end
 
 				if onLand then
 					onLand()
 				end
+			else
+				restoreCollisionGroup()
 			end
 		end, 5, anticipateOptions)
 	end)

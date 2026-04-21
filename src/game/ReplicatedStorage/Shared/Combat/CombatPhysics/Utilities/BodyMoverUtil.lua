@@ -150,24 +150,6 @@ function BodyMoverUtil.anticipateLand(character, distanceFromGround, onLand, tim
 	local startTime = os.clock()
 	local distance = math.max(1, distanceFromGround or 2)
 
-	local groundParams
-	if groundMode == "DeterministicMap" then
-		groundParams = RaycastUtil.getDeterministicGroundParams({
-			ignoreWater = options.ignoreWater,
-			extraInclude = options.extraInclude,
-		})
-	else
-		groundParams = RaycastUtil.getGroundParams(character)
-		if groundParams.FilterType == Enum.RaycastFilterType.Exclude and type(options.extraExclude) == "table" then
-			local merged = {}
-			for _, existing in ipairs(groundParams.FilterDescendantsInstances) do
-				table.insert(merged, existing)
-			end
-			appendExcludeList(merged, options.extraExclude)
-			groundParams.FilterDescendantsInstances = merged
-		end
-	end
-
 	log(
 		character,
 		"anticipateLand start",
@@ -176,9 +158,7 @@ function BodyMoverUtil.anticipateLand(character, distanceFromGround, onLand, tim
 		"timeout",
 		timeout or "nil",
 		"groundMode",
-		groundMode,
-		"filterType",
-		tostring(groundParams.FilterType)
+		groundMode
 	)
 
 	while character.Parent ~= nil do
@@ -193,7 +173,24 @@ function BodyMoverUtil.anticipateLand(character, distanceFromGround, onLand, tim
 			return false
 		end
 
-		local result = workspace:Raycast(rootPart.Position, Vector3.new(0, -1, 0) * distance, groundParams)
+		local result
+		if groundMode == "DeterministicMap" then
+			result = workspace:Raycast(
+				rootPart.Position,
+				Vector3.new(0, -1, 0) * distance,
+				RaycastUtil.getDeterministicGroundParams({
+					ignoreWater = options.ignoreWater,
+					extraInclude = options.extraInclude,
+				})
+			)
+		else
+			result = RaycastUtil.raycastSupportSurface(rootPart.Position, Vector3.new(0, -1, 0) * distance, {
+				character = character,
+				extraExclude = appendExcludeList({}, options.extraExclude),
+				extraInclude = options.extraInclude,
+				ignoreWater = options.ignoreWater,
+			})
+		end
 
 		if result then
 			log(character, "anticipateLand hit", result.Instance and result.Instance:GetFullName() or "nil", "y", result.Position.Y)

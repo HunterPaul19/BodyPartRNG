@@ -19,6 +19,7 @@ export type BossMoveDefinition = {
 	rootDuringCast: boolean,
 	castTimeSeconds: number,
 	recoverySeconds: number,
+	animationFolderName: string?,
 	module: any,
 	moduleId: string,
 }
@@ -40,6 +41,7 @@ export type BossDefinition = {
 
 export type BossRuntimeContext = {
 	now: number,
+	castId: string,
 	bossDefinition: BossDefinition,
 	move: BossMoveDefinition,
 	bossModel: Model,
@@ -53,12 +55,21 @@ export type BossRuntimeContext = {
 	targetRootPart: BasePart?,
 	distanceToTarget: number?,
 	aliveTargets: { BossTargetContext },
+	EmitPresentation: (action: string, payload: { [string]: any }?) -> (),
+}
+
+export type BossCastLifecycleHandle = {
+	Cancel: () -> (),
+	IsComplete: () -> boolean,
+	GetRecoveryEndsAt: (() -> number?)?,
 }
 
 export type BossMoveModule = {
 	CanUse: (context: BossRuntimeContext) -> (boolean, string?),
 	GetTargeting: (context: BossRuntimeContext) -> { [string]: any },
 	ExecuteStub: (context: BossRuntimeContext) -> { [string]: any },
+	StartCast: ((context: BossRuntimeContext) -> BossCastLifecycleHandle?)?,
+	GetSelectionWeight: ((context: BossRuntimeContext) -> number?)?,
 }
 
 return table.freeze({})

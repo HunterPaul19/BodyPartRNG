@@ -8,6 +8,29 @@ This file defines the required workflow for agents working in `C:\dev\BodyPartRN
 - Treat `PROJECT_BRIEF.md` as the primary source of product context.
 - If implementation details are unclear, align with the brief first instead of inventing direction from template leftovers.
 
+## Imported Gameplay Modules
+
+- `ReplicatedStorage.Shared.Combat.Hitbox`
+  - TreasureHunters-derived gameplay import.
+  - Owned locally in the Rojo codebase, not by Studio asset trees.
+  - Extend and adapt it to this project instead of assuming TreasureHunters folder structure or runtime containers still apply.
+- `ReplicatedStorage.Shared.Combat.CombatPhysics`
+  - TreasureHunters-derived gameplay import.
+  - Owned locally in the Rojo codebase, not by Studio asset trees.
+  - Preserve the local remotes/collision/runtime adaptations already made in this repository.
+- `ReplicatedStorage.Shared.Animation`
+  - TreasureHunters-derived gameplay import.
+  - Owned locally in the Rojo codebase, not by Studio asset trees.
+  - Treat it as a shared local helper and resolve animations against this project's live asset layout rather than upstream assumptions.
+- `ReplicatedStorage.Shared.Effects.EmitModule`
+  - TreasureHunters-derived gameplay import.
+  - Owned locally in the Rojo codebase, not by Studio asset trees.
+  - Preserve the upstream embedded license text and adapt only the local runtime wiring needed for this repository.
+  - Initialize it once on the client with `EmitModule.init()` before calling `EmitModule.emit(...)`.
+  - Use `EmitModule.emit(effectInstance, duration?)` for transient cloned VFX instances that should play and clean themselves up.
+  - Source the visual instances from Studio-managed `GameAssets`; do not move VFX assets into Rojo-managed code just to support emit calls.
+  - Adapt TreasureHunters examples to this project's live asset layout and local helper structure instead of assuming upstream paths.
+
 ## Core Rule
 
 - Treat the local Rojo project as the source of truth for code.
@@ -84,4 +107,7 @@ When in doubt:
 
 - code and scripts -> local filesystem
 - assets, properties, hierarchy, playtesting -> Studio MCP
+- boss arena attack hitboxes -> scale from the live boss size; huge bosses should not use player-sized melee volumes
+- huge boss melee hitbox height -> derive from standing height and make it reach the ground, not just the root height
+- boss arena moves -> root the boss for the full active cast lifetime; do not reintroduce chase-during-cast behavior
 

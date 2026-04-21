@@ -30,7 +30,7 @@ return BossConfigFactory.Create({
 			minRange = 0,
 			maxRange = 13,
 			weight = 2,
-			rootDuringCast = false,
+			rootDuringCast = true,
 			castTimeSeconds = 0.25,
 			recoverySeconds = 0.35,
 		},

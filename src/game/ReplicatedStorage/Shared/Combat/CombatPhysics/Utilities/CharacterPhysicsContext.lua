@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 
 local BodyMoverUtil = require(script.Parent.BodyMoverUtil)
+local CollisionGroupOverrides = require(script.Parent.CollisionGroupOverrides)
 local StateUtil = require(script.Parent.StateUtil)
 local AnimationUtil = require(script.Parent.AnimationUtil)
 
@@ -40,16 +41,19 @@ function CharacterPhysicsContext:refresh()
 end
 
 function CharacterPhysicsContext:setCollisionGroup(groupName)
-	if not groupName then
-		return
-	end
-	for _, instance in ipairs(self.character:GetDescendants()) do
-		if instance:IsA("BasePart") then
-			pcall(function()
-				instance.CollisionGroup = groupName
-			end)
-		end
-	end
+	return self:pushCollisionGroup(groupName)
+end
+
+function CharacterPhysicsContext:pushCollisionGroup(groupName)
+	return CollisionGroupOverrides.Push(self.character, groupName)
+end
+
+function CharacterPhysicsContext:popCollisionGroup(token)
+	return CollisionGroupOverrides.Pop(self.character, token)
+end
+
+function CharacterPhysicsContext:clearCollisionGroupOverrides()
+	return CollisionGroupOverrides.Clear(self.character)
 end
 
 function CharacterPhysicsContext:setNetworkOwner(player)
