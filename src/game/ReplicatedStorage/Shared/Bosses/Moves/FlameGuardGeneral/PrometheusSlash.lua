@@ -1,6 +1,5 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
@@ -8,20 +7,19 @@ local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
 local DAMAGE = 20
-local WALL_TRAVEL_DURATION_SECONDS = 0.75
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "FlameGuardGeneral"
 local ANIMATION_NAME = "PrometheusSlash"
 local IMPACT_MARKER_NAME = "Impact"
 local WALL_Y_AXIS_ROTATION = math.rad(90)
 local WALL_TRAVEL_DISTANCE_STUDS = 1000
+local WALL_TRAVEL_SPEED_STUDS_PER_SECOND = 150
+local WALL_TRAVEL_DURATION_SECONDS = WALL_TRAVEL_DISTANCE_STUDS / WALL_TRAVEL_SPEED_STUDS_PER_SECOND
 local VFX_FOLDER_NAME = "VFX"
 local PROMETHEUS_VFX_FOLDER_NAME = "FlameGuardGeneral"
 local PROMETHEUS_VFX_NAME = "PrometheusSlash"
 local PROMETHEUS_SLASH_MODEL_NAME = "Slash"
 local PROMETHEUS_SLASH_SCALE = 12.5
-local MIN_VISIBLE_DEBRIS_TRAVEL_DISTANCE = 36
-local VISUAL_TRAVEL_SPEED_STUDS_PER_SECOND = 20
 
 local stub = CreateExplicitBossMoveStub({
 	bossId = "Flame Guard General",
@@ -193,24 +191,6 @@ local function resolveSlashHitboxSizeAndOffset(bossRootPart: BasePart): (Vector3
 	return hitboxSize, spawnOffset
 end
 
-local function resolveVisibleDebrisTravelDistance(bossRootPart: BasePart): number
-	local activeBossArena = Workspace:FindFirstChild("ActiveBossArena")
-	if not (activeBossArena and activeBossArena:IsA("Model")) then
-		return MIN_VISIBLE_DEBRIS_TRAVEL_DISTANCE
-	end
-
-	local arenaCFrame, arenaSize = activeBossArena:GetBoundingBox()
-	local arenaHalfExtent = math.max(arenaSize.X, arenaSize.Z) * 0.5
-	local bossOffset = Vector3.new(
-		bossRootPart.Position.X - arenaCFrame.Position.X,
-		0,
-		bossRootPart.Position.Z - arenaCFrame.Position.Z
-	).Magnitude
-	local remainingDistance = arenaHalfExtent - bossOffset + (bossRootPart.Size.Z * 0.75)
-
-	return math.clamp(remainingDistance, MIN_VISIBLE_DEBRIS_TRAVEL_DISTANCE, WALL_TRAVEL_DISTANCE_STUDS)
-end
-
 local function buildKnockbackDirection(planarDirection: Vector3): Vector3
 	return (planarDirection * 34) + Vector3.new(0, 10, 0)
 end
@@ -267,7 +247,6 @@ function PrometheusSlash.StartCast(context)
 	local wallSize, initialForwardOffset = resolveSlashHitboxSizeAndOffset(bossRootPart)
 	local standingHeight = resolveStandingHeight(bossHumanoid, bossRootPart)
 	local travelDistance = WALL_TRAVEL_DISTANCE_STUDS
-	local debrisTravelDistance = resolveVisibleDebrisTravelDistance(bossRootPart)
 	if wallSize == nil or initialForwardOffset == nil then
 		return nil
 	end
@@ -359,10 +338,6 @@ function PrometheusSlash.StartCast(context)
 			travelDuration = WALL_TRAVEL_DURATION_SECONDS,
 			yRotation = WALL_Y_AXIS_ROTATION,
 			slashScale = PROMETHEUS_SLASH_SCALE,
-			visualTravelDistance = debrisTravelDistance,
-			visualTravelDuration = debrisTravelDistance / VISUAL_TRAVEL_SPEED_STUDS_PER_SECOND,
-			debrisTravelDistance = debrisTravelDistance,
-			debrisWidth = math.max(wallSize.X, wallSize.Z),
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
 		})
 

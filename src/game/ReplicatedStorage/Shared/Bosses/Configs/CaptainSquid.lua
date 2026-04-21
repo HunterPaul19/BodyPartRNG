@@ -2,9 +2,9 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local BossConfigFactory = require(ReplicatedStorage.Shared.Bosses.ConfigFactory)
 local BossMoveTags = require(ReplicatedStorage.Shared.Bosses.MoveTags)
-local Canonfire = require(ReplicatedStorage.Shared.Bosses.Moves.CaptainSquid.Canonfire)
+local SquidCall = require(ReplicatedStorage.Shared.Bosses.Moves.CaptainSquid.SquidCall)
 local Hook = require(ReplicatedStorage.Shared.Bosses.Moves.CaptainSquid.Hook)
-local ShipCrash = require(ReplicatedStorage.Shared.Bosses.Moves.CaptainSquid.ShipCrash)
+local ShipCall = require(ReplicatedStorage.Shared.Bosses.Moves.CaptainSquid.ShipCall)
 
 return BossConfigFactory.Create({
 	bossId = "Captain Squid",
@@ -26,38 +26,38 @@ return BossConfigFactory.Create({
 			tags = { BossMoveTags.CloseSingle },
 			module = Hook,
 			moduleId = "Moves.CaptainSquid.Hook",
-			cooldownSeconds = 6.0,
+			cooldownSeconds = 14.0,
 			minRange = 0,
-			maxRange = 14,
-			weight = 2,
+			maxRange = 100,
+			weight = 0.5,
 			rootDuringCast = true,
 			castTimeSeconds = 0.4,
 			recoverySeconds = 0.7,
 		},
 		{
-			label = "Canonfire",
+			label = "Squid Call",
 			tags = { BossMoveTags.RangedSingle },
-			module = Canonfire,
-			moduleId = "Moves.CaptainSquid.Canonfire",
+			module = SquidCall,
+			moduleId = "Moves.CaptainSquid.SquidCall",
 			cooldownSeconds = 8.5,
 			minRange = 16,
 			maxRange = 100,
 			weight = 1,
 			rootDuringCast = true,
-			castTimeSeconds = 0.9,
-			recoverySeconds = 0.7,
+			castTimeSeconds = 3.25,
+			recoverySeconds = 0.4,
 		},
 		{
-			label = "Ship Crash",
+			label = "Ship Call",
 			tags = { BossMoveTags.AOE },
-			module = ShipCrash,
-			moduleId = "Moves.CaptainSquid.ShipCrash",
+			module = ShipCall,
+			moduleId = "Moves.CaptainSquid.ShipCall",
 			cooldownSeconds = 12.0,
-			minRange = 8,
-			maxRange = 40,
+			minRange = 0,
+			maxRange = 176,
 			weight = 0.75,
 			rootDuringCast = true,
-			castTimeSeconds = 1.1,
+			castTimeSeconds = 0.7,
 			recoverySeconds = 0.9,
 		},
 	},
