@@ -105,7 +105,7 @@ function Handler:_spawnEatChickenLegs(record: ActiveRecord, event: PresentationE
 		chickenClone:PivotTo(handPart.CFrame * CFrame.Angles(0, yawOffset, 0))
 		chickenClone.Parent = castFolder
 		self:createWeld(primaryPart, handPart)
-		self:playAllSounds(chickenClone)
+		self:playAllSounds(chickenClone, scaleMultiplier)
 		record.eatChickenBoneModels[globalIndex] = chickenClone
 	end
 

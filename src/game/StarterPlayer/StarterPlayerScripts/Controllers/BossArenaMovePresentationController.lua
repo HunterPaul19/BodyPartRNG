@@ -14,6 +14,7 @@ type PresentationEvent = {
 	action: string?,
 	payload: { [string]: any }?,
 	serverTime: number?,
+	source: string?,
 }
 
 type ActiveRecord = {
@@ -52,6 +53,12 @@ type ActiveRecord = {
 	broccoliSproutTweens: { Tween }?,
 	broccoliSproutTweenConnections: { RBXScriptConnection }?,
 	broccoliSproutTweenValues: { CFrameValue }?,
+	rainbowBlastBeamModel: Model?,
+	rainbowBlastEndModel: Model?,
+	rainbowBlastTargetModel: Model?,
+	rainbowBlastPlayerGlintModel: Model?,
+	rainbowBlastBeamMotion: any?,
+	rainbowBlastTorsoAim: any?,
 	stopRequested: boolean?,
 }
 
@@ -63,6 +70,7 @@ local BossArenaMovePresentationController = {
 	_recordsByCastId = {} :: { [string]: ActiveRecord },
 	_context = nil :: any,
 	_handlersByModuleId = nil :: { [string]: any }?,
+	_missingHandlerWarnings = {} :: { [string]: boolean },
 }
 
 function BossArenaMovePresentationController:_getContext()
@@ -116,6 +124,12 @@ function BossArenaMovePresentationController:_createRecord(event: PresentationEv
 		broccoliSproutTweens = nil,
 		broccoliSproutTweenConnections = nil,
 		broccoliSproutTweenValues = nil,
+		rainbowBlastBeamModel = nil,
+		rainbowBlastEndModel = nil,
+		rainbowBlastTargetModel = nil,
+		rainbowBlastPlayerGlintModel = nil,
+		rainbowBlastBeamMotion = nil,
+		rainbowBlastTorsoAim = nil,
 		stopRequested = false,
 	}
 end
@@ -170,6 +184,14 @@ function BossArenaMovePresentationController:_handleEvent(payload: any)
 
 	local handler = self:_getHandlersByModuleId()[moduleId]
 	if handler == nil then
+		if self._missingHandlerWarnings[moduleId] ~= true then
+			self._missingHandlerWarnings[moduleId] = true
+			self:_getContext():warnWithPrefix(string.format(
+				"No boss move presentation handler is registered for moduleId '%s' from %s.",
+				moduleId,
+				if type(event.source) == "string" and event.source ~= "" then event.source else "boss arena"
+			))
+		end
 		return
 	end
 

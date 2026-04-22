@@ -21,13 +21,19 @@ function Handler:_startFlameSlash(record: ActiveRecord, event: PresentationEvent
 	end
 
 	local chargingSound = record.handleModel and record.handleModel:FindFirstChild("Charging Flame", true)
-	self:playSound(if chargingSound and chargingSound:IsA("Sound") then chargingSound else nil)
+	self:playSound(
+		if chargingSound and chargingSound:IsA("Sound") then chargingSound else nil,
+		math.max(0.1, tonumber(event.payload and event.payload.scaleMultiplier) or 1)
+	)
 end
 
 function Handler:_impactFlameSlash(record: ActiveRecord, event: PresentationEvent)
 	if record.handleModel and record.handleModel.Parent then
 		local explosionSound = record.handleModel:FindFirstChild("CrystalExplosion", true)
-		self:playSound(if explosionSound and explosionSound:IsA("Sound") then explosionSound else nil)
+		self:playSound(
+			if explosionSound and explosionSound:IsA("Sound") then explosionSound else nil,
+			math.max(0.1, tonumber(event.payload and event.payload.scaleMultiplier) or 1)
+		)
 	end
 
 	self:_shakeImpact()

@@ -20,8 +20,13 @@ local WAVE_CRASH_MODULE_ID = Constants.ModuleIds.WAVE_CRASH_MODULE_ID
 local WAVE_CRASH_RIGHT_HAND_MODEL_NAME = Constants.Vfx.WAVE_CRASH_RIGHT_HAND_MODEL_NAME
 local WAVE_CRASH_VFX_NAME = Constants.Vfx.WAVE_CRASH_VFX_NAME
 local WAVE_CRASH_WAVE_MODEL_NAME = Constants.Vfx.WAVE_CRASH_WAVE_MODEL_NAME
+local WAVE_CRASH_WAVE_VISUAL_ROTATION_OFFSET = CFrame.Angles(0, math.pi, 0)
 
 local Handler = {}
+
+local function buildWaveVisualCFrame(baseCFrame: CFrame, position: Vector3): CFrame
+	return CFrame.new(position) * (baseCFrame - baseCFrame.Position) * WAVE_CRASH_WAVE_VISUAL_ROTATION_OFFSET
+end
 
 function Handler:_updateWaveCrashMotion(record: ActiveRecord, nowServerTime: number)
 	local waveModel = record.waveModel
@@ -37,7 +42,7 @@ function Handler:_updateWaveCrashMotion(record: ActiveRecord, nowServerTime: num
 	end
 
 	local currentPosition = waveMotion.startCFrame.Position + (waveMotion.direction * (waveMotion.speed * elapsed))
-	waveModel:PivotTo(CFrame.new(currentPosition) * (waveMotion.startCFrame - waveMotion.startCFrame.Position))
+	waveModel:PivotTo(buildWaveVisualCFrame(waveMotion.startCFrame, currentPosition))
 end
 
 function Handler:_startWaveCrash(record: ActiveRecord, event: PresentationEvent)
@@ -96,8 +101,8 @@ function Handler:_startWaveCrash(record: ActiveRecord, event: PresentationEvent)
 		return
 	end
 
-	self:playAllSounds(leftHandModel)
-	self:playAllSounds(rightHandModel)
+	self:playTimedSounds(leftHandModel, scaleMultiplier)
+	self:playTimedSounds(rightHandModel, scaleMultiplier)
 	self:emitVisuals(self:collectEmittableVisuals(leftHandModel))
 	self:emitVisuals(self:collectEmittableVisuals(rightHandModel))
 end
@@ -144,7 +149,7 @@ function Handler:_sendWaveCrash(record: ActiveRecord, event: PresentationEvent)
 	end
 
 	waveModel.Parent = castFolder
-	waveModel:PivotTo(startCFrame)
+	waveModel:PivotTo(buildWaveVisualCFrame(startCFrame, startCFrame.Position))
 	record.waveModel = waveModel
 	record.waveMotion = {
 		startCFrame = startCFrame,
@@ -154,7 +159,7 @@ function Handler:_sendWaveCrash(record: ActiveRecord, event: PresentationEvent)
 		startedAtServerTime = if typeof(event.serverTime) == "number" then event.serverTime else self.Workspace:GetServerTimeNow(),
 	}
 
-	self:playAllSounds(waveModel)
+	self:playTimedSounds(waveModel, scaleMultiplier)
 	self:emitVisuals(self:collectEmittableVisuals(waveModel))
 	self:_updateWaveCrashMotion(record, self.Workspace:GetServerTimeNow())
 end

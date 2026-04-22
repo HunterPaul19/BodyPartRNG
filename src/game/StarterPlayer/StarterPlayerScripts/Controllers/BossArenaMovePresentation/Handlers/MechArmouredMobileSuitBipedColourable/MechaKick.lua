@@ -70,7 +70,7 @@ function Handler:_startMechaKick(record: ActiveRecord, event: PresentationEvent)
 	leftFootModel.Parent = self:_ensureCastFolder(record)
 	record.leftFootModel = leftFootModel
 	self:scaleAttachedSounds(leftFootModel, scaleMultiplier)
-	self:playAllSounds(leftFootModel)
+	self:playTimedSounds(leftFootModel, scaleMultiplier)
 	self:emitEffectInstance(leftFootModel, MECHA_KICK_LEFT_FOOT_VFX_LIFETIME_SECONDS)
 end
 
@@ -97,9 +97,9 @@ function Handler:_impactMechaKick(record: ActiveRecord, event: PresentationEvent
 	explosionModel:PivotTo(payload.impactCFrame)
 	explosionModel.Parent = self:_ensureVisualFolder()
 
-	self:playAllSounds(explosionModel)
+	self:playAllSounds(explosionModel, scaleMultiplier)
 	self:emitEffectInstance(explosionModel, MECHA_KICK_EXPLOSION_VFX_LIFETIME_SECONDS)
-	self:destroyAfter(explosionModel, MECHA_KICK_EXPLOSION_VFX_LIFETIME_SECONDS)
+	self:destroyVfxAfter(explosionModel, MECHA_KICK_EXPLOSION_VFX_LIFETIME_SECONDS)
 	self:_shakeImpact()
 end
 

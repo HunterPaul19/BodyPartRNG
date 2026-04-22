@@ -65,6 +65,11 @@ local function freezeMoveDefinition(moveDefinition: any)
 	local tags = normalizeTags(moveDefinition.tags)
 	validateMoveTags(moveId, tags)
 
+	local displayName = normalizeString(moveDefinition.displayName)
+	if displayName == "" then
+		displayName = moveId
+	end
+
 	local moduleValue = moveDefinition.module
 	if typeof(moduleValue) ~= "table" then
 		error(string.format("[BossDefinitionBuilder] Boss move '%s' must include a module table.", moveId), 0)
@@ -82,6 +87,7 @@ local function freezeMoveDefinition(moveDefinition: any)
 
 	return table.freeze({
 		id = moveId,
+		displayName = displayName,
 		tags = table.freeze(tags),
 		cooldownSeconds = normalizePositiveNumber(moveDefinition.cooldownSeconds, 1),
 		weight = math.max(0.01, normalizePositiveNumber(moveDefinition.weight, 1)),

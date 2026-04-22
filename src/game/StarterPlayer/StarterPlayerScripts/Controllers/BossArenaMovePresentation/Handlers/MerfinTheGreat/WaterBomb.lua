@@ -13,6 +13,7 @@ local Constants = {
 		WATER_BOMB_VFX_NAME = "WaterBomb",
 	},
 	Timing = {
+		WATER_BOMB_CHARGED_EMIT_DELAY_SECONDS = 72 / 60,
 		WATER_BOMB_EXPLOSION_LIFETIME_SECONDS = 3,
 		WATER_BOMB_FLOOR_LIFETIME_SECONDS = 2.5,
 	},
@@ -20,6 +21,7 @@ local Constants = {
 
 local MERFIN_THE_GREAT_VFX_FOLDER_NAME = Constants.Vfx.MERFIN_THE_GREAT_VFX_FOLDER_NAME
 local WATER_BOMB_BALL_MODEL_NAME = Constants.Vfx.WATER_BOMB_BALL_MODEL_NAME
+local WATER_BOMB_CHARGED_EMIT_DELAY_SECONDS = Constants.Timing.WATER_BOMB_CHARGED_EMIT_DELAY_SECONDS
 local WATER_BOMB_EXPLOSION_LIFETIME_SECONDS = Constants.Timing.WATER_BOMB_EXPLOSION_LIFETIME_SECONDS
 local WATER_BOMB_EXPLOSION_MODEL_NAME = Constants.Vfx.WATER_BOMB_EXPLOSION_MODEL_NAME
 local WATER_BOMB_FLOOR_LIFETIME_SECONDS = Constants.Timing.WATER_BOMB_FLOOR_LIFETIME_SECONDS
@@ -28,6 +30,15 @@ local WATER_BOMB_MODULE_ID = Constants.ModuleIds.WATER_BOMB_MODULE_ID
 local WATER_BOMB_VFX_NAME = Constants.Vfx.WATER_BOMB_VFX_NAME
 
 local Handler = {}
+
+local function resolveAttachment(root: Instance, attachmentName: string): Attachment?
+	local attachment = root:FindFirstChild(attachmentName, true)
+	if attachment and attachment:IsA("Attachment") then
+		return attachment
+	end
+
+	return nil
+end
 
 function Handler:_updateWaterBombMotion(record: ActiveRecord, nowServerTime: number)
 	local ballModel = record.projectileModel
@@ -110,7 +121,6 @@ function Handler:_startWaterBomb(record: ActiveRecord, event: PresentationEvent)
 	ballModel:ScaleTo(math.max(0.01, ballStartScale))
 	self:prepareMovingEffectModel(floorModel)
 	self:prepareMovingEffectModel(ballModel)
-	self:enableVfxDescendants(ballModel)
 	self:scaleAttachedSounds(floorModel, scaleMultiplier)
 	self:scaleAttachedSounds(ballModel, math.max(0.1, ballEndScale))
 
@@ -119,9 +129,25 @@ function Handler:_startWaterBomb(record: ActiveRecord, event: PresentationEvent)
 	floorModel:PivotTo(CFrame.new(floorPosition))
 	ballModel:PivotTo(CFrame.new(chargeStartPosition))
 
-	self:playAllSounds(floorModel)
-	self:playAllSounds(ballModel)
+	self:playTimedSounds(floorModel, scaleMultiplier)
 	self:emitEffectInstance(floorModel, WATER_BOMB_FLOOR_LIFETIME_SECONDS)
+
+	local chargeAttachment = resolveAttachment(ballModel, "Charge")
+	if chargeAttachment then
+		self:emitVisuals(self:collectEmittableVisuals(chargeAttachment))
+	end
+
+	local chargedAttachment = resolveAttachment(ballModel, "Charged")
+	if chargedAttachment then
+		self:emitVisualsAfter(self:collectEmittableVisuals(chargedAttachment), WATER_BOMB_CHARGED_EMIT_DELAY_SECONDS)
+		task.delay(WATER_BOMB_CHARGED_EMIT_DELAY_SECONDS, function()
+			if chargedAttachment.Parent == nil then
+				return
+			end
+
+			self:playTimedSounds(chargedAttachment, math.max(0.1, ballEndScale))
+		end)
+	end
 
 	record.rootModel = floorModel
 	record.projectileModel = ballModel
@@ -165,10 +191,8 @@ function Handler:_throwWaterBomb(record: ActiveRecord, event: PresentationEvent)
 
 		ballModel = ballSource:Clone()
 		self:prepareMovingEffectModel(ballModel)
-		self:enableVfxDescendants(ballModel)
 		ballModel.Parent = self:_ensureCastFolder(record)
 		record.projectileModel = ballModel
-		self:playAllSounds(ballModel)
 	end
 
 	record.waterBombChargeData = nil
@@ -223,7 +247,7 @@ function Handler:_impactWaterBomb(record: ActiveRecord, event: PresentationEvent
 	self:prepareMovingEffectModel(explosionModel)
 	explosionModel:PivotTo(CFrame.new(impactPosition))
 	explosionModel.Parent = self:_ensureVisualFolder()
-	self:playAllSounds(explosionModel)
+	self:playTimedSounds(explosionModel, scaleMultiplier)
 	self:emitEffectInstance(explosionModel, WATER_BOMB_EXPLOSION_LIFETIME_SECONDS)
 
 	self:_cleanupRecord(record)

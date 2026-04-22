@@ -12,7 +12,7 @@ local HITBOX_DURATION_SECONDS = 0.12
 local MAX_HITBOX_PARTS = 128
 local FIRE_INTERVAL_SECONDS = 0.3
 local MAX_MISSILES = 12
-local PROJECTILE_TRAVEL_SECONDS = 1.1
+local PROJECTILE_TRAVEL_SECONDS = 94 / 60
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "Destroyer3000"
 local ANIMATION_NAME = "MissileBarrage"
@@ -434,9 +434,6 @@ function MissileBarrage.StartCast(context)
 
 		startMarkerTriggered = true
 		isShooting = true
-		context.EmitPresentation("start", {
-			scaleMultiplier = context.bossDefinition.scaleMultiplier,
-		})
 		fireMissile()
 	end
 
@@ -457,6 +454,9 @@ function MissileBarrage.StartCast(context)
 		return nil
 	end
 
+	context.EmitPresentation("start", {
+		scaleMultiplier = context.bossDefinition.scaleMultiplier,
+	})
 	track.Looped = false
 	stoppedConnection = track.Stopped:Connect(function()
 		disconnectStoppedConnection()

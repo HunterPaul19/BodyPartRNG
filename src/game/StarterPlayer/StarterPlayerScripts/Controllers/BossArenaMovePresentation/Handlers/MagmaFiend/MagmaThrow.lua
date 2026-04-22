@@ -87,7 +87,11 @@ function Handler:_startMagmaThrow(record: ActiveRecord, event: PresentationEvent
 	if not self:attachEffectModel(leftHandModel, bossLeftHand) then
 		self:warnWithPrefix("Magma Throw left-hand VFX model is missing BasePart configuration.")
 		self:_cleanupRecord(record)
+		return
 	end
+
+	self:playAllSoundsFromConfiguredPositions(leftHandModel, scaleMultiplier)
+	self:emitEffectInstance(leftHandModel)
 end
 
 function Handler:_emitMagmaThrowRoot(record: ActiveRecord, event: PresentationEvent)
@@ -115,9 +119,9 @@ function Handler:_emitMagmaThrowRoot(record: ActiveRecord, event: PresentationEv
 	rootModel.Parent = self:_ensureCastFolder(record)
 	record.rootModel = rootModel
 
-	self:playAllSounds(rootModel)
+	self:playAllSoundsFromConfiguredPositions(rootModel, scaleMultiplier)
 	self:emitEffectInstance(rootModel, MAGMA_THROW_VFX_LIFETIME_SECONDS)
-	self:destroyAfter(rootModel, MAGMA_THROW_VFX_LIFETIME_SECONDS)
+	self:destroyVfxAfter(rootModel, MAGMA_THROW_VFX_LIFETIME_SECONDS)
 end
 
 function Handler:_throwMagmaThrow(record: ActiveRecord, event: PresentationEvent)
@@ -150,10 +154,8 @@ function Handler:_throwMagmaThrow(record: ActiveRecord, event: PresentationEvent
 	local leftHandModel = record.leftHandModel
 	if leftHandModel and leftHandModel.Parent then
 		visualStartPosition = leftHandModel:GetPivot().Position
-		self:playAllSounds(leftHandModel)
-		self:emitEffectInstance(leftHandModel, MAGMA_THROW_VFX_LIFETIME_SECONDS)
 		self:setBasePartTransparency(leftHandModel, 1)
-		self:destroyAfter(leftHandModel, MAGMA_THROW_VFX_LIFETIME_SECONDS)
+		self:destroyVfxAfter(leftHandModel, MAGMA_THROW_VFX_LIFETIME_SECONDS)
 	end
 
 	self:_emitMagmaThrowRoot(record, event)
@@ -180,7 +182,7 @@ function Handler:_throwMagmaThrow(record: ActiveRecord, event: PresentationEvent
 		startedAtServerTime = if typeof(event.serverTime) == "number" then event.serverTime else self.Workspace:GetServerTimeNow(),
 	}
 
-	self:playAllSounds(projectileModel)
+	self:playAllSounds(projectileModel, scaleMultiplier)
 	self:_updateMagmaThrowMotion(record, self.Workspace:GetServerTimeNow())
 end
 
@@ -223,9 +225,9 @@ function Handler:_impactMagmaThrow(record: ActiveRecord, event: PresentationEven
 	explosionModel:PivotTo(CFrame.new(impactPosition))
 	explosionModel.Parent = self:_ensureVisualFolder()
 
-	self:playAllSounds(explosionModel)
+	self:playAllSounds(explosionModel, scaleMultiplier)
 	self:emitEffectInstance(explosionModel, MAGMA_THROW_VFX_LIFETIME_SECONDS)
-	self:destroyAfter(explosionModel, MAGMA_THROW_VFX_LIFETIME_SECONDS)
+	self:destroyVfxAfter(explosionModel, MAGMA_THROW_VFX_LIFETIME_SECONDS)
 	self:_cleanupRecord(record)
 end
 

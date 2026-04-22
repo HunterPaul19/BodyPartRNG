@@ -84,9 +84,9 @@ function Handler:_startMassiveGeezerBodySlam(record: ActiveRecord, event: Presen
 	jumpModel:PivotTo(payload.floorCFrame)
 	jumpModel.Parent = self:_ensureCastFolder(record)
 
-	self:playAllSounds(jumpModel)
+	self:playAllSounds(jumpModel, scaleMultiplier)
 	self:emitEffectInstance(jumpModel, MASSIVE_GEEZER_BODY_SLAM_JUMP_VFX_LIFETIME_SECONDS)
-	self:destroyAfter(jumpModel, MASSIVE_GEEZER_BODY_SLAM_JUMP_VFX_LIFETIME_SECONDS)
+	self:destroyVfxAfter(jumpModel, MASSIVE_GEEZER_BODY_SLAM_JUMP_VFX_LIFETIME_SECONDS)
 end
 
 function Handler:_spawnBodySlamRockDebris(impactCFrame: CFrame, radius: number)
@@ -176,9 +176,9 @@ function Handler:_impactMassiveGeezerBodySlam(record: ActiveRecord, event: Prese
 		groundSlamModel:PivotTo(payload.impactCFrame)
 		groundSlamModel.Parent = self:_ensureVisualFolder()
 
-		self:playAllSounds(groundSlamModel)
+		self:playAllSounds(groundSlamModel, scaleMultiplier)
 		self:emitEffectInstance(groundSlamModel, MASSIVE_GEEZER_BODY_SLAM_IMPACT_VFX_LIFETIME_SECONDS)
-		self:destroyAfter(groundSlamModel, MASSIVE_GEEZER_BODY_SLAM_IMPACT_VFX_LIFETIME_SECONDS)
+		self:destroyVfxAfter(groundSlamModel, MASSIVE_GEEZER_BODY_SLAM_IMPACT_VFX_LIFETIME_SECONDS)
 	end
 
 	local radius = math.max(1, tonumber(payload.radius) or 55)

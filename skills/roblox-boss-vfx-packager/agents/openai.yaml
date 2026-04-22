@@ -1,0 +1,4 @@
+interface:
+  display_name: "Roblox Boss VFX Packager"
+  short_description: "Package boss VFX into GameAssets"
+  default_prompt: "Use $roblox-boss-vfx-packager to package a staged boss ability VFX set into BossFight GameAssets and produce the Rojo implementation plan."

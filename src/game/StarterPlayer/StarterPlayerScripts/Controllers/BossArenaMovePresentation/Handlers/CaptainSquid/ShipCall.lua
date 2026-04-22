@@ -21,6 +21,14 @@ local SHIP_CALL_SHIP_MODEL_NAME = Constants.Vfx.SHIP_CALL_SHIP_MODEL_NAME
 
 local Handler = {}
 
+local function setVisualsEnabled(root: Instance, enabled: boolean)
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("ParticleEmitter") or descendant:IsA("Trail") or descendant:IsA("Beam") then
+			descendant.Enabled = enabled
+		end
+	end
+end
+
 function Handler:_updateShipCallMotion(record: ActiveRecord, nowServerTime: number)
 	local shipModel = record.shipModel
 	local shipMotion = record.shipMotion
@@ -33,10 +41,55 @@ function Handler:_updateShipCallMotion(record: ActiveRecord, nowServerTime: numb
 	shipModel:PivotTo(CFrame.new(currentPosition) * (shipMotion.startCFrame - shipMotion.startCFrame.Position))
 end
 
-function Handler:_shipShipCall(record: ActiveRecord, event: PresentationEvent)
+function Handler:_startShipCall(record: ActiveRecord, event: PresentationEvent)
 	local bossModel = event.bossModel
 	local bossLeftHand = self:resolveBossLeftHandPart(bossModel)
 	if bossModel == nil or bossModel.Parent == nil or bossLeftHand == nil then
+		self:_cleanupRecord(record)
+		return
+	end
+
+	local payload = event.payload
+	local leftHandSource = self:resolveBossVfxModel(
+		CAPTAIN_SQUID_VFX_FOLDER_NAME,
+		CAPTAIN_SQUID_SHIP_CALL_VFX_NAME,
+		SHIP_CALL_LEFT_HAND_MODEL_NAME
+	)
+	if leftHandSource == nil then
+		self:warnWithPrefix("Ship Call left-hand VFX model is missing from ReplicatedStorage.GameAssets.VFX.")
+		self:_cleanupRecord(record)
+		return
+	end
+
+	local castFolder = self:_ensureCastFolder(record)
+	local leftHandModel = leftHandSource:Clone()
+	local scaleMultiplier = math.max(0.1, tonumber(payload and payload.scaleMultiplier) or 1)
+	leftHandModel:ScaleTo(scaleMultiplier)
+	self:prepareAttachedEffectModel(leftHandModel)
+	self:scaleAttachedSounds(leftHandModel, scaleMultiplier)
+
+	if self:resolveEffectModelPrimaryPart(leftHandModel) == nil then
+		self:warnWithPrefix("Ship Call left-hand VFX model is missing BasePart configuration.")
+		self:_cleanupRecord(record)
+		return
+	end
+
+	leftHandModel.Parent = castFolder
+	record.leftHandModel = leftHandModel
+
+	if not self:attachEffectModel(leftHandModel, bossLeftHand) then
+		self:warnWithPrefix("Ship Call left-hand VFX model is missing BasePart configuration.")
+		self:_cleanupRecord(record)
+		return
+	end
+
+	self:playAllSounds(leftHandModel, scaleMultiplier)
+	self:emitVisuals(self:collectEmittableVisuals(leftHandModel))
+end
+
+function Handler:_shipShipCall(record: ActiveRecord, event: PresentationEvent)
+	local bossModel = event.bossModel
+	if bossModel == nil or bossModel.Parent == nil then
 		self:_cleanupRecord(record)
 		return
 	end
@@ -54,41 +107,30 @@ function Handler:_shipShipCall(record: ActiveRecord, event: PresentationEvent)
 		return
 	end
 
-	local leftHandSource = self:resolveBossVfxModel(
-		CAPTAIN_SQUID_VFX_FOLDER_NAME,
-		CAPTAIN_SQUID_SHIP_CALL_VFX_NAME,
-		SHIP_CALL_LEFT_HAND_MODEL_NAME
-	)
 	local shipSource = self:resolveBossVfxModel(
 		CAPTAIN_SQUID_VFX_FOLDER_NAME,
 		CAPTAIN_SQUID_SHIP_CALL_VFX_NAME,
 		SHIP_CALL_SHIP_MODEL_NAME
 	)
-	if leftHandSource == nil or shipSource == nil then
-		self:warnWithPrefix("Ship Call VFX models are missing from ReplicatedStorage.GameAssets.VFX.")
+	if shipSource == nil then
+		self:warnWithPrefix("Ship Call ship VFX model is missing from ReplicatedStorage.GameAssets.VFX.")
 		self:_cleanupRecord(record)
 		return
 	end
 
 	local castFolder = self:_ensureCastFolder(record)
-	local leftHandModel = leftHandSource:Clone()
 	local shipModel = shipSource:Clone()
-	leftHandModel:ScaleTo(scaleMultiplier)
 	shipModel:ScaleTo(scaleMultiplier)
-	self:prepareAttachedEffectModel(leftHandModel)
 	self:prepareMovingEffectModel(shipModel)
-	self:scaleAttachedSounds(leftHandModel, scaleMultiplier)
 	self:scaleAttachedSounds(shipModel, scaleMultiplier)
 
-	if self:resolveEffectModelPrimaryPart(leftHandModel) == nil or self:resolveEffectModelPrimaryPart(shipModel) == nil then
-		self:warnWithPrefix("Ship Call VFX models are missing BasePart configuration.")
+	if self:resolveEffectModelPrimaryPart(shipModel) == nil then
+		self:warnWithPrefix("Ship Call ship VFX model is missing BasePart configuration.")
 		self:_cleanupRecord(record)
 		return
 	end
 
-	leftHandModel.Parent = castFolder
 	shipModel.Parent = castFolder
-	record.leftHandModel = leftHandModel
 	record.shipModel = shipModel
 	record.shipMotion = {
 		startCFrame = startCFrame,
@@ -97,24 +139,28 @@ function Handler:_shipShipCall(record: ActiveRecord, event: PresentationEvent)
 		startedAtServerTime = if typeof(event.serverTime) == "number" then event.serverTime else self.Workspace:GetServerTimeNow(),
 	}
 
-	if not self:attachEffectModel(leftHandModel, bossLeftHand) then
-		self:warnWithPrefix("Ship Call left-hand VFX model is missing BasePart configuration.")
-		self:_cleanupRecord(record)
-		return
-	end
-
 	shipModel:PivotTo(startCFrame)
 	self:enableParticleEmitters(shipModel)
-	self:playAllSounds(leftHandModel)
-	self:playAllSounds(shipModel)
-	self:emitVisuals(self:collectEmittableVisuals(leftHandModel))
+	self:playAllSounds(shipModel, scaleMultiplier)
 	self:emitVisuals(self:collectEmittableVisuals(shipModel))
 	self:_updateShipCallMotion(record, self.Workspace:GetServerTimeNow())
+
+	local disableVisualsAfterSeconds = tonumber(payload.disableVisualsAfterSeconds)
+	if disableVisualsAfterSeconds ~= nil and disableVisualsAfterSeconds >= 0 then
+		task.delay(disableVisualsAfterSeconds, function()
+			if shipModel.Parent == nil then
+				return
+			end
+
+			setVisualsEnabled(shipModel, false)
+		end)
+	end
 end
 
 Handler.moduleIds = {
 	SHIP_CALL_MODULE_ID,
 }
+Handler.start = Handler._startShipCall
 Handler.update = Handler._updateShipCallMotion
 Handler.actions = {
 	ship = Handler._shipShipCall,

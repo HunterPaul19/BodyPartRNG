@@ -7,7 +7,6 @@ local BossMoveTags = {
 }
 
 BossMoveTags.Required = table.freeze({
-	BossMoveTags.M1,
 	BossMoveTags.CloseSingle,
 	BossMoveTags.RangedSingle,
 	BossMoveTags.AOE,

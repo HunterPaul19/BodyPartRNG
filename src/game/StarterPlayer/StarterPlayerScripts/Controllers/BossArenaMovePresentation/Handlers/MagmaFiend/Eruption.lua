@@ -92,8 +92,8 @@ function Handler:_startMagmaEruption(record: ActiveRecord, event: PresentationEv
 		return
 	end
 
-	self:playAllSounds(leftHandModel)
-	self:playAllSounds(rightHandModel)
+	self:playTimedSounds(leftHandModel, scaleMultiplier)
+	self:playTimedSounds(rightHandModel, scaleMultiplier)
 	self:emitVisuals(self:collectEmittableVisuals(leftHandModel))
 	self:emitVisuals(self:collectEmittableVisuals(rightHandModel))
 end
@@ -161,9 +161,9 @@ function Handler:_eruptMagmaEruption(record: ActiveRecord, event: PresentationEv
 		floorModel:PivotTo(pointData.floorCFrame)
 		floorModel.Parent = self:_ensureVisualFolder()
 
-		self:playAllSounds(floorModel)
+		self:playTimedSounds(floorModel, math.max(0.1, tonumber(payload.scaleMultiplier) or 1))
 		self:emitEffectInstance(floorModel, MAGMA_ERUPTION_VFX_LIFETIME_SECONDS)
-		self:destroyAfter(floorModel, MAGMA_ERUPTION_VFX_LIFETIME_SECONDS)
+		self:destroyVfxAfter(floorModel, MAGMA_ERUPTION_VFX_LIFETIME_SECONDS)
 	end
 
 	self:_cleanupRecord(record)

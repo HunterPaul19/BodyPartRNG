@@ -10,6 +10,9 @@ local Config = {
 	Folders = {
 		VisualFolderName = "BossMoveClientEffects",
 	},
+	Cleanup = {
+		VfxCleanupDelaySeconds = 3,
+	},
 	Shake = {
 		ImpactMagnitude = 1.15,
 		ImpactRoughness = 11,

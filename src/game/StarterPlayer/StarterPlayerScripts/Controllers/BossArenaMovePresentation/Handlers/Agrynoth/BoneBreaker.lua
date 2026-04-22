@@ -55,6 +55,7 @@ function Handler:_startAgrynothBoneBreaker(record: ActiveRecord, event: Presenta
 	end
 
 	local castFolder = self:_ensureCastFolder(record)
+	local scaleMultiplier = math.max(0.1, tonumber(event.payload and event.payload.scaleMultiplier) or 1)
 	local leftHandModel = leftHandSource:Clone()
 	self:prepareAttachedEffectModel(leftHandModel)
 	leftHandModel.Parent = castFolder
@@ -66,13 +67,13 @@ function Handler:_startAgrynothBoneBreaker(record: ActiveRecord, event: Presenta
 		return
 	end
 
-	self:playAllSounds(leftHandModel)
+	self:playAllSounds(leftHandModel, scaleMultiplier)
 	self:emitEffectInstance(leftHandModel)
 
 	local effectFolder = self:resolveBossVfxFolder(AGRYNOTH_VFX_FOLDER_NAME, AGRYNOTH_BONE_BREAKER_VFX_NAME)
 	local soundsFolder = effectFolder and effectFolder:FindFirstChild(AGRYNOTH_BONE_BREAKER_SOUNDS_FOLDER_NAME)
 	if soundsFolder then
-		self:playDelayedSoundClones(soundsFolder, castFolder)
+		self:playDelayedSoundClones(soundsFolder, castFolder, scaleMultiplier)
 	end
 end
 
@@ -83,6 +84,7 @@ function Handler:_impactAgrynothBoneBreaker(record: ActiveRecord, event: Present
 	end
 
 	local hitIndex = math.clamp(math.floor(tonumber(payload.hitIndex) or 1), 1, 3)
+	local soundScaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1) * AGRYNOTH_BONE_BREAKER_EXPLOSION_SCALE
 	local explosionName = string.format("%s%d", AGRYNOTH_BONE_BREAKER_EXPLOSION_NAME_PREFIX, hitIndex)
 	local explosionSource = self:resolveBossVfxModel(AGRYNOTH_VFX_FOLDER_NAME, AGRYNOTH_BONE_BREAKER_VFX_NAME, explosionName)
 	if explosionSource == nil then
@@ -103,9 +105,9 @@ function Handler:_impactAgrynothBoneBreaker(record: ActiveRecord, event: Present
 	explosionModel:PivotTo(explosionModel:GetPivot() + Vector3.new(0, groundCFrame.Position.Y - bottomY, 0))
 	explosionModel.Parent = self:_ensureVisualFolder()
 
-	self:playAllSounds(explosionModel)
+	self:playAllSounds(explosionModel, soundScaleMultiplier)
 	self:emitEffectInstance(explosionModel, AGRYNOTH_BONE_BREAKER_EXPLOSION_LIFETIME_SECONDS)
-	self:destroyAfter(explosionModel, AGRYNOTH_BONE_BREAKER_EXPLOSION_LIFETIME_SECONDS)
+	self:destroyVfxAfter(explosionModel, AGRYNOTH_BONE_BREAKER_EXPLOSION_LIFETIME_SECONDS)
 	self:_shakeImpact()
 end
 

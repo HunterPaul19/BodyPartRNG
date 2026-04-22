@@ -48,9 +48,9 @@ function Handler:_stompMagmaStomp(record: ActiveRecord, event: PresentationEvent
 	floorModel:PivotTo(payload.impactCFrame)
 	floorModel.Parent = self:_ensureVisualFolder()
 
-	self:playAllSounds(floorModel)
+	self:playAllSounds(floorModel, scaleMultiplier)
 	self:emitEffectInstance(floorModel, MAGMA_STOMP_VFX_LIFETIME_SECONDS)
-	self:destroyAfter(floorModel, MAGMA_STOMP_VFX_LIFETIME_SECONDS)
+	self:destroyVfxAfter(floorModel, MAGMA_STOMP_VFX_LIFETIME_SECONDS)
 end
 
 Handler.moduleIds = {

@@ -61,7 +61,7 @@ function Handler:_stompAgrynothStomp(record: ActiveRecord, event: PresentationEv
 	end
 
 	effectInstance.Parent = self:_ensureCastFolder(record)
-	self:playAllSounds(effectInstance)
+	self:playAllSounds(effectInstance, scaleMultiplier)
 	self:emitEffectInstance(effectInstance, AGRYNOTH_STOMP_VFX_LIFETIME_SECONDS)
 	self:_shakeImpact()
 end

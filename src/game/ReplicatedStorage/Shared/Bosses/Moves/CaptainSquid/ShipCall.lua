@@ -10,10 +10,11 @@ local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockbac
 
 local DAMAGE = 20
 local SHIP_SPEED_STUDS_PER_SECOND = 150
+local SHIP_SPAWN_DELAY_SECONDS = 1.5
+local SHIP_VFX_DISABLE_DELAY_SECONDS = 2.7 - SHIP_SPAWN_DELAY_SECONDS
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "CaptainSquid"
 local ANIMATION_NAME = "ShipCall"
-local SHIP_MARKER_NAME = "Ship"
 local VFX_FOLDER_NAME = "VFX"
 local CAPTAIN_SQUID_VFX_FOLDER_NAME = "CaptainSquid"
 local SHIP_CALL_VFX_FOLDER_NAME = "ShipCall"
@@ -247,7 +248,6 @@ function ShipCall.StartCast(context)
 	local cancelled = false
 	local cleanedUp = false
 	local shipSpawned = false
-	local warnedMissingMarker = false
 	local recoveryEndsAt = nil :: number?
 	local presentationStopped = false
 	local shipStartCFrame = nil :: CFrame?
@@ -325,19 +325,6 @@ function ShipCall.StartCast(context)
 		return CFrame.new(currentPosition) * (shipStartCFrame - shipStartCFrame.Position)
 	end
 
-	local function warnMissingMarker()
-		if warnedMissingMarker or cancelled then
-			return
-		end
-
-		warnedMissingMarker = true
-		warn(string.format(
-			"[ShipCall] Animation '%s' completed without firing the '%s' marker.",
-			animationInstance.Name,
-			SHIP_MARKER_NAME
-		))
-	end
-
 	local function spawnShip()
 		if cancelled or shipSpawned or bossModel.Parent == nil or bossRootPart.Parent == nil then
 			return
@@ -363,6 +350,7 @@ function ShipCall.StartCast(context)
 			speed = SHIP_SPEED_STUDS_PER_SECOND,
 			shipSize = shipHitboxSize,
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
+			disableVisualsAfterSeconds = SHIP_VFX_DISABLE_DELAY_SECONDS,
 		})
 
 		local shipHitbox
@@ -449,9 +437,7 @@ function ShipCall.StartCast(context)
 		end)
 	end
 
-	track = profile:PlayAnimation(animationInstance, Enum.AnimationPriority.Action, 1, {
-		Ship = spawnShip,
-	}, ANIMATION_FADE_SECONDS)
+	track = profile:PlayAnimation(animationInstance, Enum.AnimationPriority.Action, 1, nil, ANIMATION_FADE_SECONDS)
 	if track == nil then
 		warn("[ShipCall] Failed to play ShipCall animation.")
 		return nil
@@ -460,19 +446,10 @@ function ShipCall.StartCast(context)
 	context.EmitPresentation("start", {
 		scaleMultiplier = context.bossDefinition.scaleMultiplier,
 	})
+	task.delay(SHIP_SPAWN_DELAY_SECONDS, spawnShip)
 	track.Looped = false
 	stoppedConnection = track.Stopped:Connect(function()
 		disconnectStoppedConnection()
-		if cancelled then
-			return
-		end
-
-		if shipSpawned then
-			return
-		end
-
-		warnMissingMarker()
-		finishAttack()
 	end)
 
 	return {

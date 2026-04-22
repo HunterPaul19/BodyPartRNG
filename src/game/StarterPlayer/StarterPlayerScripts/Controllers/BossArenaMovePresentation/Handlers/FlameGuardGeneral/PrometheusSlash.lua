@@ -36,7 +36,7 @@ function Handler:_startPrometheusSlash(record: ActiveRecord, event: Presentation
 	self:_prepareAttachedCastModels(record, event, "Prometheus Slash", PROMETHEUS_SLASH_VFX_NAME, {
 		enableParticles = true,
 		scaleRootSounds = true,
-		playAllSounds = true,
+		playTimedSounds = true,
 	})
 end
 
@@ -93,7 +93,7 @@ function Handler:_impactPrometheusSlash(record: ActiveRecord, event: Presentatio
 	}
 
 	slashModel.Parent = castFolder
-	self:playAllSounds(slashModel)
+	self:playAllSounds(slashModel, slashScale)
 	self:emitVisuals(self:collectEmittableVisuals(slashModel))
 	self:_updatePrometheusSlashMotion(record, self.Workspace:GetServerTimeNow())
 end

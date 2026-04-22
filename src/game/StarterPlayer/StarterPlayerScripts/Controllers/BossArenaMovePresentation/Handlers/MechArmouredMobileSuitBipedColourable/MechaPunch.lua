@@ -83,8 +83,8 @@ function Handler:_startMechaPunch(record: ActiveRecord, event: PresentationEvent
 		return
 	end
 
-	self:playAllSounds(rootPartModel)
-	self:playAllSounds(rightHandModel)
+	self:playTimedSounds(rootPartModel, scaleMultiplier)
+	self:playTimedSounds(rightHandModel, scaleMultiplier)
 	self:emitVisuals(self:collectEmittableVisuals(rootPartModel))
 	self:emitVisuals(self:collectEmittableVisuals(rightHandModel))
 end
@@ -124,9 +124,9 @@ function Handler:_impactMechaPunch(record: ActiveRecord, event: PresentationEven
 	end
 
 	explosionInstance.Parent = self:_ensureVisualFolder()
-	self:playAllSounds(explosionInstance)
+	self:playAllSounds(explosionInstance, scaleMultiplier)
 	self:emitEffectInstance(explosionInstance, MECHA_PUNCH_EXPLOSION_VFX_LIFETIME_SECONDS)
-	self:destroyAfter(explosionInstance, MECHA_PUNCH_EXPLOSION_VFX_LIFETIME_SECONDS)
+	self:destroyVfxAfter(explosionInstance, MECHA_PUNCH_EXPLOSION_VFX_LIFETIME_SECONDS)
 	self:_shakeImpact()
 end
 

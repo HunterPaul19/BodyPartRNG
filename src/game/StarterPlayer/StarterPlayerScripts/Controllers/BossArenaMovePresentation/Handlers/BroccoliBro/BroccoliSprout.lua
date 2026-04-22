@@ -8,22 +8,94 @@ local Constants = {
 	Vfx = {
 		BROCCOLI_BRO_VFX_FOLDER_NAME = "BroccoliBro",
 		BROCCOLI_SPROUT_FLOOR_VFX_NAME = "Floor",
+		BROCCOLI_SPROUT_LEFT_HAND_VFX_NAME = "LeftHand",
+		BROCCOLI_SPROUT_RIGHT_HAND_VFX_NAME = "RightHand",
 		BROCCOLI_SPROUT_TREE_VFX_NAME = "Broccoli",
 		BROCCOLI_SPROUT_VFX_NAME = "BroccoliSprout",
 	},
 	Timing = {
+		BROCCOLI_SPROUT_HAND_VFX_LIFETIME_SECONDS = 3,
 		BROCCOLI_SPROUT_VFX_LIFETIME_SECONDS = 3,
 	},
 }
 
 local BROCCOLI_BRO_VFX_FOLDER_NAME = Constants.Vfx.BROCCOLI_BRO_VFX_FOLDER_NAME
 local BROCCOLI_SPROUT_FLOOR_VFX_NAME = Constants.Vfx.BROCCOLI_SPROUT_FLOOR_VFX_NAME
+local BROCCOLI_SPROUT_HAND_VFX_LIFETIME_SECONDS = Constants.Timing.BROCCOLI_SPROUT_HAND_VFX_LIFETIME_SECONDS
+local BROCCOLI_SPROUT_LEFT_HAND_VFX_NAME = Constants.Vfx.BROCCOLI_SPROUT_LEFT_HAND_VFX_NAME
 local BROCCOLI_SPROUT_MODULE_ID = Constants.ModuleIds.BROCCOLI_SPROUT_MODULE_ID
+local BROCCOLI_SPROUT_RIGHT_HAND_VFX_NAME = Constants.Vfx.BROCCOLI_SPROUT_RIGHT_HAND_VFX_NAME
 local BROCCOLI_SPROUT_TREE_VFX_NAME = Constants.Vfx.BROCCOLI_SPROUT_TREE_VFX_NAME
 local BROCCOLI_SPROUT_VFX_LIFETIME_SECONDS = Constants.Timing.BROCCOLI_SPROUT_VFX_LIFETIME_SECONDS
 local BROCCOLI_SPROUT_VFX_NAME = Constants.Vfx.BROCCOLI_SPROUT_VFX_NAME
 
 local Handler = {}
+
+function Handler:_attachBroccoliSproutHandEffect(
+	record: ActiveRecord,
+	event: PresentationEvent,
+	effectName: string,
+	targetPart: BasePart?,
+	recordFieldName: string
+)
+	local bossModel = record.bossModel or event.bossModel
+	if bossModel == nil or bossModel.Parent == nil or targetPart == nil or targetPart.Parent == nil then
+		return
+	end
+
+	local sourceModel = self:resolveBossVfxModel(
+		BROCCOLI_BRO_VFX_FOLDER_NAME,
+		BROCCOLI_SPROUT_VFX_NAME,
+		effectName
+	)
+	if sourceModel == nil then
+		self:warnWithPrefix(string.format(
+			"Broccoli Sprout %s VFX model is missing from ReplicatedStorage.GameAssets.VFX.",
+			effectName
+		))
+		return
+	end
+
+	local scaleMultiplier = math.max(0.1, tonumber(event.payload and event.payload.scaleMultiplier) or 1)
+	local effectModel = sourceModel:Clone()
+	effectModel:ScaleTo(scaleMultiplier)
+	self:prepareAttachedEffectModel(effectModel)
+	self:scaleAttachedSounds(effectModel, scaleMultiplier)
+	effectModel.Parent = self:_ensureCastFolder(record)
+
+	if not self:attachEffectModel(effectModel, targetPart) then
+		self:warnWithPrefix(string.format("Broccoli Sprout %s VFX model cannot be attached.", effectName))
+		effectModel:Destroy()
+		return
+	end
+
+	record[recordFieldName] = effectModel
+	self:playAllSounds(effectModel, scaleMultiplier)
+	self:emitEffectInstance(effectModel, BROCCOLI_SPROUT_HAND_VFX_LIFETIME_SECONDS)
+	self:destroyVfxAfter(effectModel, BROCCOLI_SPROUT_HAND_VFX_LIFETIME_SECONDS)
+end
+
+function Handler:_startBroccoliSprout(record: ActiveRecord, event: PresentationEvent)
+	local bossModel = record.bossModel or event.bossModel
+	if bossModel == nil or bossModel.Parent == nil then
+		return
+	end
+
+	self:_attachBroccoliSproutHandEffect(
+		record,
+		event,
+		BROCCOLI_SPROUT_LEFT_HAND_VFX_NAME,
+		self:resolveBossLeftHandPart(bossModel),
+		"leftHandModel"
+	)
+	self:_attachBroccoliSproutHandEffect(
+		record,
+		event,
+		BROCCOLI_SPROUT_RIGHT_HAND_VFX_NAME,
+		self:resolveBossRightHandPart(bossModel),
+		"rightHandModel"
+	)
+end
 
 function Handler:_clearBroccoliSproutWarnings(record: ActiveRecord)
 	if record.broccoliSproutWarningHandles == nil then
@@ -131,9 +203,9 @@ function Handler:_sproutBroccoliSprout(record: ActiveRecord, event: Presentation
 			continue
 		end
 		floorInstance.Parent = self:_ensureVisualFolder()
-		self:playAllSounds(floorInstance)
+		self:playTimedSounds(floorInstance, scaleMultiplier)
 		self:emitEffectInstance(floorInstance, BROCCOLI_SPROUT_VFX_LIFETIME_SECONDS)
-		self:destroyAfter(floorInstance, BROCCOLI_SPROUT_VFX_LIFETIME_SECONDS)
+		self:destroyVfxAfter(floorInstance, BROCCOLI_SPROUT_VFX_LIFETIME_SECONDS)
 
 		local treeStartCFrame = pointData.treeStartCFrame
 		local treeEndCFrame = pointData.treeEndCFrame
@@ -151,7 +223,7 @@ function Handler:_sproutBroccoliSprout(record: ActiveRecord, event: Presentation
 		end
 
 		treeModel.Parent = castFolder
-		self:playAllSounds(treeModel)
+		self:playTimedSounds(treeModel, scaleMultiplier)
 		self:enableVfxDescendants(treeModel)
 		self:emitVisuals(self:collectEmittableVisuals(treeModel))
 		self:_tweenBroccoliSproutTree(record, treeModel, treeStartCFrame, treeEndCFrame, riseDurationSeconds)
@@ -193,6 +265,7 @@ end
 Handler.moduleIds = {
 	BROCCOLI_SPROUT_MODULE_ID,
 }
+Handler.start = Handler._startBroccoliSprout
 Handler.actions = {
 	warn = Handler._warnBroccoliSprout,
 	sprout = Handler._sproutBroccoliSprout,

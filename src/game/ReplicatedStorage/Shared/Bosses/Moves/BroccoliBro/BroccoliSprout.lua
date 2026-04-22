@@ -7,7 +7,7 @@ local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 
 local DAMAGE = 22
-local WARNING_SECONDS = 1.0
+local WARNING_SECONDS = 107 / 60
 local RISE_DURATION_SECONDS = 0.45
 local TREE_HOLD_SECONDS = 0.75
 local TREE_SCALE_MULTIPLIER = 4.5

@@ -78,9 +78,9 @@ function Handler:_spawnAgrynothWarCall(record: ActiveRecord, event: Presentation
 		headModel.Parent = castFolder
 		self:scaleAttachedSounds(headModel, bossScale)
 		if self:attachEffectModel(headModel, bossHead) then
-			self:playAllSounds(headModel)
+			self:playAllSounds(headModel, bossScale)
 			self:emitEffectInstance(headModel, AGRYNOTH_WAR_CALL_HEAD_LIFETIME_SECONDS)
-			self:destroyAfter(headModel, AGRYNOTH_WAR_CALL_HEAD_LIFETIME_SECONDS)
+			self:destroyVfxAfter(headModel, AGRYNOTH_WAR_CALL_HEAD_LIFETIME_SECONDS)
 		else
 			self:warnWithPrefix("Agrynoth War Call Head VFX model is missing BasePart configuration.")
 			headModel:Destroy()
@@ -120,9 +120,9 @@ function Handler:_spawnAgrynothWarCall(record: ActiveRecord, event: Presentation
 			local spawnEffect = spawnSource:Clone()
 			if self:_placeWarCallEffectInstance(spawnEffect, spawnCFrame, minionScale) then
 				spawnEffect.Parent = castFolder
-				self:playAllSounds(spawnEffect)
+				self:playAllSounds(spawnEffect, minionScale)
 				self:emitEffectInstance(spawnEffect, AGRYNOTH_WAR_CALL_SPAWN_LIFETIME_SECONDS)
-				self:destroyAfter(spawnEffect, AGRYNOTH_WAR_CALL_SPAWN_LIFETIME_SECONDS)
+			self:destroyVfxAfter(spawnEffect, AGRYNOTH_WAR_CALL_SPAWN_LIFETIME_SECONDS)
 			else
 				self:warnWithPrefix("Agrynoth War Call Spawn VFX instance cannot be pivoted.")
 				spawnEffect:Destroy()
@@ -141,9 +141,9 @@ function Handler:_spawnAgrynothWarCall(record: ActiveRecord, event: Presentation
 			startModel.Parent = castFolder
 			self:scaleAttachedSounds(startModel, minionScale)
 			if self:attachEffectModel(startModel, minionRootPart) then
-				self:playAllSounds(startModel)
+				self:playAllSounds(startModel, minionScale)
 				self:emitEffectInstance(startModel, AGRYNOTH_WAR_CALL_START_LIFETIME_SECONDS)
-				self:destroyAfter(startModel, AGRYNOTH_WAR_CALL_START_LIFETIME_SECONDS)
+			self:destroyVfxAfter(startModel, AGRYNOTH_WAR_CALL_START_LIFETIME_SECONDS)
 			else
 				self:warnWithPrefix("Agrynoth War Call Start VFX model is missing BasePart configuration.")
 				startModel:Destroy()

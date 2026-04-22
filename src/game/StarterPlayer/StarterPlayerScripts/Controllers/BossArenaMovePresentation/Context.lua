@@ -15,6 +15,30 @@ local Config = require(script.Parent.Config)
 type ActiveRecord = any
 type PresentationEvent = any
 
+local CAT_MECH_ELITE_RAINBOW_BLAST_MODULE_ID = "Moves.CatMechElite.RainbowBlast"
+
+local function setVfxDescendantsEnabled(root: Instance?, enabled: boolean)
+	if root == nil then
+		return
+	end
+
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("ParticleEmitter") or descendant:IsA("Beam") or descendant:IsA("Trail") then
+			descendant.Enabled = enabled
+		end
+	end
+end
+
+local function isRainbowBlastRecord(record: ActiveRecord): boolean
+	return record.moduleId == CAT_MECH_ELITE_RAINBOW_BLAST_MODULE_ID
+		or record.rainbowBlastBeamModel ~= nil
+		or record.rainbowBlastEndModel ~= nil
+		or record.rainbowBlastTargetModel ~= nil
+		or record.rainbowBlastPlayerGlintModel ~= nil
+		or record.rainbowBlastBeamMotion ~= nil
+		or record.rainbowBlastTorsoAim ~= nil
+end
+
 local Context = {}
 Context.__index = Context
 
@@ -53,12 +77,33 @@ function Context:initializeEmitModule()
 end
 
 function Context:emitEffectInstance(instance: Instance, duration: number?)
+	local emitDuration = duration
+	if emitDuration ~= nil then
+		emitDuration = math.max(0, emitDuration) + Config.Cleanup.VfxCleanupDelaySeconds
+	end
+
 	local ok, err = pcall(function()
-		EmitModule.emit(instance, duration)
+		EmitModule.emit(instance, emitDuration)
 	end)
 	if not ok then
 		self:warnWithPrefix(string.format("Failed to emit boss move effect instance: %s", tostring(err)))
 	end
+end
+
+function Context:emitEffectInstanceAfter(instance: Instance, duration: number?, delaySeconds: number?)
+	local resolvedDelay = math.max(0, tonumber(delaySeconds) or 0)
+	if resolvedDelay <= 0 then
+		self:emitEffectInstance(instance, duration)
+		return
+	end
+
+	task.delay(resolvedDelay, function()
+		if instance.Parent == nil then
+			return
+		end
+
+		self:emitEffectInstance(instance, duration)
+	end)
 end
 
 function Context:resolveBossHandlePart(bossModel: Model?): BasePart?
@@ -87,6 +132,11 @@ function Context:resolveBossRootPart(bossModel: Model?): BasePart?
 	local rootPart = bossModel:FindFirstChild("HumanoidRootPart")
 	if rootPart and rootPart:IsA("BasePart") then
 		return rootPart
+	end
+
+	local recursiveRootPart = bossModel:FindFirstChild("HumanoidRootPart", true)
+	if recursiveRootPart and recursiveRootPart:IsA("BasePart") then
+		return recursiveRootPart
 	end
 
 	local primaryPart = bossModel.PrimaryPart
@@ -293,6 +343,11 @@ function Context:destroyAfter(instance: Instance?, delaySeconds: number)
 	end)
 end
 
+function Context:destroyVfxAfter(instance: Instance?, activeSeconds: number?)
+	local delaySeconds = math.max(0, tonumber(activeSeconds) or 0) + Config.Cleanup.VfxCleanupDelaySeconds
+	self:destroyAfter(instance, delaySeconds)
+end
+
 function Context:resolveFireBurstRingSize(outerRadius: number, templatePart: BasePart): Vector3
 	local diameter = math.max(0, outerRadius * 2)
 	local height = math.max(0.05, templatePart.Size.Y)
@@ -376,10 +431,63 @@ function Context:attachEffectModel(effectModel: Model, targetPart: BasePart)
 	return true
 end
 
-function Context:scaleAttachedSounds(root: Instance, scaleMultiplier: number)
+local SOUND_BASE_EMITTER_SIZE_ATTRIBUTE = "BossAudioBaseEmitterSize"
+local SOUND_BASE_ROLL_OFF_MIN_DISTANCE_ATTRIBUTE = "BossAudioBaseRollOffMinDistance"
+local SOUND_BASE_ROLL_OFF_MAX_DISTANCE_ATTRIBUTE = "BossAudioBaseRollOffMaxDistance"
+
+local function normalizeSoundScale(scaleMultiplier: number?): number
+	return math.max(0.1, tonumber(scaleMultiplier) or 1)
+end
+
+local function resolveRootSoundScale(root: Instance, fallbackScale: number?): number
+	if fallbackScale ~= nil then
+		return normalizeSoundScale(fallbackScale)
+	end
+
+	if root:IsA("Model") then
+		local ok, scale = pcall(function()
+			return root:GetScale()
+		end)
+		if ok then
+			return normalizeSoundScale(scale)
+		end
+	end
+
+	return 1
+end
+
+function Context:scaleSound(sound: Sound, scaleMultiplier: number?)
+	local resolvedScale = normalizeSoundScale(scaleMultiplier)
+	local baseEmitterSize = tonumber(sound:GetAttribute(SOUND_BASE_EMITTER_SIZE_ATTRIBUTE))
+	local baseRollOffMinDistance = tonumber(sound:GetAttribute(SOUND_BASE_ROLL_OFF_MIN_DISTANCE_ATTRIBUTE))
+	local baseRollOffMaxDistance = tonumber(sound:GetAttribute(SOUND_BASE_ROLL_OFF_MAX_DISTANCE_ATTRIBUTE))
+
+	if baseEmitterSize == nil then
+		baseEmitterSize = sound.EmitterSize
+		sound:SetAttribute(SOUND_BASE_EMITTER_SIZE_ATTRIBUTE, baseEmitterSize)
+	end
+	if baseRollOffMinDistance == nil then
+		baseRollOffMinDistance = sound.RollOffMinDistance
+		sound:SetAttribute(SOUND_BASE_ROLL_OFF_MIN_DISTANCE_ATTRIBUTE, baseRollOffMinDistance)
+	end
+	if baseRollOffMaxDistance == nil then
+		baseRollOffMaxDistance = sound.RollOffMaxDistance
+		sound:SetAttribute(SOUND_BASE_ROLL_OFF_MAX_DISTANCE_ATTRIBUTE, baseRollOffMaxDistance)
+	end
+
+	sound.EmitterSize = baseEmitterSize * resolvedScale
+	sound.RollOffMinDistance = baseRollOffMinDistance * resolvedScale
+	sound.RollOffMaxDistance = baseRollOffMaxDistance * resolvedScale
+end
+
+function Context:scaleAttachedSounds(root: Instance, scaleMultiplier: number?)
+	local resolvedScale = resolveRootSoundScale(root, scaleMultiplier)
+	if root:IsA("Sound") then
+		self:scaleSound(root, resolvedScale)
+	end
 	for _, descendant in ipairs(root:GetDescendants()) do
 		if descendant:IsA("Sound") then
-			descendant.EmitterSize *= scaleMultiplier
+			self:scaleSound(descendant, resolvedScale)
 		end
 	end
 end
@@ -409,24 +517,152 @@ function Context:emitVisuals(instances: { Instance })
 	end
 end
 
-function Context:playSound(sound: Sound?)
+function Context:emitVisualsAfter(instances: { Instance }, delaySeconds: number?)
+	local resolvedDelay = math.max(0, tonumber(delaySeconds) or 0)
+	if resolvedDelay <= 0 then
+		self:emitVisuals(instances)
+		return
+	end
+
+	task.delay(resolvedDelay, function()
+		local liveInstances = {}
+		for _, instance in ipairs(instances) do
+			if instance.Parent ~= nil then
+				table.insert(liveInstances, instance)
+			end
+		end
+
+		self:emitVisuals(liveInstances)
+	end)
+end
+
+function Context:playSound(sound: Sound?, scaleMultiplier: number?)
 	if sound == nil then
 		return
 	end
 
+	self:scaleSound(sound, scaleMultiplier)
 	sound.TimePosition = 0
 	sound:Play()
 end
 
-function Context:playAllSounds(root: Instance)
+local function getNumberAttribute(instance: Instance, primaryName: string, fallbackName: string?): number?
+	local primaryValue = tonumber(instance:GetAttribute(primaryName))
+	if primaryValue ~= nil then
+		return primaryValue
+	end
+
+	if fallbackName == nil then
+		return nil
+	end
+
+	return tonumber(instance:GetAttribute(fallbackName))
+end
+
+function Context:playSoundFromConfiguredPosition(sound: Sound?, scaleMultiplier: number?)
+	if sound == nil then
+		return
+	end
+
+	self:scaleSound(sound, scaleMultiplier)
+	local sourceStart = getNumberAttribute(sound, "SourceStart", "Offset")
+	if sourceStart == nil and sound.TimePosition > 0 then
+		sourceStart = sound.TimePosition
+	end
+
+	sound.TimePosition = math.max(0, sourceStart or 0)
+	sound:Play()
+end
+
+function Context:playTimedSound(sound: Sound?, scaleMultiplier: number?)
+	if sound == nil then
+		return
+	end
+
+	local resolvedScale = normalizeSoundScale(scaleMultiplier)
+	local delaySeconds = math.max(0, getNumberAttribute(sound, "Delay", "Start") or 0)
+	local sourceStart = getNumberAttribute(sound, "SourceStart", "Offset")
+	local sourceEnd = getNumberAttribute(sound, "SourceEnd", "End")
+	if sourceStart == nil and sound.TimePosition > 0 then
+		sourceStart = sound.TimePosition
+	end
+
+	task.delay(delaySeconds, function()
+		if sound.Parent == nil then
+			return
+		end
+
+		self:scaleSound(sound, resolvedScale)
+		if sourceStart ~= nil then
+			sound.TimePosition = math.max(0, sourceStart)
+		end
+
+		sound:Play()
+
+		if sourceEnd ~= nil and sourceEnd > 0 then
+			local stopDelay = math.max(0, sourceEnd - sound.TimePosition)
+			task.delay(stopDelay, function()
+				if sound.Parent ~= nil and sound.IsPlaying then
+					sound:Stop()
+				end
+			end)
+		end
+	end)
+end
+
+function Context:playAllSounds(root: Instance, scaleMultiplier: number?)
+	local resolvedScale = resolveRootSoundScale(root, scaleMultiplier)
+	if root:IsA("Sound") then
+		self:playSound(root, resolvedScale)
+	end
 	for _, descendant in ipairs(root:GetDescendants()) do
 		if descendant:IsA("Sound") then
-			self:playSound(descendant)
+			self:playSound(descendant, resolvedScale)
 		end
 	end
 end
 
-function Context:playDelayedSoundClones(sourceRoot: Instance, parent: Instance)
+function Context:playAllSoundsFromConfiguredPositions(root: Instance, scaleMultiplier: number?)
+	local resolvedScale = resolveRootSoundScale(root, scaleMultiplier)
+	if root:IsA("Sound") then
+		self:playSoundFromConfiguredPosition(root, resolvedScale)
+	end
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("Sound") then
+			self:playSoundFromConfiguredPosition(descendant, resolvedScale)
+		end
+	end
+end
+
+function Context:playTimedSounds(root: Instance, scaleMultiplier: number?)
+	local resolvedScale = resolveRootSoundScale(root, scaleMultiplier)
+	if root:IsA("Sound") then
+		self:playTimedSound(root, resolvedScale)
+	end
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("Sound") then
+			self:playTimedSound(descendant, resolvedScale)
+		end
+	end
+end
+
+function Context:playDelayedSoundClones(sourceRoot: Instance, parent: Instance, scaleMultiplier: number?)
+	local resolvedScale = resolveRootSoundScale(sourceRoot, scaleMultiplier)
+	if sourceRoot:IsA("Sound") then
+		local soundClone = sourceRoot:Clone()
+		soundClone.Parent = parent
+
+		local delaySeconds = math.max(0, tonumber(sourceRoot:GetAttribute("Delay")) or 0)
+		task.delay(delaySeconds, function()
+			if soundClone.Parent == nil then
+				return
+			end
+
+			self:playSound(soundClone, resolvedScale)
+			local cleanupDelay = math.max(1, tonumber(soundClone.TimeLength) or 0) + 1
+			self:destroyAfter(soundClone, cleanupDelay)
+		end)
+	end
 	for _, descendant in ipairs(sourceRoot:GetDescendants()) do
 		if not descendant:IsA("Sound") then
 			continue
@@ -441,7 +677,7 @@ function Context:playDelayedSoundClones(sourceRoot: Instance, parent: Instance)
 				return
 			end
 
-			self:playSound(soundClone)
+			self:playSound(soundClone, resolvedScale)
 			local cleanupDelay = math.max(1, tonumber(soundClone.TimeLength) or 0) + 1
 			self:destroyAfter(soundClone, cleanupDelay)
 		end)
@@ -679,25 +915,40 @@ function Context:_cleanupRecord(record: ActiveRecord?)
 		end
 		record.broccoliSproutTweenValues = nil
 	end
-	if record.castFolder and record.castFolder.Parent then
-		record.castFolder:Destroy()
+	if record.rainbowBlastTorsoAim then
+		local connection = record.rainbowBlastTorsoAim.connection
+		if connection and connection.Connected then
+			connection:Disconnect()
+		end
+
+		local waist = record.rainbowBlastTorsoAim.waist
+		if waist and waist.Parent ~= nil then
+			waist.Transform = CFrame.identity
+		end
+		record.rainbowBlastTorsoAim = nil
 	end
+	if isRainbowBlastRecord(record) then
+		setVfxDescendantsEnabled(record.castFolder, false)
+		setVfxDescendantsEnabled(record.rainbowBlastPlayerGlintModel, false)
+	end
+	self:destroyVfxAfter(record.castFolder, 0)
+	self:destroyVfxAfter(record.rainbowBlastPlayerGlintModel, 0)
 	record.missileBarrageProjectileModels = nil
 	record.missileBarrageProjectileMotions = nil
 	record.eatChickenBoneModels = nil
 	record.eatChickenBoneMotions = nil
+	record.rainbowBlastBeamModel = nil
+	record.rainbowBlastEndModel = nil
+	record.rainbowBlastTargetModel = nil
+	record.rainbowBlastPlayerGlintModel = nil
+	record.rainbowBlastBeamMotion = nil
+	record.rainbowBlastTorsoAim = nil
 end
 
 function Context:_removeAttachedCastModels(record: ActiveRecord)
-	if record.handleModel and record.handleModel.Parent then
-		record.handleModel:Destroy()
-	end
-	if record.upperTorsoModel and record.upperTorsoModel.Parent then
-		record.upperTorsoModel:Destroy()
-	end
-	if record.rootModel and record.rootModel.Parent then
-		record.rootModel:Destroy()
-	end
+	self:destroyVfxAfter(record.handleModel, 0)
+	self:destroyVfxAfter(record.upperTorsoModel, 0)
+	self:destroyVfxAfter(record.rootModel, 0)
 	record.handleModel = nil
 	record.upperTorsoModel = nil
 	record.rootModel = nil
@@ -720,7 +971,7 @@ function Context:_prepareAttachedCastModels(
 	event: PresentationEvent,
 	moveLabel: string,
 	effectFolderName: string,
-	options: { enableParticles: boolean?, scaleRootSounds: boolean?, playAllSounds: boolean? }?
+	options: { enableParticles: boolean?, scaleRootSounds: boolean?, playAllSounds: boolean?, playTimedSounds: boolean? }?
 ): boolean
 	local bossModel = event.bossModel
 	if bossModel == nil or bossModel.Parent == nil then
@@ -777,9 +1028,12 @@ function Context:_prepareAttachedCastModels(
 		return false
 	end
 
-	if options and options.playAllSounds then
-		self:playAllSounds(handleModel)
-		self:playAllSounds(rootModel)
+	if options and options.playTimedSounds then
+		self:playTimedSounds(handleModel, scaleMultiplier)
+		self:playTimedSounds(rootModel, scaleMultiplier)
+	elseif options and options.playAllSounds then
+		self:playAllSounds(handleModel, scaleMultiplier)
+		self:playAllSounds(rootModel, scaleMultiplier)
 	end
 
 	self:emitVisuals(self:collectEmittableVisuals(handleModel))

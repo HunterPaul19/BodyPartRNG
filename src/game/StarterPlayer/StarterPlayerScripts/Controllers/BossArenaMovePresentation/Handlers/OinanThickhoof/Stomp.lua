@@ -61,7 +61,7 @@ function Handler:_stompOinanStomp(record: ActiveRecord, event: PresentationEvent
 	end
 
 	effectInstance.Parent = self:_ensureCastFolder(record)
-	self:playAllSounds(effectInstance)
+	self:playAllSounds(effectInstance, scaleMultiplier)
 	self:emitEffectInstance(effectInstance, OINAN_THICKHOOF_STOMP_VFX_LIFETIME_SECONDS)
 	self:_shakeImpact()
 end

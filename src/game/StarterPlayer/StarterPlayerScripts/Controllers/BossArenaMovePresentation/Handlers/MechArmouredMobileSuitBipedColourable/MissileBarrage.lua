@@ -8,8 +8,10 @@ local Constants = {
 	},
 	Vfx = {
 		DESTROYER_3000_VFX_FOLDER_NAME = "Destroyer3000",
+		DESTROYER_MISSILE_BARRAGE_EXPLODE_VFX_NAME = "Explode",
 		DESTROYER_MISSILE_BARRAGE_PROJECTILE_VFX_NAME = "Projectile",
 		DESTROYER_MISSILE_BARRAGE_ROOT_PART_VFX_NAME = "RootPart",
+		DESTROYER_MISSILE_BARRAGE_SPAWN_VFX_NAME = "Spawn",
 		DESTROYER_MISSILE_BARRAGE_UPPER_TORSO_VFX_NAME = "UpperTorso",
 		DESTROYER_MISSILE_BARRAGE_VFX_NAME = "MissileBarrage",
 	},
@@ -19,15 +21,27 @@ local Constants = {
 }
 
 local DESTROYER_3000_VFX_FOLDER_NAME = Constants.Vfx.DESTROYER_3000_VFX_FOLDER_NAME
+local DESTROYER_MISSILE_BARRAGE_EXPLODE_VFX_NAME = Constants.Vfx.DESTROYER_MISSILE_BARRAGE_EXPLODE_VFX_NAME
 local DESTROYER_MISSILE_BARRAGE_EXPLOSION_LIFETIME_SECONDS = Constants.Timing.DESTROYER_MISSILE_BARRAGE_EXPLOSION_LIFETIME_SECONDS
 local DESTROYER_MISSILE_BARRAGE_MODULE_ID = Constants.ModuleIds.DESTROYER_MISSILE_BARRAGE_MODULE_ID
 local DESTROYER_MISSILE_BARRAGE_PROJECTILE_VFX_NAME = Constants.Vfx.DESTROYER_MISSILE_BARRAGE_PROJECTILE_VFX_NAME
 local DESTROYER_MISSILE_BARRAGE_ROOT_PART_VFX_NAME = Constants.Vfx.DESTROYER_MISSILE_BARRAGE_ROOT_PART_VFX_NAME
+local DESTROYER_MISSILE_BARRAGE_SPAWN_VFX_NAME = Constants.Vfx.DESTROYER_MISSILE_BARRAGE_SPAWN_VFX_NAME
 local DESTROYER_MISSILE_BARRAGE_UPPER_TORSO_VFX_NAME = Constants.Vfx.DESTROYER_MISSILE_BARRAGE_UPPER_TORSO_VFX_NAME
 local DESTROYER_MISSILE_BARRAGE_VFX_NAME = Constants.Vfx.DESTROYER_MISSILE_BARRAGE_VFX_NAME
 local MECHA_MISSILE_BARRAGE_MODULE_ID = Constants.ModuleIds.MECHA_MISSILE_BARRAGE_MODULE_ID
 
 local Handler = {}
+
+local function findFirstDescendantNamed(root: Instance, name: string): Instance?
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant.Name == name then
+			return descendant
+		end
+	end
+
+	return nil
+end
 
 function Handler:_updateMissileBarrageProjectiles(record: ActiveRecord, nowServerTime: number)
 	local projectileModels = record.missileBarrageProjectileModels
@@ -127,8 +141,8 @@ function Handler:_startDestroyerMissileBarrage(record: ActiveRecord, event: Pres
 		return
 	end
 
-	self:playAllSounds(upperTorsoModel)
-	self:playAllSounds(rootPartModel)
+	self:playTimedSounds(upperTorsoModel, scaleMultiplier)
+	self:playTimedSounds(rootPartModel, scaleMultiplier)
 	self:emitEffectInstance(upperTorsoModel)
 	self:emitEffectInstance(rootPartModel)
 end
@@ -183,7 +197,12 @@ function Handler:_launchDestroyerMissile(record: ActiveRecord, event: Presentati
 	else
 		projectileModel:PivotTo(CFrame.new(startPosition))
 	end
-	self:playAllSounds(projectileModel)
+
+	local spawnEffect = findFirstDescendantNamed(projectileModel, DESTROYER_MISSILE_BARRAGE_SPAWN_VFX_NAME)
+	if spawnEffect then
+		self:playTimedSounds(spawnEffect, scaleMultiplier)
+		self:emitEffectInstance(spawnEffect)
+	end
 
 	record.missileBarrageProjectileModels = record.missileBarrageProjectileModels or {}
 	record.missileBarrageProjectileMotions = record.missileBarrageProjectileMotions or {}
@@ -226,9 +245,17 @@ function Handler:_impactDestroyerMissile(record: ActiveRecord, event: Presentati
 	end
 
 	projectileModel:PivotTo(CFrame.new(impactPosition))
-	self:playAllSounds(projectileModel)
-	self:emitEffectInstance(projectileModel, DESTROYER_MISSILE_BARRAGE_EXPLOSION_LIFETIME_SECONDS)
-	self:destroyAfter(projectileModel, DESTROYER_MISSILE_BARRAGE_EXPLOSION_LIFETIME_SECONDS)
+	local scaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1)
+	local explodeEffect = findFirstDescendantNamed(projectileModel, DESTROYER_MISSILE_BARRAGE_EXPLODE_VFX_NAME)
+	if explodeEffect == nil then
+		self:warnWithPrefix("Missile Barrage projectile Explode VFX instance is missing from the packaged projectile.")
+		self:destroyVfxAfter(projectileModel, 0)
+		return
+	end
+
+	self:playTimedSounds(explodeEffect, scaleMultiplier)
+	self:emitEffectInstance(explodeEffect, DESTROYER_MISSILE_BARRAGE_EXPLOSION_LIFETIME_SECONDS)
+	self:destroyVfxAfter(projectileModel, DESTROYER_MISSILE_BARRAGE_EXPLOSION_LIFETIME_SECONDS)
 end
 
 Handler.moduleIds = {

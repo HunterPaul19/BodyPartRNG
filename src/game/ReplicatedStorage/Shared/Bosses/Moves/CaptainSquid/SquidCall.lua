@@ -7,7 +7,9 @@ local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 
 local DAMAGE = 18
-local AIM_DURATION_SECONDS = 2
+local CANNON_FIRE_SECONDS = 2.65
+local CANNON_EMIT_SECONDS = 162 / 60
+local PROJECTILE_FLY_VFX_SECONDS = 181 / 60
 local ANIMATION_FADE_SECONDS = 0.08
 local PROJECTILE_SPEED_STUDS_PER_SECOND = 75
 local PROJECTILE_RADIUS = 5
@@ -287,9 +289,12 @@ function SquidCall.StartCast(context)
 	local presentationStopped = false
 	local lockedTargetUserId = if context.targetPlayer then context.targetPlayer.UserId else nil
 	local lastKnownTargetPosition = if context.targetRootPart then context.targetRootPart.Position else nil
+	local castStartedAt = os.clock()
 	local projectileStartTime = 0
 	local projectileStartPosition = nil :: Vector3?
 	local projectileImpactPosition = nil :: Vector3?
+	local aimSequenceStarted = false
+	local fireTriggered = false
 
 	local function stopPresentation()
 		if presentationStopped then
@@ -391,9 +396,10 @@ function SquidCall.StartCast(context)
 	end
 
 	local function fireProjectile()
-		if cancelled or bossModel.Parent == nil or bossRootPart.Parent == nil then
+		if cancelled or fireTriggered or bossModel.Parent == nil or bossRootPart.Parent == nil then
 			return
 		end
+		fireTriggered = true
 
 		local _, liveTargetRootPart, resolvedTargetPosition = resolveLockedTargetState(
 			context,
@@ -432,6 +438,7 @@ function SquidCall.StartCast(context)
 			projectileSpeed = PROJECTILE_SPEED_STUDS_PER_SECOND,
 			explosionRadius = EXPLOSION_RADIUS,
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
+			flyDelaySeconds = math.max(0, PROJECTILE_FLY_VFX_SECONDS - CANNON_FIRE_SECONDS),
 		})
 
 		if liveTargetRootPart and liveTargetRootPart.Parent ~= nil then
@@ -474,15 +481,19 @@ function SquidCall.StartCast(context)
 	end
 
 	local function beginAimSequence()
-		if cancelled then
+		if cancelled or aimSequenceStarted then
 			return
 		end
+		aimSequenceStarted = true
 
 		local _, lockedRootPart, lockedPosition = resolveLockedTargetState(context, lockedTargetUserId, lastKnownTargetPosition)
 		lastKnownTargetPosition = lockedPosition
+		local elapsedSeconds = math.max(0, os.clock() - castStartedAt)
+		local aimDuration = math.max(0.05, CANNON_FIRE_SECONDS - elapsedSeconds)
 		context.EmitPresentation("summon", {
 			targetUserId = lockedTargetUserId,
-			aimDuration = AIM_DURATION_SECONDS,
+			aimDuration = aimDuration,
+			cannonEmitDelaySeconds = math.max(0, CANNON_EMIT_SECONDS - elapsedSeconds),
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
 		})
 
@@ -500,7 +511,7 @@ function SquidCall.StartCast(context)
 			lockedRootPart = updatedRootPart
 		end)
 
-		task.delay(AIM_DURATION_SECONDS, function()
+		task.delay(aimDuration, function()
 			disconnectAimHeartbeat()
 			fireProjectile()
 		end)

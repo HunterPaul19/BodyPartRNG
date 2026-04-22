@@ -15,6 +15,8 @@ local Constants = {
 	},
 	Timing = {
 		BUBBLE_BLAST_HIT_LIFETIME_SECONDS = 2.5,
+		BUBBLE_BLAST_ROOT_PART_EMIT_DELAY_SECONDS = 65 / 60,
+		BUBBLE_BLAST_PROJECTILE_VISUAL_SCALE = 2.5,
 	},
 }
 
@@ -23,6 +25,8 @@ local BUBBLE_BLAST_HIT_MODEL_NAME = Constants.Vfx.BUBBLE_BLAST_HIT_MODEL_NAME
 local BUBBLE_BLAST_LEFT_HAND_MODEL_NAME = Constants.Vfx.BUBBLE_BLAST_LEFT_HAND_MODEL_NAME
 local BUBBLE_BLAST_MODULE_ID = Constants.ModuleIds.BUBBLE_BLAST_MODULE_ID
 local BUBBLE_BLAST_PROJECTILE_MODEL_NAME = Constants.Vfx.BUBBLE_BLAST_PROJECTILE_MODEL_NAME
+local BUBBLE_BLAST_PROJECTILE_VISUAL_SCALE = Constants.Timing.BUBBLE_BLAST_PROJECTILE_VISUAL_SCALE
+local BUBBLE_BLAST_ROOT_PART_EMIT_DELAY_SECONDS = Constants.Timing.BUBBLE_BLAST_ROOT_PART_EMIT_DELAY_SECONDS
 local BUBBLE_BLAST_ROOT_PART_MODEL_NAME = Constants.Vfx.BUBBLE_BLAST_ROOT_PART_MODEL_NAME
 local BUBBLE_BLAST_VFX_NAME = Constants.Vfx.BUBBLE_BLAST_VFX_NAME
 local MERFIN_THE_GREAT_VFX_FOLDER_NAME = Constants.Vfx.MERFIN_THE_GREAT_VFX_FOLDER_NAME
@@ -93,7 +97,6 @@ function Handler:_startBubbleBlast(record: ActiveRecord, event: PresentationEven
 	self:prepareAttachedEffectModel(leftHandModel)
 	self:prepareAttachedEffectModel(rootPartModel)
 	self:enableVfxDescendants(leftHandModel)
-	self:enableVfxDescendants(rootPartModel)
 	self:scaleAttachedSounds(leftHandModel, scaleMultiplier)
 	self:scaleAttachedSounds(rootPartModel, scaleMultiplier)
 
@@ -108,10 +111,10 @@ function Handler:_startBubbleBlast(record: ActiveRecord, event: PresentationEven
 		return
 	end
 
-	self:playAllSounds(leftHandModel)
-	self:playAllSounds(rootPartModel)
+	self:playTimedSounds(leftHandModel, scaleMultiplier)
+	self:playTimedSounds(rootPartModel, scaleMultiplier)
 	self:emitEffectInstance(leftHandModel)
-	self:emitEffectInstance(rootPartModel)
+	self:emitEffectInstanceAfter(rootPartModel, nil, BUBBLE_BLAST_ROOT_PART_EMIT_DELAY_SECONDS)
 end
 
 function Handler:_launchBubbleBlastProjectiles(record: ActiveRecord, event: PresentationEvent)
@@ -132,7 +135,7 @@ function Handler:_launchBubbleBlastProjectiles(record: ActiveRecord, event: Pres
 	end
 
 	local castFolder = self:_ensureCastFolder(record)
-	local scaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1)
+	local scaleMultiplier = BUBBLE_BLAST_PROJECTILE_VISUAL_SCALE
 	local startedAtServerTime = if typeof(event.serverTime) == "number" then event.serverTime else self.Workspace:GetServerTimeNow()
 	record.bubbleBlastProjectileModels = {}
 	record.bubbleBlastProjectileMotions = {}
@@ -167,7 +170,7 @@ function Handler:_launchBubbleBlastProjectiles(record: ActiveRecord, event: Pres
 		projectileModel.Parent = castFolder
 		projectileModel:PivotTo(CFrame.new(startPosition))
 		self:enableVfxDescendants(projectileModel)
-		self:playAllSounds(projectileModel)
+		self:playTimedSounds(projectileModel, scaleMultiplier)
 
 		record.bubbleBlastProjectileModels[index] = projectileModel
 		record.bubbleBlastProjectileMotions[index] = {
@@ -220,7 +223,7 @@ function Handler:_impactBubbleBlast(record: ActiveRecord, event: PresentationEve
 	self:prepareMovingEffectModel(hitModel)
 	hitModel:PivotTo(CFrame.new(impactPosition))
 	hitModel.Parent = self:_ensureVisualFolder()
-	self:playAllSounds(hitModel)
+	self:playAllSounds(hitModel, scaleMultiplier)
 	self:emitEffectInstance(hitModel, BUBBLE_BLAST_HIT_LIFETIME_SECONDS)
 end
 

@@ -4,6 +4,7 @@ local BossDefinitionBuilder = require(ReplicatedStorage.Shared.Bosses.BossDefini
 local BasicM1 = require(ReplicatedStorage.Shared.Bosses.Moves.Common.BasicM1)
 
 local BossConfigFactory = {}
+local INCLUDE_BOSS_M1_MOVES = false
 
 local function slugify(value: string): string
 	local normalized = string.lower(value)
@@ -35,6 +36,7 @@ local function createMoveDefinition(bossId: string, moveSpec: { [string]: any })
 
 	return {
 		id = string.format("%s_%s", slugify(bossId), moveSlug),
+		displayName = label,
 		tags = moveSpec.tags,
 		cooldownSeconds = moveSpec.cooldownSeconds,
 		weight = moveSpec.weight,
@@ -51,6 +53,7 @@ local function createM1Definition(bossId: string, m1Spec: { [string]: any }?)
 
 	return {
 		id = string.format("%s_m1", slugify(bossId)),
+		displayName = resolvedSpec.displayName or resolvedSpec.label or "M1",
 		tags = resolvedSpec.tags or { "M1" },
 		cooldownSeconds = resolvedSpec.cooldownSeconds or 1.5,
 		weight = resolvedSpec.weight or 6,
@@ -65,7 +68,9 @@ end
 
 function BossConfigFactory.Create(spec: { [string]: any })
 	local moves = {}
-	table.insert(moves, createM1Definition(spec.bossId, spec.m1))
+	if INCLUDE_BOSS_M1_MOVES then
+		table.insert(moves, createM1Definition(spec.bossId, spec.m1))
+	end
 
 	for _, moveSpec in ipairs(spec.moves or {}) do
 		table.insert(moves, createMoveDefinition(spec.bossId, moveSpec))

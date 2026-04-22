@@ -22,6 +22,7 @@ local CLIENT_STARTUP_PHASE_DEFINITIONS = {
 			"BossHealthBarController",
 			"BossArenaM1Controller",
 			"BossArenaMovePresentationController",
+			"BossArenaStudioTestSuiteController",
 			"BossArenaStudioPickerController",
 		},
 	},

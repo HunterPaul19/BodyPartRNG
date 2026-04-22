@@ -11,6 +11,7 @@ export type BossTargetContext = {
 
 export type BossMoveDefinition = {
 	id: string,
+	displayName: string,
 	tags: { string },
 	cooldownSeconds: number,
 	weight: number,

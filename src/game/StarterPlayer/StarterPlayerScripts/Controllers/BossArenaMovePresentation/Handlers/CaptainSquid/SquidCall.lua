@@ -128,7 +128,7 @@ function Handler:_startSquidCall(record: ActiveRecord, event: PresentationEvent)
 		return
 	end
 
-	self:playAllSounds(leftHandModel)
+	self:playAllSounds(leftHandModel, scaleMultiplier)
 	self:emitEffectInstance(leftHandModel, SQUID_CALL_LEFT_HAND_LIFETIME_SECONDS)
 end
 
@@ -198,6 +198,15 @@ function Handler:_summonSquidCall(record: ActiveRecord, event: PresentationEvent
 
 	cannonModel.Parent = castFolder
 	self:_applySquidCallCannonPose(record, record.squidCallAimData.lastKnownTargetPosition, 0)
+
+	local cannonEmitDelaySeconds = math.max(0, tonumber(payload and payload.cannonEmitDelaySeconds) or 0)
+	task.delay(cannonEmitDelaySeconds, function()
+		if cannonModel.Parent == nil then
+			return
+		end
+
+		self:emitVisuals(self:collectEmittableVisuals(cannonModel))
+	end)
 end
 
 function Handler:_fireSquidCall(record: ActiveRecord, event: PresentationEvent)
@@ -239,7 +248,7 @@ function Handler:_fireSquidCall(record: ActiveRecord, event: PresentationEvent)
 	local cannonMuzzleAttachment = record.cannonMuzzleAttachment
 	if cannonMuzzleAttachment then
 		local muzzleSound = cannonMuzzleAttachment:FindFirstChild("Cannon Fire")
-		self:playSound(if muzzleSound and muzzleSound:IsA("Sound") then muzzleSound else nil)
+		self:playSound(if muzzleSound and muzzleSound:IsA("Sound") then muzzleSound else nil, scaleMultiplier)
 		self:emitVisuals(self:collectEmittableVisuals(cannonMuzzleAttachment))
 	end
 
@@ -273,7 +282,14 @@ function Handler:_fireSquidCall(record: ActiveRecord, event: PresentationEvent)
 
 	local flyAttachment = projectileModel:FindFirstChild(SQUID_CALL_PROJECTILE_FLY_ATTACHMENT_NAME, true)
 	if flyAttachment then
-		self:emitVisuals(self:collectEmittableVisuals(flyAttachment))
+		local flyDelaySeconds = math.max(0, tonumber(payload.flyDelaySeconds) or 0)
+		task.delay(flyDelaySeconds, function()
+			if projectileModel.Parent == nil then
+				return
+			end
+
+			self:emitVisuals(self:collectEmittableVisuals(flyAttachment))
+		end)
 	end
 end
 
@@ -302,7 +318,7 @@ function Handler:_impactSquidCall(record: ActiveRecord, event: PresentationEvent
 		self:prepareMovingEffectPart(impactPart)
 		impactPart.CFrame = CFrame.new(impactPosition)
 		impactPart.Parent = self:_ensureVisualFolder()
-		self:playAllSounds(impactPart)
+		self:playAllSounds(impactPart, math.max(0.1, tonumber(payload.scaleMultiplier) or 1))
 		self:emitEffectInstance(impactPart, SQUID_CALL_IMPACT_LIFETIME_SECONDS)
 	end
 

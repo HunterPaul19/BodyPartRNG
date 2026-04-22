@@ -61,7 +61,7 @@ function Handler:_emitOinanRoarVfx(
 	self:prepareMovingEffectModel(effectModel)
 	effectModel:PivotTo(bossRootPart.CFrame)
 	effectModel.Parent = self:_ensureVisualFolder()
-	self:playAllSounds(effectModel)
+	self:playAllSounds(effectModel, scaleMultiplier)
 	self:emitEffectInstance(effectModel, OINAN_THICKHOOF_ROAR_VFX_LIFETIME_SECONDS)
 end
 

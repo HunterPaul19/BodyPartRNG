@@ -212,7 +212,7 @@ function Handler:_shootAcidBreath(record: ActiveRecord, event: PresentationEvent
 		return
 	end
 
-	self:playAllSounds(headModel)
+	self:playAllSounds(headModel, scaleMultiplier)
 	self:emitEffectInstance(headModel, MASSIVE_GEEZER_ACID_BREATH_HEAD_LIFETIME_SECONDS)
 end
 

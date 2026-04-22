@@ -21,7 +21,7 @@ function Handler:_startFireBurst(record: ActiveRecord, event: PresentationEvent)
 	self:_prepareAttachedCastModels(record, event, "Fire Burst", FIRE_BURST_VFX_NAME, {
 		enableParticles = true,
 		scaleRootSounds = true,
-		playAllSounds = true,
+		playTimedSounds = true,
 	})
 end
 

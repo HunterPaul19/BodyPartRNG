@@ -11,6 +11,7 @@ local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockbac
 local DAMAGE = 22
 local BASE_EXPLOSION_RADIUS = 22
 local EXPLOSION_SCALE_MULTIPLIER = 2
+local EXPLOSION_VISUAL_SCALE_MULTIPLIER = 0.45
 local EXPLOSION_RADIUS = BASE_EXPLOSION_RADIUS * EXPLOSION_SCALE_MULTIPLIER
 local EXPLOSION_HITBOX_DURATION_SECONDS = 0.12
 local PROJECTILE_SPEED_STUDS_PER_SECOND = 100
@@ -409,7 +410,7 @@ function WaterBomb.StartCast(context)
 		context.EmitPresentation("impact", {
 			impactPosition = impactPosition,
 			explosionRadius = EXPLOSION_RADIUS,
-			scaleMultiplier = context.bossDefinition.scaleMultiplier * EXPLOSION_SCALE_MULTIPLIER,
+			scaleMultiplier = context.bossDefinition.scaleMultiplier * EXPLOSION_VISUAL_SCALE_MULTIPLIER,
 		})
 		applyExplosionDamage(bossModel, impactPosition)
 		stopPresentation()

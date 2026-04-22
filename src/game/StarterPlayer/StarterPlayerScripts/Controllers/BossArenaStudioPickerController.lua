@@ -18,6 +18,7 @@ local ACTIVE_PROFILE_ID = "boss_arena"
 type PickerBossEntry = {
 	id: string,
 	displayName: string,
+	isTestSuite: boolean?,
 }
 
 type PickerState = {
@@ -213,7 +214,7 @@ function BossArenaStudioPickerController:_ensureUi(): PickerUi
 	statusLabel.Position = UDim2.fromOffset(28, 68)
 	statusLabel.Size = UDim2.new(1, -56, 0, 54)
 	statusLabel.Font = Enum.Font.Gotham
-	statusLabel.Text = "Choose which boss to spawn into the arena."
+	statusLabel.Text = "Choose a boss encounter or open the test suite."
 	statusLabel.TextColor3 = Color3.fromRGB(186, 196, 214)
 	statusLabel.TextSize = 16
 	statusLabel.TextWrapped = true
@@ -414,7 +415,7 @@ function BossArenaStudioPickerController:_renderState(state: PickerState?)
 	local bosses = if typeof(state.bosses) == "table" then state.bosses else {}
 	self:_syncBossButtons(bosses)
 
-	local statusText = "Choose which boss to spawn into the arena."
+	local statusText = "Choose a boss encounter or open the test suite."
 	local statusColor = Color3.fromRGB(186, 196, 214)
 	if self._selectionInFlight then
 		statusText = "Spawning boss..."

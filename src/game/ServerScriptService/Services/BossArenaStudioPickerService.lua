@@ -4,6 +4,7 @@ local RunService = game:GetService("RunService")
 
 local BossArenaArrivalService = require(script.Parent.BossArenaArrivalService)
 local BossArenaRuntimeService = require(script.Parent.BossArenaRuntimeService)
+local BossArenaStudioTestSuiteService = require(script.Parent.BossArenaStudioTestSuiteService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 local Bosses = require(ReplicatedStorage.Shared.Bosses)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
@@ -14,12 +15,15 @@ local GET_STATE_REMOTE_NAME = "GetStudioPickerState"
 local SELECT_REMOTE_NAME = "SelectStudioBoss"
 local STATE_CHANGED_REMOTE_NAME = "StudioPickerStateChanged"
 local ACTIVE_PROFILE_ID = "boss_arena"
+local TEST_SUITE_BOSS_ID = "__studio_test_suite"
+local TEST_SUITE_DISPLAY_NAME = "Test Suite"
 local GET_STATE_RATE_LIMIT_KEY = "remote.boss_arena.get_picker"
 local SELECT_RATE_LIMIT_KEY = "remote.boss_arena.select_picker"
 
 type PickerBossEntry = {
 	id: string,
 	displayName: string,
+	isTestSuite: boolean?,
 }
 
 type PickerState = {
@@ -166,7 +170,13 @@ local function ensureStateChangedRemote(): RemoteEvent
 end
 
 local function buildBossList(): { PickerBossEntry }
-	local bossEntries = {}
+	local bossEntries = {
+		{
+			id = TEST_SUITE_BOSS_ID,
+			displayName = TEST_SUITE_DISPLAY_NAME,
+			isTestSuite = true,
+		},
+	}
 
 	for _, definition in ipairs(Bosses.GetAll()) do
 		table.insert(bossEntries, {
@@ -176,6 +186,12 @@ local function buildBossList(): { PickerBossEntry }
 	end
 
 	table.sort(bossEntries, function(left, right)
+		if left.isTestSuite == true then
+			return true
+		end
+		if right.isTestSuite == true then
+			return false
+		end
 		if left.displayName == right.displayName then
 			return left.id < right.id
 		end
@@ -199,6 +215,7 @@ end
 local function buildPickerState(player: Player): PickerState
 	local enabled = isEnabledForPlace()
 	local activeBossId = BossArenaRuntimeService:GetActiveBossId()
+	local isTestSuiteActive = BossArenaStudioTestSuiteService:IsActive()
 	local playerHasArrivalPayload = BossArenaArrivalService:GetArrivalPayload(player) ~= nil
 	local anyArrivalPayload = hasAnyArrivalPayload()
 	local canSelect = false
@@ -211,6 +228,9 @@ local function buildPickerState(player: Player): PickerState
 	elseif activeBossId ~= nil then
 		reason = "active_encounter"
 		message = string.format("Boss '%s' is already active.", activeBossId)
+	elseif isTestSuiteActive then
+		reason = "active_test_suite"
+		message = "Studio boss test suite is already active."
 	elseif anyArrivalPayload then
 		reason = if playerHasArrivalPayload then "arrival_payload" else "pending_arrival_payload"
 		message = "A teleport arrival payload is already driving boss arena initialization."
@@ -281,6 +301,16 @@ function BossArenaStudioPickerService:OnStart()
 		local bossId = request.bossId
 		if typeof(bossId) ~= "string" or bossId == "" then
 			return response(false, "BAD_REQUEST", "A valid bossId is required.", state)
+		end
+
+		if bossId == TEST_SUITE_BOSS_ID then
+			local ok, err = BossArenaStudioTestSuiteService:StartStudioTestSuiteFromPlayer(player)
+			if not ok then
+				return response(false, "SPAWN_FAILED", tostring(err), buildPickerState(player))
+			end
+
+			broadcastStateChanged()
+			return response(true, "OK", "Started Studio boss test suite.", buildPickerState(player))
 		end
 
 		local ok, err = BossArenaRuntimeService:StartStudioEncounterFromBossId(player, bossId)
