@@ -17,6 +17,8 @@ local ACTIVE_PROFILE_ID = "boss_arena"
 local REQUEST_RATE_LIMIT_KEY = "remote.boss_arena.player_m1"
 local IMPACT_MARKER_NAME = "Impact"
 local M1_FOLDER_NAME = "M1"
+local ACTIVE_MINIONS_FOLDER_NAME = "ActiveBossMinions"
+local BOSS_INVULNERABLE_ATTRIBUTE = "BossM1Invulnerable"
 
 type SwingState = {
 	swingId: string,
@@ -303,6 +305,11 @@ local function buildFailureResponse(code: string, retryAfterSeconds: number?): {
 	}
 end
 
+local function isActiveBossMinion(model: Model): boolean
+	local activeMinionsFolder = Workspace:FindFirstChild(ACTIVE_MINIONS_FOLDER_NAME)
+	return activeMinionsFolder ~= nil and model.Parent == activeMinionsFolder
+end
+
 function BossArenaPlayerM1Service:_bindCharacter(player: Player, character: Model)
 	local connections = playerConnections[player]
 	if connections == nil then
@@ -348,7 +355,7 @@ function BossArenaPlayerM1Service:_spawnHitboxForSwing(player: Player, swingId: 
 	end
 
 	local hitboxSize, forwardOffset = resolveHitboxSizeAndForwardOffset(character, rootPart)
-	local damagedBoss = false
+	local damagedTarget = false
 	local hitbox
 	hitbox = Hitbox.new({
 		Character = character,
@@ -365,15 +372,27 @@ function BossArenaPlayerM1Service:_spawnHitboxForSwing(player: Player, swingId: 
 		MaxParts = PlayerM1Config.MaxParts,
 	}, {
 		HitTarget = function(targetModel: Model)
-			if damagedBoss or bossHumanoid.Health <= 0 then
-				return
-			end
-			if targetModel ~= bossModel then
+			if damagedTarget or bossHumanoid.Health <= 0 then
 				return
 			end
 
-			damagedBoss = true
-			bossHumanoid:TakeDamage(PlayerM1Config.Damage)
+			local targetHumanoid = nil :: Humanoid?
+			if targetModel == bossModel then
+				if bossModel:GetAttribute(BOSS_INVULNERABLE_ATTRIBUTE) == true then
+					return
+				end
+				targetHumanoid = bossHumanoid
+			elseif isActiveBossMinion(targetModel) then
+				targetHumanoid = resolveHumanoid(targetModel)
+			else
+				return
+			end
+			if targetHumanoid == nil or targetHumanoid.Health <= 0 then
+				return
+			end
+
+			damagedTarget = true
+			targetHumanoid:TakeDamage(PlayerM1Config.Damage)
 		end,
 		HitboxDestroy = function()
 			if activeSwingByPlayer[player] == swingState then

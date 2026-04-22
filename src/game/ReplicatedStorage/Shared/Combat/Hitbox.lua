@@ -19,10 +19,13 @@ local BODY_PART_VISUALS_FOLDER_NAME = "CharacterBodyParts"
 local GROUND_DISTANCE = 200
 local GROUND_STATE_THRESHOLD = 2
 local OBB_EPSILON = 1e-6
+local PYRAMID_DEFAULT_LAYERS = 8
+local PYRAMID_MIN_LAYERS = 1
+local PYRAMID_MAX_LAYERS = 24
 local GROUND_SHOCKWAVE_RAYCAST_LIFT = 8
 local GROUND_SHOCKWAVE_SPECIAL_MESH_DIAMETER_PER_PART_STUD = 85
 local ROOT_PART_NAMES = { "HumanoidRootPart", "UpperTorso", "LowerTorso", "Torso", "Head" }
-local CHARACTER_CONTAINER_NAMES = { "Bosses", "Mobs", "Characters", "NPCs", "ActiveBoss" }
+local CHARACTER_CONTAINER_NAMES = { "Bosses", "Mobs", "Characters", "NPCs", "ActiveBoss", "ActiveBossMinions" }
 
 local function spawnSafe(callback, ...)
 	if typeof(callback) ~= "function" then
@@ -484,6 +487,110 @@ local function updateStandardVisualizer(visualizer, hitboxLocation, hitboxSize, 
 	end
 
 	visualizer.CFrame = hitboxLocation
+end
+
+local function isPyramidShape(data)
+	local shape = data.HitboxShape or data.QueryShape or data.Shape
+	return shape == "Pyramid" or shape == "Cone"
+end
+
+local function resolvePyramidLayers(self)
+	local hitboxCFrame, cframeError = resolveCFrame(self.Data.HitboxCFrame)
+	if not hitboxCFrame then
+		self:_warnInvalidQuery("Missing or invalid HitboxCFrame (" .. tostring(cframeError) .. ")")
+		return nil
+	end
+
+	local distance, distanceError = resolveNumber(self.Data.PyramidDistance or self.Data.ConeDistance)
+	if not distance then
+		self:_warnInvalidQuery("Missing or invalid PyramidDistance (" .. tostring(distanceError) .. ")")
+		return nil
+	end
+
+	local width, widthError = resolveNumber(self.Data.PyramidWidth or self.Data.ConeWidth or self.Data.BottomWidth)
+	if not width then
+		self:_warnInvalidQuery("Missing or invalid PyramidWidth (" .. tostring(widthError) .. ")")
+		return nil
+	end
+
+	distance = math.max(0, distance)
+	width = math.max(0, width)
+	if distance <= 0 or width <= 0 then
+		self:_warnInvalidQuery("PyramidDistance and PyramidWidth must be greater than zero.")
+		return nil
+	end
+
+	local layerCount = math.floor(tonumber(self.Data.PyramidLayers) or PYRAMID_DEFAULT_LAYERS)
+	layerCount = math.clamp(layerCount, PYRAMID_MIN_LAYERS, PYRAMID_MAX_LAYERS)
+
+	local apexCFrame = hitboxCFrame * (self.Data.HitboxOffset or CFrame.new())
+	local layerDepth = distance / layerCount
+	local layers = {}
+
+	for index = 1, layerCount do
+		local farDistance = layerDepth * index
+		local midpointDistance = farDistance - (layerDepth * 0.5)
+		local layerWidth = math.max(0.001, width * (farDistance / distance))
+
+		table.insert(layers, {
+			CFrame = apexCFrame * CFrame.new(0, 0, -midpointDistance),
+			Size = Vector3.new(layerWidth, layerWidth, layerDepth),
+		})
+	end
+
+	return {
+		ApexCFrame = apexCFrame,
+		Distance = distance,
+		Width = width,
+		LayerCount = layerCount,
+		Layers = layers,
+	}
+end
+
+local function updatePyramidVisualizer(self, pyramidState)
+	local visualizer = self.Visualizer
+	if typeof(visualizer) ~= "Instance" or not visualizer:IsA("Folder") or not pyramidState then
+		return
+	end
+
+	for index, layer in ipairs(pyramidState.Layers) do
+		local part = visualizer:FindFirstChild(string.format("Layer%02d", index))
+		if not (part and part:IsA("BasePart")) then
+			part = Instance.new("Part")
+			part.Name = string.format("Layer%02d", index)
+			part.Anchored = true
+			part.CanCollide = false
+			part.CanTouch = false
+			part.CanQuery = false
+			part.Color = Color3.fromRGB(170, 0, 0)
+			part.Transparency = 0.5
+			part.Massless = true
+			part.Parent = visualizer
+		end
+
+		part.Shape = Enum.PartType.Block
+		part.Size = layer.Size
+		part.CFrame = layer.CFrame
+	end
+
+	for _, child in ipairs(visualizer:GetChildren()) do
+		if child:IsA("BasePart") then
+			local layerIndex = tonumber(string.match(child.Name, "^Layer(%d+)$"))
+			if not layerIndex or layerIndex > pyramidState.LayerCount then
+				child:Destroy()
+			end
+		end
+	end
+end
+
+local function buildPyramidVisualizer(self, pyramidState)
+	local visualizer = Instance.new("Folder")
+	visualizer.Name = "PyramidHitboxVisualizer"
+	visualizer.Parent = getVisualizerFolder()
+	self.HitboxTrove:Add(visualizer)
+	self.Visualizer = visualizer
+
+	updatePyramidVisualizer(self, pyramidState)
 end
 
 local function resolveInstanceByPath(path)
@@ -967,12 +1074,30 @@ local function intersectsPartBounds(hitboxLocation, hitboxSize, hitboxRadius, pa
 	return boxesIntersect(hitboxLocation, hitboxSize, part.CFrame, part.Size)
 end
 
+local function intersectsPyramidLayers(pyramidState, part)
+	if typeof(part) ~= "Instance" or not part:IsA("BasePart") or typeof(pyramidState) ~= "table" then
+		return false
+	end
+
+	for _, layer in ipairs(pyramidState.Layers or {}) do
+		if boxesIntersect(layer.CFrame, layer.Size, part.CFrame, part.Size) then
+			return true
+		end
+	end
+
+	return false
+end
+
 function Hitbox:_warnInvalidQuery(reason)
 	if self._invalidQueryReason == reason then
 		return
 	end
 	self._invalidQueryReason = reason
 	warn("[Hitbox] " .. tostring(reason))
+end
+
+function Hitbox:_usesPyramidQuery()
+	return isPyramidShape(self.Data)
 end
 
 function Hitbox:_usesRadiusQuery()
@@ -1007,7 +1132,7 @@ function Hitbox:_resolveQueryData()
 		hitboxSize, sizeError = resolveSize(self.Data.HitboxSize)
 	end
 
-	if not hitboxSize and not self:_usesRadiusQuery() then
+	if not hitboxSize and not self:_usesRadiusQuery() and not self:_usesPyramidQuery() then
 		self:_warnInvalidQuery("Missing or invalid HitboxSize (" .. tostring(sizeError) .. ")")
 		return nil, nil, nil
 	end
@@ -1078,6 +1203,25 @@ function Hitbox:_resolveOverlapParams(request)
 end
 
 function Hitbox:_queryParts(request)
+	if self:_usesPyramidQuery() then
+		local pyramidState = resolvePyramidLayers(self)
+		if not pyramidState then
+			return {}, nil, nil, nil, nil
+		end
+
+		local overlapParams = self:_resolveOverlapParams(request)
+		local parts = {}
+		local seen = {}
+		for _, layer in ipairs(pyramidState.Layers) do
+			local layerParts = Workspace:GetPartBoundsInBox(layer.CFrame, layer.Size, overlapParams)
+			for _, part in ipairs(layerParts or {}) do
+				addUniquePart(parts, seen, part)
+			end
+		end
+
+		return parts, pyramidState.ApexCFrame, nil, nil, pyramidState
+	end
+
 	local hitboxLocation, hitboxSize, hitboxRadius = self:_resolveQueryData()
 	if not hitboxLocation or not hitboxSize then
 		return {}, nil, nil, nil
@@ -1205,7 +1349,7 @@ function Hitbox:_registerHitCharacter(characterModel, seenThisFrame)
 	return true
 end
 
-function Hitbox:_detectVisualProxyHits(hitboxLocation, hitboxSize, hitboxRadius, seenThisFrame)
+function Hitbox:_detectVisualProxyHits(hitboxLocation, hitboxSize, hitboxRadius, seenThisFrame, pyramidState)
 	if not self:_shouldDetectVisualProxyParts() then
 		return
 	end
@@ -1213,7 +1357,10 @@ function Hitbox:_detectVisualProxyHits(hitboxLocation, hitboxSize, hitboxRadius,
 	for _, characterModel in ipairs(collectPotentialCharacterModels()) do
 		if not seenThisFrame[characterModel] and self:CheckCanHit(characterModel) then
 			for _, proxyPart in ipairs(getVisualProxyParts(characterModel)) do
-				if intersectsPartBounds(hitboxLocation, hitboxSize, hitboxRadius, proxyPart) then
+				local intersects = if pyramidState
+					then intersectsPyramidLayers(pyramidState, proxyPart)
+					else intersectsPartBounds(hitboxLocation, hitboxSize, hitboxRadius, proxyPart)
+				if intersects then
 					self:_registerHitCharacter(characterModel, seenThisFrame)
 					break
 				end
@@ -1241,12 +1388,16 @@ function Hitbox.HitboxTypes.ReturnHitboxPart(self)
 	end
 
 	self.HitboxTrove:Connect(RunService.Heartbeat, function()
-		local hitboxLocation, hitboxSize, hitboxRadius = self:_resolveQueryData()
-		if not hitboxLocation or not self.Visualizer then
+		local _, hitboxLocation, hitboxSize, hitboxRadius, pyramidState = self:_queryParts("Hitbox")
+		if (not hitboxLocation and not pyramidState) or not self.Visualizer then
 			return
 		end
 
-		updateStandardVisualizer(self.Visualizer, hitboxLocation, hitboxSize, hitboxRadius)
+		if pyramidState then
+			updatePyramidVisualizer(self, pyramidState)
+		else
+			updateStandardVisualizer(self.Visualizer, hitboxLocation, hitboxSize, hitboxRadius)
+		end
 		self:_dispatch("HitObject", self.Visualizer, { TimeHit = os.clock() })
 	end)
 end
@@ -1273,9 +1424,15 @@ function Hitbox.HitboxTypes.SpacialQuery(self)
 			return
 		end
 
-		local hitParts, hitboxLocation, hitboxSize, hitboxRadius = self:_queryParts("Hitbox")
+		local hitParts, hitboxLocation, hitboxSize, hitboxRadius, pyramidState = self:_queryParts("Hitbox")
+		if not hitboxLocation and not pyramidState then
+			return
+		end
+
 		if self.Data.EnvironmentDestruction then
-			if hitboxRadius then
+			if pyramidState then
+				self:EnvironmentDestruction(hitboxLocation, Vector3.new(pyramidState.Width, pyramidState.Width, pyramidState.Distance))
+			elseif hitboxRadius then
 				self:EnvironmentDestruction(hitboxLocation, Vector3.one * (hitboxRadius * 2))
 			else
 				self:EnvironmentDestruction(hitboxLocation, hitboxSize)
@@ -1283,7 +1440,11 @@ function Hitbox.HitboxTypes.SpacialQuery(self)
 		end
 
 		if self.Visualizer then
-			updateStandardVisualizer(self.Visualizer, hitboxLocation, hitboxSize, hitboxRadius)
+			if pyramidState then
+				updatePyramidVisualizer(self, pyramidState)
+			else
+				updateStandardVisualizer(self.Visualizer, hitboxLocation, hitboxSize, hitboxRadius)
+			end
 		end
 
 		self.HitCharacters = {}
@@ -1314,7 +1475,7 @@ function Hitbox.HitboxTypes.SpacialQuery(self)
 			end
 		end
 
-		self:_detectVisualProxyHits(hitboxLocation, hitboxSize, hitboxRadius, seenThisFrame)
+		self:_detectVisualProxyHits(hitboxLocation, hitboxSize, hitboxRadius, seenThisFrame, pyramidState)
 
 		for _, characterModel in ipairs(self.HitCharacters) do
 			self:_dispatch("HitTarget", characterModel, { TimeHit = os.clock() })
@@ -1402,9 +1563,13 @@ function Hitbox.HitboxTypes.Breakables(self)
 			return
 		end
 
-		local hitObjects, hitboxLocation, hitboxSize, hitboxRadius = self:_queryParts("Breakables")
+		local hitObjects, hitboxLocation, hitboxSize, hitboxRadius, pyramidState = self:_queryParts("Breakables")
 		if self.Visualizer then
-			updateStandardVisualizer(self.Visualizer, hitboxLocation, hitboxSize, hitboxRadius)
+			if pyramidState then
+				updatePyramidVisualizer(self, pyramidState)
+			else
+				updateStandardVisualizer(self.Visualizer, hitboxLocation, hitboxSize, hitboxRadius)
+			end
 		end
 
 		for _, object in ipairs(hitObjects) do
@@ -1535,6 +1700,16 @@ function Hitbox:Visible(enabled)
 
 			buildGroundShockwaveVisualizer(self, shockwaveState)
 			updateGroundShockwaveVisualizer(self, shockwaveState)
+			return self
+		end
+
+		if self:_usesPyramidQuery() then
+			local pyramidState = resolvePyramidLayers(self)
+			if not pyramidState then
+				return self
+			end
+
+			buildPyramidVisualizer(self, pyramidState)
 			return self
 		end
 

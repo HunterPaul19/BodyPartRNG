@@ -1,0 +1,84 @@
+type ActiveRecord = any
+type PresentationEvent = any
+
+local Constants = {
+	ModuleIds = {
+		OINAN_THICKHOOF_CHARGE_MODULE_ID = "Moves.OinanThickhoof.BullCharge",
+	},
+	Vfx = {
+		OINAN_THICKHOOF_CHARGE_ROOT_VFX_NAME = "RootPart",
+		OINAN_THICKHOOF_CHARGE_VFX_NAME = "BullCharge",
+		OINAN_THICKHOOF_VFX_FOLDER_NAME = "OinanThickhoof",
+	},
+}
+
+local OINAN_THICKHOOF_CHARGE_MODULE_ID = Constants.ModuleIds.OINAN_THICKHOOF_CHARGE_MODULE_ID
+local OINAN_THICKHOOF_CHARGE_ROOT_VFX_NAME = Constants.Vfx.OINAN_THICKHOOF_CHARGE_ROOT_VFX_NAME
+local OINAN_THICKHOOF_CHARGE_VFX_NAME = Constants.Vfx.OINAN_THICKHOOF_CHARGE_VFX_NAME
+local OINAN_THICKHOOF_VFX_FOLDER_NAME = Constants.Vfx.OINAN_THICKHOOF_VFX_FOLDER_NAME
+
+local Handler = {}
+
+function Handler:_chargeOinanCharge(record: ActiveRecord, event: PresentationEvent)
+	local bossModel = event.bossModel
+	if bossModel == nil or bossModel.Parent == nil then
+		self:_cleanupRecord(record)
+		return
+	end
+
+	local bossRootPart = self:resolveBossRootPart(bossModel)
+	if bossRootPart == nil then
+		self:warnWithPrefix("Bull Charge presentation could not resolve the live boss RootPart.")
+		self:_cleanupRecord(record)
+		return
+	end
+
+	local effectSource = self:resolveBossVfxInstance(
+		OINAN_THICKHOOF_VFX_FOLDER_NAME,
+		OINAN_THICKHOOF_CHARGE_VFX_NAME,
+		OINAN_THICKHOOF_CHARGE_ROOT_VFX_NAME
+	)
+	if effectSource == nil then
+		self:warnWithPrefix("Bull Charge RootPart VFX instance is missing from ReplicatedStorage.GameAssets.VFX.")
+		self:_cleanupRecord(record)
+		return
+	end
+
+	local payload = event.payload
+	local scaleMultiplier = math.max(0.1, tonumber(payload and payload.scaleMultiplier) or 1)
+	local durationSeconds = math.max(0.1, tonumber(payload and payload.durationSeconds) or 2)
+	local startCFrame = if typeof(payload) == "table" and typeof(payload.startCFrame) == "CFrame"
+		then payload.startCFrame
+		else bossRootPart.CFrame
+	local effectInstance = effectSource:Clone()
+	if effectInstance:IsA("Model") then
+		effectInstance:ScaleTo(scaleMultiplier)
+		self:prepareMovingEffectModel(effectInstance)
+		effectInstance:PivotTo(startCFrame)
+	elseif effectInstance:IsA("BasePart") then
+		effectInstance.Size *= scaleMultiplier
+		self:prepareMovingEffectPart(effectInstance)
+		effectInstance.CFrame = startCFrame
+	elseif effectInstance:IsA("PVInstance") then
+		effectInstance:PivotTo(startCFrame)
+	else
+		self:warnWithPrefix("Bull Charge RootPart VFX instance cannot be pivoted.")
+		effectInstance:Destroy()
+		self:_cleanupRecord(record)
+		return
+	end
+
+	effectInstance.Parent = self:_ensureCastFolder(record)
+	self:playAllSounds(effectInstance)
+	self:emitEffectInstance(effectInstance, durationSeconds + 0.5)
+end
+
+Handler.moduleIds = {
+	OINAN_THICKHOOF_CHARGE_MODULE_ID,
+}
+Handler.actions = {
+	charge = Handler._chargeOinanCharge,
+}
+Handler.requiresHandle = false
+
+return Handler

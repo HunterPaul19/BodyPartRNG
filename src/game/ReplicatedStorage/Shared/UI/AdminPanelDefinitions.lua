@@ -232,6 +232,11 @@ AdminPanelDefinitions.Tabs = {
 						description = "Placeholder for collecting a structured diagnostic snapshot.",
 					},
 					{
+						id = "test_pyramid_hitbox",
+						title = "Test Pyramid Hitbox",
+						description = "Spawn a visible square-pyramid hitbox from your character's head for quick combat volume validation.",
+					},
+					{
 						id = "view_recent_events",
 						title = "View Recent Events",
 						description = "Placeholder for listing recent server-side gameplay events.",

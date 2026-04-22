@@ -12,19 +12,19 @@ local HITBOX_DURATION_SECONDS = 0.12
 local MAX_HITBOX_PARTS = 128
 local FIRE_INTERVAL_SECONDS = 0.3
 local MAX_MISSILES = 12
-local PROJECTILE_TRAVEL_SECONDS = 0.75
+local PROJECTILE_TRAVEL_SECONDS = 1.1
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "Destroyer3000"
 local ANIMATION_NAME = "MissileBarrage"
-local START_SHOOT_MARKER_NAME = "Start Shoot"
-local STOP_SHOOT_MARKER_NAME = "Stop Shoot"
+local START_SHOOT_MARKER_NAME = "StartShooting"
+local STOP_SHOOT_MARKER_NAME = "StopShooting"
 local LEFT_SHOULDER_ATTACHMENT_NAME = "LeftShoulderRigAttachment"
 local RIGHT_SHOULDER_ATTACHMENT_NAME = "RightShoulderRigAttachment"
 local TARGET_OFFSET_RADIUS = 16
 local FLOOR_RAYCAST_START_HEIGHT = 30
 local FLOOR_RAYCAST_DISTANCE = 450
-local MIN_ARC_HEIGHT = 35
-local MAX_ARC_HEIGHT = 120
+local MIN_ARC_HEIGHT = 70
+local MAX_ARC_HEIGHT = 190
 
 local stub = CreateExplicitBossMoveStub({
 	bossId = "Destroyer 3000",
@@ -178,7 +178,7 @@ end
 local function resolveArcControlPosition(startPosition: Vector3, impactPosition: Vector3): Vector3
 	local midpoint = startPosition:Lerp(impactPosition, 0.5)
 	local distance = (impactPosition - startPosition).Magnitude
-	local arcHeight = math.clamp(distance * 0.45, MIN_ARC_HEIGHT, MAX_ARC_HEIGHT)
+	local arcHeight = math.clamp(distance * 0.65, MIN_ARC_HEIGHT, MAX_ARC_HEIGHT)
 	return midpoint + Vector3.new(0, arcHeight, 0)
 end
 
@@ -215,6 +215,27 @@ local function applyImpactDamage(bossModel: Model, impactPosition: Vector3)
 			hitbox = nil
 		end,
 	})
+end
+
+local function resolveSelectionRangeScale(context): number
+	local scaleMultiplier = tonumber(context.bossDefinition and context.bossDefinition.scaleMultiplier) or 1
+	return math.clamp(math.sqrt(math.max(1, scaleMultiplier)), 1, 4)
+end
+
+function MissileBarrage.GetSelectionWeight(context)
+	local distance = tonumber(context.distanceToTarget)
+	if distance == nil then
+		return 1
+	end
+
+	local rangeScale = resolveSelectionRangeScale(context)
+	if distance <= 35 * rangeScale then
+		return 0.35
+	elseif distance <= 80 * rangeScale then
+		return 0.85
+	end
+
+	return 1.15
 end
 
 function MissileBarrage.StartCast(context)

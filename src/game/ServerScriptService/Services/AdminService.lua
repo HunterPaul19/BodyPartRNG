@@ -8,6 +8,7 @@ local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
 local BodyPartVisuals = require(ReplicatedStorage.Shared.Character.BodyPartVisuals)
+local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local AuraConfig = require(ReplicatedStorage.Shared.Config.AuraConfig)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local MerchantShopService = require(script.Parent.MerchantShopService)
@@ -23,11 +24,16 @@ local OVERVIEW_TAB_ID = "overview"
 local BODY_PARTS_TAB_ID = "bodyParts"
 local PLAYERS_TAB_ID = "players"
 local PROGRESSION_TAB_ID = "progression"
+local DIAGNOSTICS_TAB_ID = "diagnostics"
 local MIN_SANDBOX_SCALE = 0.4
 local MAX_SANDBOX_SCALE = 2.5
 local MIN_NOTIFICATION_DURATION = 1
 local MAX_NOTIFICATION_DURATION = 10
 local MAX_NOTIFICATION_TEXT_LENGTH = 240
+local TEST_PYRAMID_DISTANCE = 40
+local TEST_PYRAMID_WIDTH = 24
+local TEST_PYRAMID_LAYERS = 8
+local TEST_PYRAMID_DURATION_SECONDS = 5
 
 local remotesFolder: Folder? = nil
 local adminActionRemote: RemoteFunction? = nil
@@ -244,6 +250,23 @@ local function getLiveCharacter(player: Player): (Model?, Humanoid?)
 	end
 
 	return character, humanoid
+end
+
+local function resolveCharacterRootPart(character: Model, humanoid: Humanoid): BasePart?
+	if humanoid.RootPart and humanoid.RootPart:IsA("BasePart") then
+		return humanoid.RootPart
+	end
+
+	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+	if humanoidRootPart and humanoidRootPart:IsA("BasePart") then
+		return humanoidRootPart
+	end
+
+	if character.PrimaryPart and character.PrimaryPart:IsA("BasePart") then
+		return character.PrimaryPart
+	end
+
+	return nil
 end
 
 local function clearSandboxState(player: Player)
@@ -664,6 +687,58 @@ local function handleResetVisualCharacter(player: Player)
 	})
 end
 
+local function handleTestPyramidHitbox(player: Player)
+	local character, humanoid = getLiveCharacter(player)
+	if not character or not humanoid then
+		return response(false, "CHARACTER_MISSING", "Your character is not currently available. Respawn and try again.")
+	end
+
+	local head = character:FindFirstChild("Head")
+	if not (head and head:IsA("BasePart")) then
+		return response(false, "HEAD_MISSING", "Your character does not have a valid Head part.")
+	end
+
+	local rootPart = resolveCharacterRootPart(character, humanoid)
+	if not rootPart then
+		return response(false, "ROOT_MISSING", "Your character does not have a valid root part.")
+	end
+
+	local forward = rootPart.CFrame.LookVector
+	local planarForward = Vector3.new(forward.X, 0, forward.Z)
+	if planarForward.Magnitude <= 0.001 then
+		planarForward = Vector3.new(head.CFrame.LookVector.X, 0, head.CFrame.LookVector.Z)
+	end
+	if planarForward.Magnitude <= 0.001 then
+		planarForward = Vector3.new(0, 0, -1)
+	end
+	planarForward = planarForward.Unit
+
+	local hitbox = Hitbox.new({
+		Character = character,
+		HitboxCFrame = CFrame.lookAt(head.Position, head.Position + planarForward),
+		HitboxShape = "Pyramid",
+		PyramidDistance = TEST_PYRAMID_DISTANCE,
+		PyramidWidth = TEST_PYRAMID_WIDTH,
+		PyramidLayers = TEST_PYRAMID_LAYERS,
+		HitboxType = "SpacialQuery",
+		Time = TEST_PYRAMID_DURATION_SECONDS,
+		MaxParts = 128,
+	})
+	hitbox:Visible(true)
+
+	return response(
+		true,
+		"OK",
+		string.format(
+			"Spawned a visible pyramid hitbox from your head for %d seconds. Distance: %d, base width: %d, layers: %d.",
+			TEST_PYRAMID_DURATION_SECONDS,
+			TEST_PYRAMID_DISTANCE,
+			TEST_PYRAMID_WIDTH,
+			TEST_PYRAMID_LAYERS
+		)
+	)
+end
+
 function AdminService:IsPlayerAllowed(player: Player): boolean
 	return isAllowedUserId(player.UserId)
 end
@@ -719,6 +794,10 @@ function AdminService:HandleAction(player: Player, request: any)
 
 	if tabId == PROGRESSION_TAB_ID and actionId == "clear_all_potion_effects" then
 		return handleClearAllPotionEffects(player)
+	end
+
+	if tabId == DIAGNOSTICS_TAB_ID and actionId == "test_pyramid_hitbox" then
+		return handleTestPyramidHitbox(player)
 	end
 
 	if tabId == BODY_PARTS_TAB_ID then

@@ -288,17 +288,23 @@ local function spawnHazardHitbox(context, hazardCFrame: CFrame, hazardSize: Vect
 	return hitbox
 end
 
+local function resolveSelectionRangeScale(context): number
+	local scaleMultiplier = tonumber(context.bossDefinition and context.bossDefinition.scaleMultiplier) or 1
+	return math.clamp(math.sqrt(math.max(1, scaleMultiplier)), 1, 4)
+end
+
 function MechaPunch.GetSelectionWeight(context)
 	local distance = tonumber(context.distanceToTarget)
 	if distance == nil then
 		return 1
 	end
 
-	if distance <= 18 then
+	local rangeScale = resolveSelectionRangeScale(context)
+	if distance <= 18 * rangeScale then
 		return 1.4
-	elseif distance <= 45 then
+	elseif distance <= 45 * rangeScale then
 		return 1.0
-	elseif distance <= 70 then
+	elseif distance <= 70 * rangeScale then
 		return 0.45
 	end
 

@@ -216,17 +216,23 @@ local function spawnKickHitbox(context, impactCFrame: CFrame, hitTargets: { [Mod
 	return hitbox
 end
 
+local function resolveSelectionRangeScale(context): number
+	local scaleMultiplier = tonumber(context.bossDefinition and context.bossDefinition.scaleMultiplier) or 1
+	return math.clamp(math.sqrt(math.max(1, scaleMultiplier)), 1, 4)
+end
+
 function MechaKick.GetSelectionWeight(context)
 	local distance = tonumber(context.distanceToTarget)
 	if distance == nil then
 		return 1
 	end
 
-	if distance <= 16 then
+	local rangeScale = resolveSelectionRangeScale(context)
+	if distance <= 16 * rangeScale then
 		return 1.8
-	elseif distance <= 30 then
+	elseif distance <= 30 * rangeScale then
 		return 0.85
-	elseif distance <= 50 then
+	elseif distance <= 50 * rangeScale then
 		return 0.2
 	end
 

@@ -4,7 +4,7 @@ local BossConfigFactory = require(ReplicatedStorage.Shared.Bosses.ConfigFactory)
 local BossMoveTags = require(ReplicatedStorage.Shared.Bosses.MoveTags)
 local AcidBreath = require(ReplicatedStorage.Shared.Bosses.Moves.MassiveGeezerRecolorable.AcidBreath)
 local BodySlam = require(ReplicatedStorage.Shared.Bosses.Moves.MassiveGeezerRecolorable.BodySlam)
-local ChickenBoneThrow = require(ReplicatedStorage.Shared.Bosses.Moves.MassiveGeezerRecolorable.ChickenBoneThrow)
+local EatChicken = require(ReplicatedStorage.Shared.Bosses.Moves.MassiveGeezerRecolorable.EatChicken)
 
 return BossConfigFactory.Create({
 	bossId = "Massive Geezer RECOLORABLE",
@@ -43,10 +43,10 @@ return BossConfigFactory.Create({
 			recoverySeconds = 0.75,
 		},
 		{
-			label = "Chicken Bone Throw",
+			label = "Eat Chicken",
 			tags = { BossMoveTags.AOE },
-			module = ChickenBoneThrow,
-			moduleId = "Moves.MassiveGeezerRecolorable.ChickenBoneThrow",
+			module = EatChicken,
+			moduleId = "Moves.MassiveGeezerRecolorable.EatChicken",
 			cooldownSeconds = 13.0,
 			weight = 0.75,
 			rootDuringCast = true,
