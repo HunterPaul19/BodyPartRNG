@@ -16,6 +16,10 @@ local PlayerLoadoutStatsService = {}
 local characterAddedConnections: { [Player]: RBXScriptConnection } = {}
 local dataReadyByPlayer: { [Player]: boolean } = {}
 
+local function calculateCombatScore(stats: { speed: number, damage: number, health: number }): number
+	return stats.damage + (stats.health * 8) + (stats.speed * 25)
+end
+
 local function resolveHumanoid(character: Model?): Humanoid?
 	if character == nil then
 		return nil
@@ -96,6 +100,10 @@ end
 
 function PlayerLoadoutStatsService:GetFinalStats(player: Player): { speed: number, damage: number, health: number }
 	return resolveFinalStats(player)
+end
+
+function PlayerLoadoutStatsService:GetCombatScore(player: Player): number
+	return calculateCombatScore(resolveFinalStats(player))
 end
 
 function PlayerLoadoutStatsService:OnStart()

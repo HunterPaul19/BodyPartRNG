@@ -5,6 +5,8 @@ local RunService = game:GetService("RunService")
 local Globals = require(ReplicatedStorage.Lists.Globals)
 local MerchantShopConfig = require(ReplicatedStorage.Shared.Config.MerchantShopConfig)
 local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
+local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
+local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local PotionPresentation = require(ReplicatedStorage.Shared.UI.PotionPresentation)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
@@ -74,11 +76,15 @@ local function formatCountdown(targetTimestamp: number): string
 end
 
 local function formatTimeShards(value: any): string
-	return string.format("%s Time Shards", Globals.formatNumber(value))
+	return TranslationHelper.formatByKey(LocalizationKeys.MerchantShop.Common.TimeShards, {
+		Amount = Globals.formatNumber(value),
+	})
 end
 
 local function formatCost(value: any): string
-	return string.format("Cost: %s", formatTimeShards(value))
+	return TranslationHelper.formatByKey(LocalizationKeys.MerchantShop.Common.Cost, {
+		Cost = formatTimeShards(value),
+	})
 end
 
 local function buildEmptyState(): MerchantShopState
@@ -303,7 +309,10 @@ function MerchantShopController:_setPurchaseEnabled(isEnabled: boolean)
 	ui.purchaseButton.Active = isEnabled
 	ui.purchaseButton.AutoButtonColor = isEnabled
 	if ui.purchaseButtonLabel then
-		ui.purchaseButtonLabel.Text = if isEnabled then "Purchase" else "Unavailable"
+		TranslationHelper.setKeyText(
+			ui.purchaseButtonLabel,
+			if isEnabled then LocalizationKeys.MerchantShop.Action.Purchase else LocalizationKeys.MerchantShop.Action.Unavailable
+		)
 	end
 end
 
@@ -360,27 +369,31 @@ function MerchantShopController:_showMessage(title: string, message: string)
 	local ui = self:_ensureUi()
 	ui.messageRoot.Visible = true
 	if ui.messageTitle then
-		ui.messageTitle.Text = title
+		TranslationHelper.setLiteralText(ui.messageTitle, title)
 	end
 	if ui.messageDescription then
-		ui.messageDescription.Text = message
+		TranslationHelper.setLiteralText(ui.messageDescription, message)
 	end
 end
 
 function MerchantShopController:_showFailureMessage(message: string)
-	self:_showMessage("Purchase Failed", message)
+	self:_showMessage(TranslationHelper.formatByKey(LocalizationKeys.MerchantShop.Message.PurchaseFailedTitle), message)
 end
 
 function MerchantShopController:_refreshText()
 	local ui = self:_ensureUi()
 	local shopState = self._shopState or buildEmptyState()
 	if not shopState.isActive then
-		ui.itemName.Text = "Merchant Unavailable"
-		ui.itemDescLabel.Text = if shopState.nextAppearsAt > 0
-			then string.format("The merchant returns in %s.", formatCountdown(shopState.nextAppearsAt))
-			else "The merchant isn't here right now."
-		ui.stocksLabel.Text = "[Returns Soon]"
-		ui.priceLabel.Text = formatCost(0)
+		TranslationHelper.setKeyText(ui.itemName, LocalizationKeys.MerchantShop.State.UnavailableName)
+		TranslationHelper.setKeyText(
+			ui.itemDescLabel,
+			if shopState.nextAppearsAt > 0
+				then LocalizationKeys.MerchantShop.Message.ReturnsIn
+				else LocalizationKeys.MerchantShop.Message.NotHere,
+			{ Countdown = formatCountdown(shopState.nextAppearsAt) }
+		)
+		TranslationHelper.setKeyText(ui.stocksLabel, LocalizationKeys.MerchantShop.State.ReturnsSoon)
+		TranslationHelper.setLiteralText(ui.priceLabel, formatCost(0))
 		self:_setPurchaseEnabled(false)
 		return
 	end
@@ -392,14 +405,24 @@ function MerchantShopController:_refreshText()
 	local stockCap = if entry then MerchantShopConfig.GetMaxStockForPotionId(entry.potionId) else 0
 	local departureText = formatCountdown(shopState.departsAt)
 
-	ui.itemName.Text = if entry then entry.shopLabel else "Merchant Stock Empty"
-	ui.itemDescLabel.Text = if entry
-		then entry.description
-		else string.format("Nothing is left this visit. The merchant leaves in %s.", departureText)
-	ui.stocksLabel.Text = if entry
-		then string.format("[Stock: %d/%d] [Leaves in %s]", stock, stockCap, departureText)
-		else string.format("[Leaves in %s]", departureText)
-	ui.priceLabel.Text = formatCost(totalPrice)
+	if entry then
+		TranslationHelper.setSourceText(ui.itemName, entry.shopLabel)
+		TranslationHelper.setSourceText(ui.itemDescLabel, entry.description)
+		TranslationHelper.setKeyText(ui.stocksLabel, LocalizationKeys.MerchantShop.Common.StockSummary, {
+			Stock = tostring(stock),
+			StockCap = tostring(stockCap),
+			DepartureTime = departureText,
+		})
+	else
+		TranslationHelper.setKeyText(ui.itemName, LocalizationKeys.MerchantShop.State.StockEmptyName)
+		TranslationHelper.setKeyText(ui.itemDescLabel, LocalizationKeys.MerchantShop.State.StockEmptyDesc, {
+			DepartureTime = departureText,
+		})
+		TranslationHelper.setKeyText(ui.stocksLabel, LocalizationKeys.MerchantShop.Common.LeavesIn, {
+			DepartureTime = departureText,
+		})
+	end
+	TranslationHelper.setLiteralText(ui.priceLabel, formatCost(totalPrice))
 	self:_setPurchaseEnabled(entry ~= nil and stock > 0)
 end
 
@@ -467,7 +490,10 @@ function MerchantShopController:_applySoldOutState()
 	self._suppressAmountFocus = false
 
 	self:_refreshText()
-	self:_showMessage("Out of Stock", "Nothing else is left before the merchant departs.")
+	self:_showMessage(
+		TranslationHelper.formatByKey(LocalizationKeys.MerchantShop.Message.OutOfStockTitle),
+		TranslationHelper.formatByKey(LocalizationKeys.MerchantShop.Message.OutOfStockBody)
+	)
 end
 
 function MerchantShopController:_applyInactiveState()
@@ -482,10 +508,12 @@ function MerchantShopController:_applyInactiveState()
 
 	self:_refreshText()
 	self:_showMessage(
-		"Merchant Unavailable",
+		TranslationHelper.formatByKey(LocalizationKeys.MerchantShop.Message.UnavailableTitle),
 		if (self._shopState or buildEmptyState()).nextAppearsAt > 0
-			then string.format("The merchant returns in %s.", formatCountdown((self._shopState or buildEmptyState()).nextAppearsAt))
-			else "The merchant isn't here right now."
+			then TranslationHelper.formatByKey(LocalizationKeys.MerchantShop.Message.ReturnsIn, {
+				Countdown = formatCountdown((self._shopState or buildEmptyState()).nextAppearsAt),
+			})
+			else TranslationHelper.formatByKey(LocalizationKeys.MerchantShop.Message.NotHere)
 	)
 end
 
@@ -547,7 +575,7 @@ function MerchantShopController:_buildSelectionButtons()
 
 		local content = button:FindFirstChild("Content")
 		if content and content:IsA("TextLabel") then
-			content.Text = entry.shopLabel
+			TranslationHelper.setSourceText(content, entry.shopLabel)
 		end
 
 		button.Parent = ui.selectionScrollingFrame
@@ -582,7 +610,7 @@ function MerchantShopController:_purchaseSelectedItem()
 		return
 	end
 	if not self:_ensureRemotes() then
-		self:_showFailureMessage("The merchant is not ready right now.")
+		self:_showFailureMessage(TranslationHelper.formatByKey(LocalizationKeys.MerchantShop.Message.NotReady))
 		return
 	end
 
@@ -602,7 +630,7 @@ function MerchantShopController:_purchaseSelectedItem()
 		quantity = quantity,
 	})
 	if typeof(result) ~= "table" then
-		self:_showFailureMessage("The purchase could not be completed.")
+		self:_showFailureMessage(TranslationHelper.formatByKey(LocalizationKeys.MerchantShop.Message.PurchaseUnavailable))
 		return
 	end
 
@@ -617,7 +645,9 @@ function MerchantShopController:_purchaseSelectedItem()
 		return
 	end
 
-	self:_showFailureMessage(tostring(result.message or "The purchase could not be completed."))
+	self:_showFailureMessage(
+		tostring(result.message or TranslationHelper.formatByKey(LocalizationKeys.MerchantShop.Message.PurchaseUnavailable))
+	)
 end
 
 function MerchantShopController:_bindUi()

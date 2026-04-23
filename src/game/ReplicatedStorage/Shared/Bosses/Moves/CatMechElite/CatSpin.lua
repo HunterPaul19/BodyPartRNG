@@ -1,12 +1,13 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
+local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 
-local DAMAGE_PER_TICK = 6
+local DAMAGE_PER_TICK = 267
 local TICK_INTERVAL_SECONDS = 0.25
 local ACTIVE_WINDOW_SECONDS = 1.5
 local ANIMATION_FADE_SECONDS = 0.08
@@ -24,6 +25,14 @@ local GROUNDED_HITBOX_HEIGHT = 12
 local HITBOX_GROUND_INSET = 2
 local FLOOR_RAYCAST_START_HEIGHT = 40
 local FLOOR_RAYCAST_DISTANCE = 500
+local KNOCKBACK_PULSE_INTERVAL_SECONDS = 0.5
+local KNOCKBACK_SPEED = 32
+local KNOCKBACK_UPWARD_SPEED = 6
+local KNOCKBACK_DURATION_SECONDS = 0.12
+local KNOCKBACK_RAGDOLL_SECONDS = 0.2
+local KNOCKBACK_STUN_SECONDS = 0.18
+local KNOCKBACK_IFRAMES_SECONDS = 0.1
+local KNOCKBACK_ANTI_STUN_SECONDS = 0.2
 
 local stub = CreateExplicitBossMoveStub({
 	bossId = "Cat Mech Elite",
@@ -71,49 +80,22 @@ local function resolveHumanoid(model: Model?): Humanoid?
 	return model:FindFirstChildOfClass("Humanoid")
 end
 
-local function buildFloorRaycastParams(bossModel: Model): RaycastParams
-	local includeInstances = {}
-	local activeBossArena = Workspace:FindFirstChild("ActiveBossArena")
-	if activeBossArena then
-		table.insert(includeInstances, activeBossArena)
-	end
-
-	local map = Workspace:FindFirstChild("Map")
-	if map then
-		table.insert(includeInstances, map)
-	end
-
-	local world = Workspace:FindFirstChild("World")
-	local worldMap = world and world:FindFirstChild("Map")
-	if worldMap then
-		table.insert(includeInstances, worldMap)
-	end
-
-	if Workspace.Terrain then
-		table.insert(includeInstances, Workspace.Terrain)
-	end
-
-	local raycastParams = RaycastParams.new()
-	if #includeInstances > 0 then
-		raycastParams.FilterType = Enum.RaycastFilterType.Include
-		raycastParams.FilterDescendantsInstances = includeInstances
-	else
-		raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-		raycastParams.FilterDescendantsInstances = { bossModel }
-	end
-
-	return raycastParams
+local function resolveRootPart(model: Model?): BasePart?
+	return CombatMoveUtil.ResolveRootPart(model)
 end
 
 local function raycastGroundNear(position: Vector3, bossModel: Model): Vector3?
-	local rayOrigin = position + Vector3.new(0, FLOOR_RAYCAST_START_HEIGHT, 0)
-	local rayDirection = Vector3.new(0, -(FLOOR_RAYCAST_START_HEIGHT + FLOOR_RAYCAST_DISTANCE), 0)
-	local raycastResult = Workspace:Raycast(rayOrigin, rayDirection, buildFloorRaycastParams(bossModel))
-	if raycastResult == nil then
-		return nil
-	end
-
-	return raycastResult.Position
+	local raycastParams = CombatMoveUtil.BuildExcludingCharactersRaycastParams({
+		sourceModel = bossModel,
+		excludeLivePlayerCharacters = true,
+		ignoreWater = true,
+	})
+	return CombatMoveUtil.RaycastGroundNearWithParams(
+		position,
+		raycastParams,
+		FLOOR_RAYCAST_START_HEIGHT,
+		FLOOR_RAYCAST_DISTANCE
+	)
 end
 
 local function resolveHitboxRadius(bossDefinition: any, bossRootPart: BasePart): number
@@ -143,18 +125,39 @@ local function resolveHitboxGeometry(context): (CFrame?, Vector3?)
 	return CFrame.new(centerPosition), Vector3.new(radius * 2, GROUNDED_HITBOX_HEIGHT, radius * 2)
 end
 
-local function applyDamage(targetModel: Model)
+local function buildPulseDirection(context, targetModel: Model): Vector3?
+	local bossRootPart = context.bossRootPart
+	if bossRootPart == nil or bossRootPart.Parent == nil then
+		return nil
+	end
+
+	local hitboxCFrame = resolveHitboxGeometry(context)
+	if hitboxCFrame == nil then
+		return nil
+	end
+
+	return CombatMoveUtil.BuildRadialKnockbackDirection({
+		impactPosition = hitboxCFrame.Position,
+		targetRootPart = resolveRootPart(targetModel),
+		fallbackPosition = bossRootPart.Position,
+		speed = KNOCKBACK_SPEED,
+		upwardSpeed = KNOCKBACK_UPWARD_SPEED,
+	})
+end
+
+local function applyDamage(context, targetModel: Model): (Player?, Humanoid?)
 	local player = Players:GetPlayerFromCharacter(targetModel)
 	if player == nil then
-		return
+		return nil, nil
 	end
 
 	local humanoid = resolveHumanoid(targetModel)
 	if humanoid == nil or humanoid.Health <= 0 then
-		return
+		return nil, nil
 	end
 
-	humanoid:TakeDamage(DAMAGE_PER_TICK)
+	humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE_PER_TICK))
+	return player, humanoid
 end
 
 local function spawnSpinHitbox(context, onDestroy: (() -> ())?)
@@ -163,6 +166,7 @@ local function spawnSpinHitbox(context, onDestroy: (() -> ())?)
 		return nil
 	end
 
+	local lastPulseAtByTarget = {}
 	local hitbox
 	hitbox = Hitbox.new({
 		DebugVisibilityAttribute = "BossHitboxesVisible",
@@ -180,9 +184,39 @@ local function spawnSpinHitbox(context, onDestroy: (() -> ())?)
 		TickTime = TICK_INTERVAL_SECONDS,
 		MaxParts = MAX_HITBOX_PARTS,
 	}, {
-		HitTarget = applyDamage,
+		HitTarget = function(targetModel: Model)
+			local player = nil :: Player?
+			local humanoid = nil :: Humanoid?
+			player, humanoid = applyDamage(context, targetModel)
+			if player == nil or humanoid == nil then
+				return
+			end
+
+			local now = os.clock()
+			local lastPulseAt = lastPulseAtByTarget[targetModel]
+			if lastPulseAt ~= nil and (now - lastPulseAt) < KNOCKBACK_PULSE_INTERVAL_SECONDS then
+				return
+			end
+
+			local pulseDirection = buildPulseDirection(context, targetModel)
+			if pulseDirection == nil then
+				return
+			end
+
+			lastPulseAtByTarget[targetModel] = now
+			Knockback(targetModel, "Default", {
+				Direction = pulseDirection,
+				Duration = KNOCKBACK_DURATION_SECONDS,
+				RagdollDuration = KNOCKBACK_RAGDOLL_SECONDS,
+				Stun = KNOCKBACK_STUN_SECONDS,
+				IFrames = KNOCKBACK_IFRAMES_SECONDS,
+				AntiStun = KNOCKBACK_ANTI_STUN_SECONDS,
+				GroundMode = "DeterministicMap",
+			})
+		end,
 		HitboxDestroy = function()
 			hitbox = nil
+			lastPulseAtByTarget = {}
 			if onDestroy then
 				onDestroy()
 			end

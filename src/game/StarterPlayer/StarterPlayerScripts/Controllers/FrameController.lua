@@ -5,6 +5,7 @@ local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
+local SoundUtil = require(ReplicatedStorage.Shared.Audio.SoundUtil)
 local FrameController = {}
 
 FrameController.TagName = "frame"
@@ -18,6 +19,9 @@ FrameController.OverlayTween = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.E
 FrameController.BackdropTransparency = 0.5
 FrameController.VignetteTransparency = 0.35
 FrameController.ClosedYScale = 1.25
+
+local MENU_OPEN_SOUND_NAME = "MenuOpen"
+local MENU_CLOSE_SOUND_NAME = "MenuClose"
 
 local FALLBACK_MODAL_FRAME_NAMES = {
 	AppraisalUI = true,
@@ -570,6 +574,7 @@ function FrameController:_beginOpen(name: string, frame: GuiObject)
 	self._currentFrame = frame
 	self._currentName = name
 	self._transitionMode = "opening"
+	SoundUtil.Play(MENU_OPEN_SOUND_NAME)
 
 	local state = self:_getFrameState(frame)
 	frame.AnchorPoint = state.OpenAnchorPoint
@@ -632,6 +637,7 @@ function FrameController:_beginClose()
 
 	self:_cancelTweens()
 	self._transitionMode = "closing"
+	SoundUtil.Play(MENU_CLOSE_SOUND_NAME)
 
 	local name = self._currentName
 	local state = self:_getFrameState(frame)

@@ -9,6 +9,8 @@ local WarCall = require(ReplicatedStorage.Shared.Bosses.Moves.Agrynoth.WarCall)
 return BossConfigFactory.Create({
 	bossId = "Agrynoth",
 	arenaId = "Suburban",
+	recommendedCombatScore = 6500,
+	baseHealth = 500000,
 	walkSpeed = 12,
 	aggroRadius = 122,
 	leashRadius = 182,

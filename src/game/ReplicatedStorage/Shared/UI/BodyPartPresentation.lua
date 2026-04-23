@@ -8,6 +8,8 @@ local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local MutationCovers = require(ReplicatedStorage.Shared.Config.MutationCovers)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local SizeIcons = require(ReplicatedStorage.Shared.Config.SizeIcons)
+local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
+local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 local LOCAL_PLAYER = Players.LocalPlayer
 
@@ -285,6 +287,14 @@ function BodyPartPresentation.GetRegionPluralLabel(region: string): string
 	return REGION_TO_PLURAL_LABEL[region] or tostring(region)
 end
 
+function BodyPartPresentation.GetLocalizedRegionLabel(region: string): string
+	return TranslationHelper.translate(BodyPartPresentation.GetRegionLabel(region))
+end
+
+function BodyPartPresentation.GetLocalizedRegionPluralLabel(region: string): string
+	return TranslationHelper.translate(BodyPartPresentation.GetRegionPluralLabel(region))
+end
+
 function BodyPartPresentation.ToRichTextColor(color: Color3): string
 	return toRichTextColor(color)
 end
@@ -397,18 +407,22 @@ function BodyPartPresentation.BuildPreviewStatTexts(
 		Speed = tonumber(safeBonuses.speed) or tonumber(basePlayerStats.speed) or 16,
 		Health = tonumber(safeBonuses.health) or tonumber(basePlayerStats.health) or 100,
 	}
-	local defaultTemplates = {
-		Strength = "Strength: %s",
-		Speed = "Speed: %s",
-		Health = "Health: %s",
+	local defaultEntries = {
+		Strength = LocalizationKeys.BodyPart.Stats.Strength,
+		Speed = LocalizationKeys.BodyPart.Stats.Speed,
+		Health = LocalizationKeys.BodyPart.Stats.Health,
 	}
 	local texts = {}
 
 	for statName, value in pairs(statValues) do
-		local template = if typeof(templates) == "table" and typeof(templates[statName]) == "string"
-			then templates[statName]
-			else defaultTemplates[statName]
-		texts[statName] = formatPreviewStatText(template, value)
+		local template = if typeof(templates) == "table" and typeof(templates[statName]) == "string" then templates[statName] else nil
+		if template ~= nil and template ~= "" and template ~= "Strength: %s" and template ~= "Speed: %s" and template ~= "Health: %s" then
+			texts[statName] = formatPreviewStatText(template, value)
+		else
+			texts[statName] = TranslationHelper.formatByKey(defaultEntries[statName], {
+				Value = formatNumberish(value),
+			})
+		end
 	end
 
 	return texts
@@ -421,13 +435,17 @@ function BodyPartPresentation.FormatMutationLabelText(templateText: any, record:
 		toRichTextColor(mutationColor),
 		escapeRichText(mutationDisplayName)
 	)
-	local formattedText = BodyPartPresentation.FormatTemplatedLabelText(templateText, formattedMutationName)
+	local formattedText = TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Mutation, {
+		MutationName = formattedMutationName,
+	})
 	local normalizedTemplate = if typeof(templateText) == "string"
 		then string.match(templateText, "^%s*(.-)%s*$") or ""
 		else ""
 
 	if formattedText == formattedMutationName and normalizedTemplate ~= "" then
-		return string.format("%s: %s", normalizedTemplate, formattedMutationName)
+		return TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Mutation, {
+			MutationName = formattedMutationName,
+		}, string.format("%s: {MutationName}", normalizedTemplate))
 	end
 
 	return formattedText
@@ -545,9 +563,15 @@ function BodyPartPresentation.BuildSummaryTexts(bonuses: any): { income: string,
 	local rollSpeedBonus = tonumber(safeBonuses.rollSpeedBonus) or 0
 
 	return {
-		income = string.format("%s Income", formatMoneyPerSecond(passiveIncome)),
-		luck = string.format("x%s Luck", formatMultiplier(1 + luckBonus)),
-		rollSpeed = string.format("x%s Roll Speed", formatMultiplier(1 + rollSpeedBonus)),
+		income = TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Summary.Income, {
+			IncomePerSecond = formatMoneyPerSecond(passiveIncome),
+		}),
+		luck = TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Summary.Luck, {
+			LuckMultiplier = formatMultiplier(1 + luckBonus),
+		}),
+		rollSpeed = TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Summary.RollSpeed, {
+			RollSpeedMultiplier = formatMultiplier(1 + rollSpeedBonus),
+		}),
 	}
 end
 
@@ -607,33 +631,50 @@ function BodyPartPresentation.BuildPreviewPresentation(payload: any)
 			or tonumber(record and record.userId)
 			or tonumber(entry and entry.userId)
 			or (LOCAL_PLAYER and LOCAL_PLAYER.UserId or nil),
-		bundleText = string.format(
-			'Bundle: <font color="%s">%s</font>',
-			toRichTextColor(rarityTextColor),
-			tostring(bundleName)
-		),
-		inventoryBundleText = string.format(
-			'Bundle: <font color="%s">%s</font>',
-			toRichTextColor(rarityTextColor),
-			tostring(bundleName)
-		),
-		inventoryEverRolledText = if compactSerialNumber then string.format("#%s", compactSerialNumber) else "N/A",
+		bundleText = TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Bundle, {
+			BundleName = string.format(
+				'<font color="%s">%s</font>',
+				toRichTextColor(rarityTextColor),
+				tostring(bundleName)
+			),
+		}),
+		inventoryBundleText = TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Bundle, {
+			BundleName = string.format(
+				'<font color="%s">%s</font>',
+				toRichTextColor(rarityTextColor),
+				tostring(bundleName)
+			),
+		}),
+		inventoryEverRolledText = if compactSerialNumber
+			then string.format("#%s", compactSerialNumber)
+			else TranslationHelper.formatByKey(LocalizationKeys.Common.NotAvailable),
 		bundleFontFace = rarityFontFace,
-		partText = string.format("Part: %s", BodyPartPresentation.GetRegionLabel(piece.region)),
-		rarityText = string.format(
-			'Rarity: <font color="%s">%s</font>',
-			toRichTextColor(rarityTextColor),
-			displayRarity
-		),
+		partText = TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Part, {
+			RegionLabel = BodyPartPresentation.GetLocalizedRegionLabel(piece.region),
+		}),
+		rarityText = TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Rarity, {
+			RarityName = string.format(
+				'<font color="%s">%s</font>',
+				toRichTextColor(rarityTextColor),
+				displayRarity
+			),
+		}),
 		rarityFontFace = rarityFontFace,
 		mutationText = BodyPartPresentation.FormatMutationLabelText("Mutation", record),
-		sizeText = string.format("Size: %s (%sx)", getSizeDescriptor(previewScale, sizeId), formatMultiplier(previewScale)),
-		cashText = string.format(
-			'Cash Per Sec: <font color="%s">%s</font>',
-			toRichTextColor(ITEM_COUNT_COLOR),
-			formatMoneyPerSecond(passiveIncomePerSecond)
-		),
-		chanceText = string.format("Chance: %s", formatChance(rarityChance)),
+		sizeText = TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Size, {
+			SizeDescriptor = getSizeDescriptor(previewScale, sizeId),
+			SizeMultiplier = formatMultiplier(previewScale),
+		}),
+		cashText = TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.CashPerSec, {
+			IncomePerSecond = string.format(
+				'<font color="%s">%s</font>',
+				toRichTextColor(ITEM_COUNT_COLOR),
+				formatMoneyPerSecond(passiveIncomePerSecond)
+			),
+		}),
+		chanceText = TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Chance, {
+			ChanceText = formatChance(rarityChance),
+		}),
 		bundleModel = BodyPartsCatalog.ResolveBundleModel(piece.id),
 		sizeTagStyle = getSizeTagStyle(previewScale, sizeId),
 		sizeTagTexture = getSizeTagTexture(previewScale, sizeId),

@@ -3,6 +3,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local AuraConfig = require(ReplicatedStorage.Shared.Config.AuraConfig)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
+local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
 
 local AuraPresentation = {}
@@ -67,7 +69,9 @@ end
 local function buildUnlockText(auraConfig: AuraConfig.AuraConfigEntry): string
 	local setConfig = BodyPartsCatalog.GetSet(auraConfig.setId)
 	local setName = if setConfig then setConfig.displayName else auraConfig.label
-	return string.format("Unlock: %s 6/6", setName)
+	return TranslationHelper.formatByKey(LocalizationKeys.Aura.Preview.Unlock, {
+		SetName = setName,
+	})
 end
 
 local function createPlaceholderModel(auraConfig: AuraConfig.AuraConfigEntry): Model
@@ -176,29 +180,42 @@ function AuraPresentation.BuildPreviewPresentation(payload: any)
 		auraConfig = auraConfig,
 		cardUsageText = "",
 		cardNameText = labelText,
-		bundleText = string.format(
-			'Aura: <font color="%s">%s</font>',
-			toRichTextColor(displayColor),
-			labelText
-		),
-		inventoryBundleText = string.format(
-			'Aura: <font color="%s">%s</font>',
-			toRichTextColor(displayColor),
-			labelText
-		),
+		bundleText = TranslationHelper.formatByKey(LocalizationKeys.Aura.Preview.Bundle, {
+			AuraName = string.format(
+				'<font color="%s">%s</font>',
+				toRichTextColor(displayColor),
+				labelText
+			),
+		}),
+		inventoryBundleText = TranslationHelper.formatByKey(LocalizationKeys.Aura.Preview.Bundle, {
+			AuraName = string.format(
+				'<font color="%s">%s</font>',
+				toRichTextColor(displayColor),
+				labelText
+			),
+		}),
 		partText = buildUnlockText(auraConfig),
-		rarityText = string.format(
-			'Tier: <font color="%s">%s</font>',
-			toRichTextColor(displayColor),
-			tierText
-		),
-		mutationText = string.format("Luck Bonus: %s", formatPercentDelta(auraConfig.bonuses.luckBonus)),
-		sizeText = string.format("Roll Speed Bonus: %s", formatPercentDelta(auraConfig.bonuses.rollSpeedBonus)),
-		cashText = string.format("Money Multiplier: x%s", formatMultiplier(auraConfig.bonuses.moneyMultiplier)),
-		chanceText = string.format(
-			"Passive Income Bonus: +%s/s",
-			formatNumberish(math.max(0, tonumber(auraConfig.bonuses.passiveIncomePerSecondBonus) or 0))
-		),
+		rarityText = TranslationHelper.formatByKey(LocalizationKeys.Aura.Preview.Tier, {
+			TierName = string.format(
+				'<font color="%s">%s</font>',
+				toRichTextColor(displayColor),
+				tierText
+			),
+		}),
+		mutationText = TranslationHelper.formatByKey(LocalizationKeys.Aura.Preview.LuckBonus, {
+			LuckBonus = formatPercentDelta(auraConfig.bonuses.luckBonus),
+		}),
+		sizeText = TranslationHelper.formatByKey(LocalizationKeys.Aura.Preview.RollSpeedBonus, {
+			RollSpeedBonus = formatPercentDelta(auraConfig.bonuses.rollSpeedBonus),
+		}),
+		cashText = TranslationHelper.formatByKey(LocalizationKeys.Aura.Preview.MoneyMultiplier, {
+			MoneyMultiplier = formatMultiplier(auraConfig.bonuses.moneyMultiplier),
+		}),
+		chanceText = TranslationHelper.formatByKey(LocalizationKeys.Aura.Preview.PassiveIncomeBonus, {
+			PassiveIncomePerSecond = formatNumberish(
+				math.max(0, tonumber(auraConfig.bonuses.passiveIncomePerSecondBonus) or 0)
+			),
+		}),
 		inventoryEverRolledText = if serialDisplay then string.format("#%s", serialDisplay) else nil,
 		bundleFontFace = rarityStyle.fontFace,
 		rarityFontFace = rarityStyle.fontFace,

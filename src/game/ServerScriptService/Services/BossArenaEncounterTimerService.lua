@@ -11,6 +11,7 @@ local TIMER_STATE_CHANGED_REMOTE_NAME = "EncounterTimerStateChanged"
 local ACTIVE_PROFILE_ID = "boss_arena"
 
 type BossTimerState = {
+	phase: string,
 	startsAtServerTime: number,
 	endsAtServerTime: number,
 	durationSeconds: number,

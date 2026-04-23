@@ -3,6 +3,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local createBossStubMove = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateBossStubMove)
 
@@ -286,7 +287,7 @@ function BasicM1.StartCast(context)
 				end
 
 				hitTargets[targetModel] = true
-				humanoid:TakeDamage(DAMAGE)
+				humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE))
 			end,
 			HitboxDestroy = function()
 				if activeHitbox == hitbox then

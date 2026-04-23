@@ -47,8 +47,20 @@ function Handler:_updateMagmaThrowMotion(record: ActiveRecord, nowServerTime: nu
 		0,
 		1
 	)
-	local position = projectileMotion.startPosition:Lerp(projectileMotion.impactPosition, alpha)
-	local travelVector = projectileMotion.impactPosition - projectileMotion.startPosition
+	local position = self:resolveQuadraticBezierPosition(
+		projectileMotion.startPosition,
+		projectileMotion.controlPosition,
+		projectileMotion.impactPosition,
+		alpha
+	)
+	local lookAheadAlpha = math.clamp(alpha + 0.03, 0, 1)
+	local lookAheadPosition = self:resolveQuadraticBezierPosition(
+		projectileMotion.startPosition,
+		projectileMotion.controlPosition,
+		projectileMotion.impactPosition,
+		lookAheadAlpha
+	)
+	local travelVector = lookAheadPosition - position
 	if travelVector.Magnitude > 0.001 then
 		projectileModel:PivotTo(CFrame.lookAt(position, position + travelVector.Unit))
 	else
@@ -125,10 +137,14 @@ function Handler:_throwMagmaThrow(record: ActiveRecord, event: PresentationEvent
 	end
 
 	local startPosition = payload.startPosition
+	local controlPosition = payload.controlPosition
 	local impactPosition = payload.impactPosition
 	local travelDuration = tonumber(payload.travelDuration)
 	local scaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1)
-	if typeof(startPosition) ~= "Vector3" or typeof(impactPosition) ~= "Vector3" or travelDuration == nil then
+	if typeof(startPosition) ~= "Vector3"
+		or typeof(controlPosition) ~= "Vector3"
+		or typeof(impactPosition) ~= "Vector3"
+		or travelDuration == nil then
 		return
 	end
 
@@ -145,9 +161,11 @@ function Handler:_throwMagmaThrow(record: ActiveRecord, event: PresentationEvent
 	end
 
 	local visualStartPosition = startPosition
+	local visualControlPosition = controlPosition
 	local leftHandModel = record.leftHandModel
 	if leftHandModel and leftHandModel.Parent then
 		visualStartPosition = leftHandModel:GetPivot().Position
+		visualControlPosition = visualControlPosition + (visualStartPosition - startPosition)
 		self:setBasePartTransparency(leftHandModel, 1)
 		self:destroyVfxAfter(leftHandModel, MAGMA_THROW_LEFT_HAND_VFX_LIFETIME_SECONDS)
 	end
@@ -169,6 +187,7 @@ function Handler:_throwMagmaThrow(record: ActiveRecord, event: PresentationEvent
 	record.projectileModel = projectileModel
 	record.projectileMotion = {
 		startPosition = visualStartPosition,
+		controlPosition = visualControlPosition,
 		impactPosition = impactPosition,
 		travelDuration = math.max(0.001, travelDuration),
 		startedAtServerTime = if typeof(event.serverTime) == "number" then event.serverTime else self.Workspace:GetServerTimeNow(),

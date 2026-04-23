@@ -82,6 +82,8 @@ function BossConfigFactory.Create(spec: { [string]: any })
 		bossId = spec.bossId,
 		displayName = spec.displayName or spec.bossId,
 		arenaId = spec.arenaId,
+		recommendedCombatScore = spec.recommendedCombatScore,
+		baseHealth = spec.baseHealth,
 		scaleMultiplier = spec.scaleMultiplier,
 		walkSpeed = spec.walkSpeed,
 		aggroRadius = spec.aggroRadius,

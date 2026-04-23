@@ -121,7 +121,7 @@ function Handler:_startShipCall(record: ActiveRecord, event: PresentationEvent)
 	end
 
 	self:playAllSounds(leftHandModel, scaleMultiplier)
-	self:emitVisuals(self:collectEmittableVisuals(leftHandModel))
+	self:emitVisuals(leftHandModel)
 end
 
 function Handler:_shipShipCall(record: ActiveRecord, event: PresentationEvent)
@@ -180,7 +180,7 @@ function Handler:_shipShipCall(record: ActiveRecord, event: PresentationEvent)
 	shipModel:PivotTo(startCFrame)
 	self:enableParticleEmitters(shipModel)
 	self:playAllSounds(shipModel, scaleMultiplier)
-	self:emitVisuals(self:collectEmittableVisuals(shipModel))
+	self:emitVisuals(shipModel)
 	self:_updateShipCallMotion(record, self.Workspace:GetServerTimeNow())
 
 end

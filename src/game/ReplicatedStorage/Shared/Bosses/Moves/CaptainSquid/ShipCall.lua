@@ -4,10 +4,11 @@ local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
-local DAMAGE = 20
+local DAMAGE = 60
 local AUTHORED_FPS = 60
 local SHIP_RELEASE_FRAME = 91
 local SHIP_END_FRAME = 162
@@ -199,6 +200,7 @@ function ShipCall.StartCast(context)
 	local shipSourceModel = resolveShipSourceModel()
 	local shipHitboxSize = resolveShipHitboxSize()
 	local shipPrimaryPartBottomOffset = if shipSourceModel ~= nil then resolveShipPrimaryPartBottomOffset(shipSourceModel) else nil
+	local scaleMultiplier = math.max(0.1, tonumber(context.bossDefinition and context.bossDefinition.scaleMultiplier) or 1)
 	if bossModel == nil
 		or bossModel.Parent == nil
 		or bossRootPart == nil
@@ -217,6 +219,9 @@ function ShipCall.StartCast(context)
 		warn("[ShipCall] Failed to create animation profile:", profileOrError)
 		return nil
 	end
+
+	local scaledShipHitboxSize = shipHitboxSize * scaleMultiplier
+	local scaledShipPrimaryPartBottomOffset = shipPrimaryPartBottomOffset * scaleMultiplier
 
 	local profile = profileOrError
 	local track = nil :: AnimationTrack?
@@ -312,8 +317,8 @@ function ShipCall.StartCast(context)
 		local shipSpawnPosition = Vector3.new(
 			bossRootPart.Position.X,
 			if shipFloorY ~= nil
-				then shipFloorY - shipPrimaryPartBottomOffset
-				else bossRootPart.Position.Y - shipPrimaryPartBottomOffset,
+				then shipFloorY - scaledShipPrimaryPartBottomOffset
+				else bossRootPart.Position.Y - scaledShipPrimaryPartBottomOffset,
 			bossRootPart.Position.Z
 		)
 		shipStartCFrame = CFrame.lookAt(shipSpawnPosition, shipSpawnPosition + travelDirection)
@@ -325,7 +330,7 @@ function ShipCall.StartCast(context)
 			direction = travelDirection,
 			speed = SHIP_SPEED_STUDS_PER_SECOND,
 			shipSize = shipHitboxSize,
-			scaleMultiplier = context.bossDefinition.scaleMultiplier,
+			scaleMultiplier = scaleMultiplier,
 			activeSeconds = SHIP_ACTIVE_SECONDS,
 		})
 
@@ -340,7 +345,7 @@ function ShipCall.StartCast(context)
 
 				return getCurrentShipCFrame()
 			end,
-			HitboxSize = shipHitboxSize,
+			HitboxSize = scaledShipHitboxSize,
 			HitboxType = "SpacialQuery",
 			MaxParts = 128,
 		}, {
@@ -364,7 +369,7 @@ function ShipCall.StartCast(context)
 				end
 
 				hitTargets[targetModel] = true
-				humanoid:TakeDamage(DAMAGE)
+				humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE))
 
 				Knockback(targetModel, "Default", {
 					Direction = buildKnockbackDirection(travelDirection),

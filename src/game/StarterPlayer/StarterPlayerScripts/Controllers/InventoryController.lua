@@ -10,6 +10,8 @@ local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local SizeIcons = require(ReplicatedStorage.Shared.Config.SizeIcons)
 local PerfStats = require(ReplicatedStorage.Shared.Diagnostics.PerfStats)
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
+local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
+local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
 local BodyPartLoadout = require(ReplicatedStorage.Shared.Character.BodyPartLoadout)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
@@ -21,6 +23,7 @@ local ConfirmationWarning = require(ReplicatedStorage.Shared.UI.ConfirmationWarn
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 local PotionPresentation = require(ReplicatedStorage.Shared.UI.PotionPresentation)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
+local ToggleSoundUtil = require(ReplicatedStorage.Shared.Audio.ToggleSoundUtil)
 local DataController = require(script.Parent.DataController)
 local FrameController = require(script.Parent.FrameController)
 local PotionController = require(script.Parent.PotionController)
@@ -278,6 +281,12 @@ local function extractTrailingLabelText(templateText: any, fallback: string): st
 		return normalized
 	end
 	return fallback
+end
+
+local function buildExistingPreviewText(countText: string): string
+	return TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Existing, {
+		Count = countText,
+	})
 end
 
 local function stripRichText(text: string): string
@@ -807,7 +816,7 @@ function InventoryController:_resolvePreviewModel()
 end
 
 function InventoryController:_setExistingPreviewText(text: string)
-	self._ui.previewLabels.Existing.Text = text
+	TranslationHelper.setLiteralText(self._ui.previewLabels.Existing, text)
 end
 
 function InventoryController:_setEverRolledPreviewText(leadingText: string?)
@@ -817,14 +826,13 @@ function InventoryController:_setEverRolledPreviewText(leadingText: string?)
 	end
 
 	if typeof(leadingText) ~= "string" or leadingText == "" then
-		everRolledLabel.Text = self._previewEverRolledNativeText or everRolledLabel.Text
+		TranslationHelper.setSourceText(everRolledLabel, self._previewEverRolledNativeText or everRolledLabel.Text)
 		return
 	end
 
-	local suffixText = self._previewEverRolledSuffixText or extractTrailingLabelText(self._previewEverRolledNativeText, "Ever Rolled")
-	everRolledLabel.Text = if suffixText ~= ""
-		then string.format("%s %s", leadingText, suffixText)
-		else leadingText
+	TranslationHelper.setKeyText(everRolledLabel, LocalizationKeys.BodyPart.Preview.EverRolled, {
+		RollNumber = leadingText,
+	})
 end
 
 function InventoryController:_applyPreviewLabelStyles(previewModel: any?)
@@ -899,7 +907,7 @@ function InventoryController:_requestBodyPartExistingCount(pieceId: string, requ
 	local cachedCount = self._previewExistingCountCache[cacheKey]
 	if cachedCount ~= nil then
 		if requestToken == self._previewExistingRequestToken then
-			self:_setExistingPreviewText(string.format("Existing: %s", formatWholeNumber(cachedCount)))
+			self:_setExistingPreviewText(buildExistingPreviewText(formatWholeNumber(cachedCount)))
 		end
 		return
 	end
@@ -907,7 +915,7 @@ function InventoryController:_requestBodyPartExistingCount(pieceId: string, requ
 	if not self:_ensureRemotes() then
 		self:_warnExistingCountFailure("Body part remotes are not ready.")
 		if requestToken == self._previewExistingRequestToken then
-			self:_setExistingPreviewText("Existing: N/A")
+			self:_setExistingPreviewText(buildExistingPreviewText(TranslationHelper.formatByKey(LocalizationKeys.Common.NotAvailable)))
 		end
 		return
 	end
@@ -924,25 +932,25 @@ function InventoryController:_requestBodyPartExistingCount(pieceId: string, requ
 
 	if not ok then
 		self:_warnExistingCountFailure(result)
-		self:_setExistingPreviewText("Existing: N/A")
+		self:_setExistingPreviewText(buildExistingPreviewText(TranslationHelper.formatByKey(LocalizationKeys.Common.NotAvailable)))
 		return
 	end
 
 	if typeof(result) ~= "table" or result.ok ~= true then
 		self:_warnExistingCountFailure(if typeof(result) == "table" then result.message else "Invalid server response.")
-		self:_setExistingPreviewText("Existing: N/A")
+		self:_setExistingPreviewText(buildExistingPreviewText(TranslationHelper.formatByKey(LocalizationKeys.Common.NotAvailable)))
 		return
 	end
 
 	local count = tonumber(result.count)
 	if count == nil then
 		self:_warnExistingCountFailure("Missing or invalid count in server response.")
-		self:_setExistingPreviewText("Existing: N/A")
+		self:_setExistingPreviewText(buildExistingPreviewText(TranslationHelper.formatByKey(LocalizationKeys.Common.NotAvailable)))
 		return
 	end
 
 	self._previewExistingCountCache[cacheKey] = count
-	self:_setExistingPreviewText(string.format("Existing: %s", formatWholeNumber(count)))
+	self:_setExistingPreviewText(buildExistingPreviewText(formatWholeNumber(count)))
 end
 
 function InventoryController:_requestAuraExistingCount(auraId: string, requestToken: number)
@@ -950,7 +958,7 @@ function InventoryController:_requestAuraExistingCount(auraId: string, requestTo
 	local cachedCount = self._previewExistingCountCache[cacheKey]
 	if cachedCount ~= nil then
 		if requestToken == self._previewExistingRequestToken then
-			self:_setExistingPreviewText(string.format("Existing: %s", formatWholeNumber(cachedCount)))
+			self:_setExistingPreviewText(buildExistingPreviewText(formatWholeNumber(cachedCount)))
 		end
 		return
 	end
@@ -958,7 +966,7 @@ function InventoryController:_requestAuraExistingCount(auraId: string, requestTo
 	if not self:_ensureAuraRemotes() then
 		self:_warnExistingCountFailure("Aura remotes are not ready.")
 		if requestToken == self._previewExistingRequestToken then
-			self:_setExistingPreviewText("Existing: N/A")
+			self:_setExistingPreviewText(buildExistingPreviewText(TranslationHelper.formatByKey(LocalizationKeys.Common.NotAvailable)))
 		end
 		return
 	end
@@ -975,25 +983,25 @@ function InventoryController:_requestAuraExistingCount(auraId: string, requestTo
 
 	if not ok then
 		self:_warnExistingCountFailure(result)
-		self:_setExistingPreviewText("Existing: N/A")
+		self:_setExistingPreviewText(buildExistingPreviewText(TranslationHelper.formatByKey(LocalizationKeys.Common.NotAvailable)))
 		return
 	end
 
 	if typeof(result) ~= "table" or result.ok ~= true then
 		self:_warnExistingCountFailure(if typeof(result) == "table" then result.message else "Invalid server response.")
-		self:_setExistingPreviewText("Existing: N/A")
+		self:_setExistingPreviewText(buildExistingPreviewText(TranslationHelper.formatByKey(LocalizationKeys.Common.NotAvailable)))
 		return
 	end
 
 	local count = tonumber(result.count)
 	if count == nil then
 		self:_warnExistingCountFailure("Missing or invalid count in aura server response.")
-		self:_setExistingPreviewText("Existing: N/A")
+		self:_setExistingPreviewText(buildExistingPreviewText(TranslationHelper.formatByKey(LocalizationKeys.Common.NotAvailable)))
 		return
 	end
 
 	self._previewExistingCountCache[cacheKey] = count
-	self:_setExistingPreviewText(string.format("Existing: %s", formatWholeNumber(count)))
+	self:_setExistingPreviewText(buildExistingPreviewText(formatWholeNumber(count)))
 end
 
 function InventoryController:_setPreviewState(previewState: PreviewState?)
@@ -1998,10 +2006,12 @@ function InventoryController:_toggleAutoSize()
 	if typeof(result.state) == "table" then
 		self:_applyLoadoutState(result.state)
 		self:_syncAutoSizeButton(result.state.autoSizeEnabled == true, true)
+		ToggleSoundUtil.PlayToggle(self:_getResolvedNormalSizeEnabled(result.state.autoSizeEnabled == true))
 		return
 	end
 
 	self:_syncAutoSizeButton(not self:_getResolvedAutoSizeEnabled(), true)
+	ToggleSoundUtil.PlayToggle(self:_getResolvedNormalSizeEnabled(not self:_getResolvedAutoSizeEnabled()))
 end
 
 function InventoryController:_equipBestLoadout()
@@ -2222,17 +2232,23 @@ function InventoryController:_syncCapacityLabel()
 	local label = "Inventory"
 	local currentCount = OwnedBodyParts.CountOwnedRecords(self:_getOwnedLookup())
 	local maxCount = OwnedBodyParts.MAX_OWNED_COUNT
+	local capacityKey = LocalizationKeys.Inventory.Capacity.BodyParts
 	if self._selectedSpecialFilter == "aura" then
 		currentCount = #self:_getVisibleRecords()
 		label = "Auras"
+		capacityKey = LocalizationKeys.Inventory.Capacity.Auras
 	elseif self._selectedSpecialFilter == "potion" then
 		currentCount = #self:_getVisibleRecords()
 		label = "Potions"
 		maxCount = #PotionConfig.GetAll()
+		capacityKey = LocalizationKeys.Inventory.Capacity.Potions
 	end
 
-	self._ui.capacityLabel.Text =
-		string.format("%s/%s %s", formatWholeNumber(currentCount), formatWholeNumber(maxCount), label)
+	TranslationHelper.setKeyText(self._ui.capacityLabel, capacityKey, {
+		CurrentCount = formatWholeNumber(currentCount),
+		MaxCount = formatWholeNumber(maxCount),
+		Label = label,
+	})
 end
 
 function InventoryController:_syncSummaryLabels()
@@ -2245,9 +2261,9 @@ function InventoryController:_syncSummaryLabels()
 		rollSpeedBonus = (tonumber(loadoutBonuses.rollSpeedBonus) or 0) + (tonumber(potionBonuses.rollSpeedBonus) or 0),
 	}
 	local summaryTexts = BodyPartPresentation.BuildSummaryTexts(mergedBonuses)
-	self._ui.incomeLabel.Text = summaryTexts.income
-	self._ui.luckLabel.Text = summaryTexts.luck
-	self._ui.rollSpeedLabel.Text = summaryTexts.rollSpeed
+	TranslationHelper.setLiteralText(self._ui.incomeLabel, summaryTexts.income)
+	TranslationHelper.setLiteralText(self._ui.luckLabel, summaryTexts.luck)
+	TranslationHelper.setLiteralText(self._ui.rollSpeedLabel, summaryTexts.rollSpeed)
 	self:_syncPreviewStatLabels()
 end
 
@@ -2266,7 +2282,7 @@ function InventoryController:_syncPreviewStatLabels()
 		local label = previewStatLabels[statName]
 		local text = statTexts[statName]
 		if label and label:IsA("TextLabel") and typeof(text) == "string" then
-			label.Text = text
+			TranslationHelper.setLiteralText(label, text)
 		end
 	end
 end
@@ -2347,15 +2363,18 @@ function InventoryController:_syncPreview()
 	self._previewRenderKey = renderKey
 	self:_applyPreviewLabelStyles(previewModel)
 	self:_syncPreviewLabelLayout(previewModel.itemType)
-	self._ui.previewLabels.Bundle.Text = previewModel.inventoryBundleText or previewModel.bundleText
-	self._ui.previewLabels.Part.Text = previewModel.partText
-	self._ui.previewLabels.Rarity.Text = previewModel.rarityText
-	self._ui.previewLabels.Mutation.Text = previewModel.mutationText
-	self._ui.previewLabels.Content.Text = previewModel.sizeText
-	self:_setExistingPreviewText(previewModel.existingText or "Existing: N/A")
+	TranslationHelper.setLiteralText(self._ui.previewLabels.Bundle, previewModel.inventoryBundleText or previewModel.bundleText)
+	TranslationHelper.setLiteralText(self._ui.previewLabels.Part, previewModel.partText)
+	TranslationHelper.setLiteralText(self._ui.previewLabels.Rarity, previewModel.rarityText)
+	TranslationHelper.setLiteralText(self._ui.previewLabels.Mutation, previewModel.mutationText)
+	TranslationHelper.setLiteralText(self._ui.previewLabels.Content, previewModel.sizeText)
+	self:_setExistingPreviewText(
+		previewModel.existingText
+			or buildExistingPreviewText(TranslationHelper.formatByKey(LocalizationKeys.Common.NotAvailable))
+	)
 	self:_setEverRolledPreviewText(previewModel.inventoryEverRolledText)
-	self._ui.previewLabels.Cash.Text = previewModel.cashText
-	self._ui.previewLabels.Chance.Text = previewModel.chanceText
+	TranslationHelper.setLiteralText(self._ui.previewLabels.Cash, previewModel.cashText)
+	TranslationHelper.setLiteralText(self._ui.previewLabels.Chance, previewModel.chanceText)
 	self:_syncPreviewStatLabels()
 	self:_syncInventoryAnchor(true)
 
@@ -2377,7 +2396,9 @@ function InventoryController:_syncPreview()
 			end
 		end)
 	elseif self._previewExistingCountCache[countKey] ~= nil then
-		self:_setExistingPreviewText(string.format("Existing: %s", formatWholeNumber(self._previewExistingCountCache[countKey])))
+		self:_setExistingPreviewText(TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Existing, {
+			Count = formatWholeNumber(self._previewExistingCountCache[countKey]),
+		}))
 	else
 		task.spawn(function()
 			if previewModel.itemType == "aura" then
@@ -2448,13 +2469,12 @@ end
 function InventoryController:_buildSellAllConfirmationMessage(): string
 	local eligibleCount = self:_getSellAllEligibleCount()
 	if eligibleCount <= 0 then
-		return "No unfavorited, unequipped body parts are available to sell."
+		return TranslationHelper.formatByKey(LocalizationKeys.Inventory.SellAll.NoneEligible)
 	end
 
-	return string.format(
-		"Sell %s unfavorited, unequipped body parts? Favorites and equipped items will stay.",
-		formatWholeNumber(eligibleCount)
-	)
+	return TranslationHelper.formatByKey(LocalizationKeys.Inventory.SellAll.Confirm, {
+		EligibleCount = formatWholeNumber(eligibleCount),
+	})
 end
 
 function InventoryController:_getPendingPotionSellRecord(): (string?, OwnedPotionRecord?)
@@ -2496,13 +2516,18 @@ function InventoryController:_syncPotionSellModal()
 	local sellQuantity = self._pendingPotionSellQuantity
 	local sellPricePerUse = PotionConfig.GetSellPrice(potionId)
 
-	self._ui.potionSellTitle.Text = string.format("Sell %s", potionConfig.label)
-	self._ui.potionSellOwned.Text = string.format("Owned: x%s", formatWholeNumber(ownedAmount))
-	self._ui.potionSellQuantity.Text = string.format("Quantity: x%s", formatWholeNumber(sellQuantity))
-	self._ui.potionSellPayout.Text = string.format(
-		"Payout: $%s",
-		formatWholeNumber(sellPricePerUse * sellQuantity)
-	)
+	TranslationHelper.setKeyText(self._ui.potionSellTitle, LocalizationKeys.Inventory.PotionSell.Title, {
+		PotionName = potionConfig.label,
+	})
+	TranslationHelper.setKeyText(self._ui.potionSellOwned, LocalizationKeys.Inventory.PotionSell.Owned, {
+		OwnedAmount = formatWholeNumber(ownedAmount),
+	})
+	TranslationHelper.setKeyText(self._ui.potionSellQuantity, LocalizationKeys.Inventory.PotionSell.Quantity, {
+		Quantity = formatWholeNumber(sellQuantity),
+	})
+	TranslationHelper.setKeyText(self._ui.potionSellPayout, LocalizationKeys.Inventory.PotionSell.Payout, {
+		Payout = formatWholeNumber(sellPricePerUse * sellQuantity),
+	})
 end
 
 function InventoryController:_setPotionSellModalVisible(isVisible: boolean)
@@ -2576,7 +2601,12 @@ function InventoryController:_syncSecondaryActionButtons()
 
 		local buttonText = favoriteButton:FindFirstChild("TextLabel")
 		if buttonText and buttonText:IsA("TextLabel") then
-			buttonText.Text = if selectedRecord and selectedRecord.isFavorite == true then "Unfavorite" else "Favorite"
+			TranslationHelper.setKeyText(
+				buttonText,
+				if selectedRecord and selectedRecord.isFavorite == true
+					then LocalizationKeys.Inventory.Action.Unfavorite
+					else LocalizationKeys.Inventory.Action.Favorite
+			)
 			buttonText.TextTransparency = if hasOwnedSelection then 0 else 0.35
 		end
 	end
@@ -2735,9 +2765,14 @@ function InventoryController:_syncActionButton()
 
 	local buttonText = actionButton:FindFirstChild("TextLabel")
 	if buttonText and buttonText:IsA("TextLabel") then
-		buttonText.Text = if isAuraSelection and self._auraActionInFlight == true
-			then "Working..."
-			else if isPotionSelection then "Use" else if isUnequipMode then "Unequip" else "Equip"
+		TranslationHelper.setKeyText(
+			buttonText,
+			if isAuraSelection and self._auraActionInFlight == true
+				then LocalizationKeys.Inventory.Action.Working
+				else if isPotionSelection
+					then LocalizationKeys.Inventory.Action.Use
+					else if isUnequipMode then LocalizationKeys.Inventory.Action.Unequip else LocalizationKeys.Inventory.Action.Equip
+		)
 		buttonText.TextTransparency = if enabled then 0 else 0.35
 	end
 
@@ -3149,13 +3184,14 @@ function InventoryController:_toggleFavoriteForPreviewedItem()
 	end
 
 	local previewState = self._previewState
+	local nextFavoriteState = not (ownedRecord.isFavorite == true)
 	if previewState and previewState.itemType == "potion" then
 		local potionId = previewState.potionId or PotionController.GetPotionIdFromOwnedId(previewState.ownedId)
 		if potionId == nil then
 			return
 		end
 
-		PotionController:ToggleFavorite(potionId, not (ownedRecord.isFavorite == true))
+		PotionController:ToggleFavorite(potionId, nextFavoriteState)
 		return
 	end
 
@@ -3167,7 +3203,7 @@ function InventoryController:_toggleFavoriteForPreviewedItem()
 		local ok, result = pcall(function()
 			return self._remotes.auraToggleFavorite:InvokeServer({
 				ownedId = ownedRecord.ownedId,
-				isFavorite = not (ownedRecord.isFavorite == true),
+				isFavorite = nextFavoriteState,
 			})
 		end)
 
@@ -3196,6 +3232,7 @@ function InventoryController:_toggleFavoriteForPreviewedItem()
 		else
 			self:_refreshAuraStateFromData()
 		end
+		ToggleSoundUtil.PlayToggle(nextFavoriteState)
 		return
 	end
 
@@ -3206,7 +3243,7 @@ function InventoryController:_toggleFavoriteForPreviewedItem()
 	local ok, result = pcall(function()
 		return self._remotes.toggleFavorite:InvokeServer({
 			ownedId = ownedRecord.ownedId,
-			isFavorite = not (ownedRecord.isFavorite == true),
+			isFavorite = nextFavoriteState,
 		})
 	end)
 
@@ -3229,6 +3266,7 @@ function InventoryController:_toggleFavoriteForPreviewedItem()
 
 	showNotification(tostring(result.message or "Updated favorite state."))
 	self:_applyLoadoutState(result.state)
+	ToggleSoundUtil.PlayToggle(nextFavoriteState)
 end
 
 function InventoryController:_sellPreviewedItem()
@@ -3637,6 +3675,9 @@ function InventoryController:_ensureFullUi(playerGui: PlayerGui)
 	end
 
 	self:_cacheUi(playerGui)
+
+	ToggleSoundUtil.MarkToggleButton(self._ui.favoriteButton)
+	ToggleSoundUtil.MarkToggleButton(self._ui.autoSizeButton)
 
 	self:_bindFilterButtons()
 	self:_bindSlotButtons()

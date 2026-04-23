@@ -26,58 +26,36 @@ local MECHA_PUNCH_MODULE_ID = Constants.ModuleIds.MECHA_PUNCH_MODULE_ID
 local MECHA_PUNCH_RIGHT_HAND_VFX_NAME = Constants.Vfx.MECHA_PUNCH_RIGHT_HAND_VFX_NAME
 local MECHA_PUNCH_ROOT_PART_VFX_NAME = Constants.Vfx.MECHA_PUNCH_ROOT_PART_VFX_NAME
 local MECHA_PUNCH_VFX_NAME = Constants.Vfx.MECHA_PUNCH_VFX_NAME
+local RIGHT_HAND_PART_NAME = "Right Hand"
 
 local Handler = {}
 
-local IMPACT_SOUND_NAMES = {
-	Explosion = true,
-	Explosion2 = true,
-	Explosion3 = true,
-}
-
-local function isImpactSound(sound: Sound): boolean
-	return IMPACT_SOUND_NAMES[sound.Name] == true
-end
-
-local function playTimedNonImpactSounds(context, root: Instance, scaleMultiplier: number)
-	if root:IsA("Sound") and not isImpactSound(root) then
-		context:playTimedSound(root, scaleMultiplier)
-	end
-	for _, descendant in ipairs(root:GetDescendants()) do
-		if descendant:IsA("Sound") and not isImpactSound(descendant) then
-			context:playTimedSound(descendant, scaleMultiplier)
+local function resolveVisibleEffectPart(effectModel: Model, preferredName: string?): BasePart?
+	if preferredName ~= nil then
+		local preferred = effectModel:FindFirstChild(preferredName, true)
+		if preferred and preferred:IsA("BasePart") and preferred ~= effectModel.PrimaryPart then
+			return preferred
 		end
 	end
-end
 
-local function resolveImpactSoundParent(context, impactInstance: Instance): Instance
-	if impactInstance:IsA("Model") then
-		return context:resolveEffectModelPrimaryPart(impactInstance) or impactInstance
-	end
-	if impactInstance:IsA("BasePart") then
-		return impactInstance
-	end
-
-	return impactInstance
-end
-
-local function playImpactSoundClones(context, sourceRoot: Instance?, impactInstance: Instance, scaleMultiplier: number)
-	if sourceRoot == nil then
-		return
-	end
-
-	local parent = resolveImpactSoundParent(context, impactInstance)
-	for _, descendant in ipairs(sourceRoot:GetDescendants()) do
-		if not descendant:IsA("Sound") or not isImpactSound(descendant) then
-			continue
+	for _, descendant in ipairs(effectModel:GetDescendants()) do
+		if descendant:IsA("BasePart") and descendant ~= effectModel.PrimaryPart then
+			return descendant
 		end
-
-		local soundClone = descendant:Clone()
-		soundClone:SetAttribute("Delay", nil)
-		soundClone:SetAttribute("Start", nil)
-		soundClone.Parent = parent
-		context:playSound(soundClone, scaleMultiplier)
 	end
+
+	return nil
+end
+
+local function alignVisibleEffectPart(effectModel: Model, targetCFrame: CFrame, preferredName: string?): boolean
+	local visiblePart = resolveVisibleEffectPart(effectModel, preferredName)
+	if visiblePart == nil then
+		return false
+	end
+
+	local visiblePartToPivot = visiblePart.CFrame:ToObjectSpace(effectModel:GetPivot())
+	effectModel:PivotTo(targetCFrame * visiblePartToPivot)
+	return true
 end
 
 function Handler:_startMechaPunch(record: ActiveRecord, event: PresentationEvent)
@@ -128,16 +106,30 @@ function Handler:_startMechaPunch(record: ActiveRecord, event: PresentationEvent
 	record.rootModel = rootPartModel
 	record.rightHandModel = rightHandModel
 
-	if not self:attachEffectModel(rootPartModel, bossRootPart) or not self:attachEffectModel(rightHandModel, bossRightHand) then
+	if not self:attachEffectModel(rootPartModel, bossRootPart) then
 		self:warnWithPrefix("Mecha Punch attached VFX models are missing BasePart configuration.")
 		self:_cleanupRecord(record)
 		return
 	end
 
-	playTimedNonImpactSounds(self, rootPartModel, scaleMultiplier)
+	if not alignVisibleEffectPart(rightHandModel, bossRightHand.CFrame, RIGHT_HAND_PART_NAME) then
+		self:warnWithPrefix("Mecha Punch RightHand VFX model is missing the visible hand part configuration.")
+		self:_cleanupRecord(record)
+		return
+	end
+
+	local rightHandPrimaryPart = self:resolveEffectModelPrimaryPart(rightHandModel)
+	if rightHandPrimaryPart == nil then
+		self:warnWithPrefix("Mecha Punch attached VFX models are missing BasePart configuration.")
+		self:_cleanupRecord(record)
+		return
+	end
+	self:createWeld(rightHandPrimaryPart, bossRightHand)
+
+	self:playTimedSounds(rootPartModel, scaleMultiplier)
 	self:playTimedSounds(rightHandModel, scaleMultiplier)
-	self:emitVisuals(self:collectEmittableVisuals(rootPartModel))
-	self:emitVisuals(self:collectEmittableVisuals(rightHandModel))
+	self:emitVisuals(rootPartModel)
+	self:emitVisuals(rightHandModel)
 end
 
 function Handler:_impactMechaPunch(record: ActiveRecord, event: PresentationEvent)
@@ -146,37 +138,29 @@ function Handler:_impactMechaPunch(record: ActiveRecord, event: PresentationEven
 		return
 	end
 
-	local explosionSource = self:resolveBossVfxInstance(
+	local explosionSource = self:resolveBossVfxModel(
 		DESTROYER_3000_VFX_FOLDER_NAME,
 		MECHA_PUNCH_VFX_NAME,
 		MECHA_PUNCH_EXPLOSION_VFX_NAME
 	)
 	if explosionSource == nil then
-		self:warnWithPrefix("Mecha Punch Explosion VFX instance is missing from ReplicatedStorage.GameAssets.VFX.")
+		self:warnWithPrefix("Mecha Punch Explosion VFX model is missing from ReplicatedStorage.GameAssets.VFX.")
 		return
 	end
 
 	local scaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1)
 	local explosionInstance = explosionSource:Clone()
-	if explosionInstance:IsA("Model") then
-		explosionInstance:ScaleTo(scaleMultiplier)
-		self:prepareMovingEffectModel(explosionInstance)
-		explosionInstance:PivotTo(payload.impactCFrame)
-	elseif explosionInstance:IsA("BasePart") then
-		explosionInstance.Size *= scaleMultiplier
-		self:prepareMovingEffectPart(explosionInstance)
-		explosionInstance.CFrame = payload.impactCFrame
-	elseif explosionInstance:IsA("PVInstance") then
-		explosionInstance:PivotTo(payload.impactCFrame)
-	else
-		self:warnWithPrefix("Mecha Punch Explosion VFX instance cannot be pivoted.")
+	explosionInstance:ScaleTo(scaleMultiplier)
+	self:prepareMovingEffectModel(explosionInstance)
+	self:scaleAttachedSounds(explosionInstance, scaleMultiplier)
+	explosionInstance.Parent = self:_ensureVisualFolder()
+
+	if not alignVisibleEffectPart(explosionInstance, payload.impactCFrame, MECHA_PUNCH_EXPLOSION_VFX_NAME) then
+		self:warnWithPrefix("Mecha Punch Explosion VFX model is missing the visible explosion part configuration.")
 		explosionInstance:Destroy()
 		return
 	end
 
-	explosionInstance.Parent = self:_ensureVisualFolder()
-	self:playAllSounds(explosionInstance, scaleMultiplier)
-	playImpactSoundClones(self, record.rootModel, explosionInstance, scaleMultiplier)
 	self:emitEffectInstance(explosionInstance, MECHA_PUNCH_EXPLOSION_VFX_LIFETIME_SECONDS)
 	self:_shakeImpact()
 end

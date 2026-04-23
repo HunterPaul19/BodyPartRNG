@@ -10,7 +10,7 @@ local BossQueueConstants = {
 	CountdownSeconds = 15,
 	DefaultCountdownText = "15",
 	PayloadVersion = 1,
-	BossArenaPlaceId = RouteConfig.PlaceIds.boss_arena,
+	BossArenaPlaceId = RouteConfig.GetPlaceId("boss_arena"),
 }
 
 function BossQueueConstants.FormatOccupancyText(occupancy: any): string

@@ -94,7 +94,7 @@ function Handler:_impactPrometheusSlash(record: ActiveRecord, event: Presentatio
 
 	slashModel.Parent = castFolder
 	self:playAllSounds(slashModel, slashScale)
-	self:emitVisuals(self:collectEmittableVisuals(slashModel))
+	self:emitVisuals(slashModel)
 	self:_updatePrometheusSlashMotion(record, self.Workspace:GetServerTimeNow())
 end
 

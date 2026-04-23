@@ -30,8 +30,82 @@ local AGRYNOTH_WAR_CALL_SPAWN_VFX_NAME = Constants.Vfx.AGRYNOTH_WAR_CALL_SPAWN_V
 local AGRYNOTH_WAR_CALL_START_LIFETIME_SECONDS = Constants.Timing.AGRYNOTH_WAR_CALL_START_LIFETIME_SECONDS
 local AGRYNOTH_WAR_CALL_START_VFX_NAME = Constants.Vfx.AGRYNOTH_WAR_CALL_START_VFX_NAME
 local AGRYNOTH_WAR_CALL_VFX_NAME = Constants.Vfx.AGRYNOTH_WAR_CALL_VFX_NAME
+local GROUND_RAYCAST_DEPTH = 270
+local GROUND_RAYCAST_LIFT = 10
 
 local Handler = {}
+
+local function addUniqueInstance(instances: { Instance }, seen: { [Instance]: boolean }, instance: Instance?)
+	if instance == nil or seen[instance] == true then
+		return
+	end
+
+	seen[instance] = true
+	table.insert(instances, instance)
+end
+
+local function buildGroundRaycastParams(excludedInstances: { Instance }): RaycastParams
+	local params = RaycastParams.new()
+	params.IgnoreWater = false
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = excludedInstances
+	return params
+end
+
+local function resolveMinionRaycastPosition(minionModel: Model): Vector3?
+	local primaryPart = minionModel.PrimaryPart
+	if primaryPart and primaryPart:IsA("BasePart") then
+		return primaryPart.Position
+	end
+
+	local rootPart = minionModel:FindFirstChild("HumanoidRootPart")
+	if rootPart and rootPart:IsA("BasePart") then
+		return rootPart.Position
+	end
+
+	local ok, pivot = pcall(function()
+		return minionModel:GetPivot()
+	end)
+	if ok then
+		return pivot.Position
+	end
+
+	return nil
+end
+
+local function resolveSpawnEffectCFrame(self, event: PresentationEvent, castFolder: Instance, minionPayload): CFrame?
+	local minionModel = minionPayload.minionModel
+	if typeof(minionModel) == "Instance" and minionModel:IsA("Model") and minionModel.Parent ~= nil then
+		local raycastPosition = resolveMinionRaycastPosition(minionModel)
+		if raycastPosition ~= nil then
+			local excludedInstances = {}
+			local seenInstances = {}
+			addUniqueInstance(excludedInstances, seenInstances, minionModel)
+			if typeof(event.bossModel) == "Instance" then
+				addUniqueInstance(excludedInstances, seenInstances, event.bossModel)
+			end
+			addUniqueInstance(excludedInstances, seenInstances, castFolder)
+
+			local rayOrigin = raycastPosition + Vector3.new(0, GROUND_RAYCAST_LIFT, 0)
+			local rayDirection = Vector3.new(0, -(GROUND_RAYCAST_LIFT + GROUND_RAYCAST_DEPTH), 0)
+			local result = self.Workspace:Raycast(
+				rayOrigin,
+				rayDirection,
+				buildGroundRaycastParams(excludedInstances)
+			)
+			if result then
+				return CFrame.new(result.Position + Vector3.new(0, 0.5, 0))
+			end
+		end
+	end
+
+	local spawnCFrame = minionPayload.spawnCFrame
+	if typeof(spawnCFrame) == "CFrame" then
+		return spawnCFrame
+	end
+
+	return nil
+end
 
 function Handler:_startAgrynothWarCall(record: ActiveRecord, event: PresentationEvent)
 	local bossModel = event.bossModel
@@ -152,8 +226,8 @@ function Handler:_spawnAgrynothWarCall(record: ActiveRecord, event: Presentation
 			continue
 		end
 
-		local spawnCFrame = minionPayload.spawnCFrame
-		if spawnSource ~= nil and typeof(spawnCFrame) == "CFrame" then
+		local spawnCFrame = resolveSpawnEffectCFrame(self, event, castFolder, minionPayload)
+		if spawnSource ~= nil and spawnCFrame ~= nil then
 			local spawnEffect = spawnSource:Clone()
 			if self:_placeWarCallEffectInstance(spawnEffect, spawnCFrame, minionScale) then
 				spawnEffect.Parent = castFolder

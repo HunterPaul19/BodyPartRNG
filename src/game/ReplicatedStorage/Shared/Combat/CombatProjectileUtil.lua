@@ -1,9 +1,14 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
 
 local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 
 local CombatProjectileUtil = {}
+
+local BASIC_PROJECTILE_SPEED_SCALAR_ATTRIBUTE = "BasicProjectileSpeedScalar"
+local BASIC_PROJECTILE_SPEED_SCALAR_FALLBACK = 1.5
+local BASIC_PROJECTILE_SPEED_SCALAR_MINIMUM = 0.001
 
 export type ProjectileMotion = {
 	startPosition: Vector3,
@@ -12,6 +17,15 @@ export type ProjectileMotion = {
 	startedAt: number,
 	travelDuration: number,
 }
+
+function CombatProjectileUtil.ResolveBasicProjectileSpeedScalar(): number
+	local scalar = tonumber(Workspace:GetAttribute(BASIC_PROJECTILE_SPEED_SCALAR_ATTRIBUTE))
+	if scalar == nil or scalar ~= scalar then
+		return BASIC_PROJECTILE_SPEED_SCALAR_FALLBACK
+	end
+
+	return math.max(BASIC_PROJECTILE_SPEED_SCALAR_MINIMUM, scalar)
+end
 
 function CombatProjectileUtil.ResolveTravelDuration(
 	startPosition: Vector3,
@@ -131,16 +145,16 @@ end
 function CombatProjectileUtil.ResolveFallbackImpactPosition(options: {
 	sourceModel: Model?,
 	sourceRootPart: BasePart,
+	targetCharacter: Model?,
 	targetRootPart: BasePart?,
 	fallbackDistance: number,
-	floorRaycastRoots: { Instance }?,
 	raycastStartHeight: number?,
 	raycastDistance: number?,
 }): Vector3
 	if options.targetRootPart and options.targetRootPart.Parent ~= nil then
 		return CombatProjectileUtil.ResolveGroundImpactPosition(options.targetRootPart.Position, {
 			sourceModel = options.sourceModel,
-			includeRoots = options.floorRaycastRoots,
+			targetCharacter = options.targetCharacter,
 			startHeight = options.raycastStartHeight,
 			distance = options.raycastDistance,
 		})
@@ -150,7 +164,7 @@ function CombatProjectileUtil.ResolveFallbackImpactPosition(options: {
 		+ (CombatMoveUtil.ResolvePlanarForward(options.sourceRootPart, nil) * math.max(0, tonumber(options.fallbackDistance) or 0))
 	return CombatProjectileUtil.ResolveGroundImpactPosition(fallbackPosition, {
 		sourceModel = options.sourceModel,
-		includeRoots = options.floorRaycastRoots,
+		targetCharacter = options.targetCharacter,
 		startHeight = options.raycastStartHeight,
 		distance = options.raycastDistance,
 	})

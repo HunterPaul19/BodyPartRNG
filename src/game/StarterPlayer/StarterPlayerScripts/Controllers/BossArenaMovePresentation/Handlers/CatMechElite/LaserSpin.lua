@@ -195,34 +195,19 @@ function Handler:_startLaserSpinRainbowTweens(record: ActiveRecord, beamsModel: 
 	end
 end
 
-function Handler:_playLaserSpinSounds(soundsSource: Instance, parent: Instance, visualScale: number)
-	local function cloneAndScheduleSound(sourceSound: Sound)
-		local soundClone = sourceSound:Clone()
-		soundClone.Parent = parent
-
-		local configuredDelay = tonumber(sourceSound:GetAttribute("Delay")) or 0
-		local delaySeconds = math.max(0, configuredDelay + SOUND_DELAY_OFFSET_SECONDS)
-		task.delay(delaySeconds, function()
-			if soundClone.Parent == nil then
-				return
-			end
-
-			self:scaleSound(soundClone, visualScale)
-			soundClone.TimePosition = 0
-			soundClone:Play()
-			self:destroySoundAfter(soundClone, 0, false)
-		end)
-	end
-
-	if soundsSource:IsA("Sound") then
-		cloneAndScheduleSound(soundsSource)
-	end
-
-	for _, descendant in ipairs(soundsSource:GetDescendants()) do
-		if descendant:IsA("Sound") then
-			cloneAndScheduleSound(descendant)
-		end
-	end
+function Handler:_playLaserSpinSounds(
+	soundsSource: Instance,
+	anchorPart: BasePart,
+	emitterParent: Instance?,
+	visualScale: number
+)
+	self:playSoundsAtPosition(soundsSource, anchorPart.CFrame, visualScale, {
+		parent = emitterParent,
+		includeDelay = true,
+		delayOffsetSeconds = SOUND_DELAY_OFFSET_SECONDS,
+		useConfiguredStartPosition = false,
+		useConfiguredEndPosition = false,
+	})
 end
 
 function Handler:_updateLaserSpin(record: ActiveRecord, nowServerTime: number)
@@ -300,7 +285,7 @@ function Handler:_startLaserSpin(record: ActiveRecord, event: PresentationEvent)
 
 	beamsModel:PivotTo(payload.baseCFrame)
 	if soundsSource then
-		self:_playLaserSpinSounds(soundsSource, primaryPart, visualScale)
+		self:_playLaserSpinSounds(soundsSource, primaryPart, castFolder, visualScale)
 	end
 	self:_startLaserSpinRainbowTweens(record, beamsModel)
 	self:_updateLaserSpin(record, self.Workspace:GetServerTimeNow())

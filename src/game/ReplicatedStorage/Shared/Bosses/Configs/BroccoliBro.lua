@@ -9,6 +9,8 @@ local Stomp = require(ReplicatedStorage.Shared.Bosses.Moves.BroccoliBro.Stomp)
 return BossConfigFactory.Create({
 	bossId = "Broccoli Bro",
 	arenaId = "Suburban",
+	recommendedCombatScore = 3200,
+	baseHealth = 250000,
 	walkSpeed = 13,
 	aggroRadius = 110,
 	leashRadius = 165,

@@ -216,7 +216,7 @@ function Handler:_sproutBroccoliSprout(record: ActiveRecord, event: Presentation
 	end
 
 	local castFolder = self:_ensureCastFolder(record)
-	local scaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1)
+	local scaleMultiplier = math.max(0.1, tonumber(payload.treeScaleMultiplier or payload.scaleMultiplier) or 1)
 	local riseDurationSeconds = math.max(0.05, tonumber(payload.riseDurationSeconds) or 0.45)
 
 	for _, pointData in ipairs(payload.points) do
@@ -242,7 +242,7 @@ function Handler:_sproutBroccoliSprout(record: ActiveRecord, event: Presentation
 		treeModel.Parent = castFolder
 		self:playTimedSounds(treeModel, scaleMultiplier)
 		self:enableVfxDescendants(treeModel)
-		self:emitVisuals(self:collectEmittableVisuals(treeModel))
+		self:emitVisuals(treeModel)
 		self:_tweenBroccoliSproutTree(record, treeModel, treeStartCFrame, treeEndCFrame, riseDurationSeconds)
 	end
 end

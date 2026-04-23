@@ -4,9 +4,10 @@ local RunService = game:GetService("RunService")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 
-local DAMAGE_PER_TICK = 7
+local DAMAGE_PER_TICK = 500
 local BEAM_DURATION_SECONDS = 2
 local BEAM_RADIUS_STUDS = 5.5
 local BEAM_TICK_SECONDS = 0.25
@@ -14,8 +15,8 @@ local BEAM_MAX_PARTS = 128
 local BEAM_MIN_LENGTH_STUDS = 4
 local BEAM_MAX_LENGTH_STUDS = 500
 local SPRING_DAMPING_RATIO = 0.95
-local SPRING_FREQUENCY = 1
-local SPRING_MAX_SPEED_STUDS_PER_SECOND = 45
+local SPRING_FREQUENCY = 2
+local SPRING_MAX_SPEED_STUDS_PER_SECOND = 90
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "CatMechElite"
 local ANIMATION_NAME = "RainbowBlast"
@@ -411,7 +412,7 @@ function RainbowBlast.StartCast(context)
 					return
 				end
 
-				humanoid:TakeDamage(DAMAGE_PER_TICK)
+				humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE_PER_TICK))
 			end,
 			HitboxDestroy = function()
 				activeHitbox = nil

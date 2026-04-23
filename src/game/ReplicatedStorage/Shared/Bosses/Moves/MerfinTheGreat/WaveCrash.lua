@@ -4,10 +4,11 @@ local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
-local DAMAGE = 20
+local DAMAGE = 72
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "MerfinTheGreat"
 local ANIMATION_NAME = "WaveCrash"
@@ -16,6 +17,7 @@ local VFX_FOLDER_NAME = "VFX"
 local MERFIN_VFX_FOLDER_NAME = "MerfinTheGreat"
 local WAVE_CRASH_VFX_FOLDER_NAME = "WaveCrash"
 local WAVE_MODEL_NAME = "Wave"
+local WAVE_CRASH_FORWARD_ATTACHMENT_NAME = "ForwardAttachment"
 local WAVE_TRAVEL_SPEED_STUDS_PER_SECOND = 100
 local WAVE_LIFETIME_SECONDS = 7
 local FLOOR_RAYCAST_START_HEIGHT = 5
@@ -143,7 +145,39 @@ local function resolvePlanarForwardDirection(bossRootPart: BasePart): Vector3
 	return direction.Unit
 end
 
-local function resolveWaveModelMetrics(scaleMultiplier: number): (Vector3?, CFrame?, number?)
+local function resolvePlanarUnitVector(vector: Vector3): Vector3?
+	local planarVector = Vector3.new(vector.X, 0, vector.Z)
+	if planarVector.Magnitude <= 0.001 then
+		return nil
+	end
+
+	return planarVector.Unit
+end
+
+local function resolveYawDelta(fromDirection: Vector3, toDirection: Vector3): number
+	local dot = math.clamp(fromDirection:Dot(toDirection), -1, 1)
+	local crossY = (fromDirection.Z * toDirection.X) - (fromDirection.X * toDirection.Z)
+	return math.atan2(crossY, dot)
+end
+
+local function resolveAuthoredPlanarFacing(waveModel: Model, pivotCFrame: CFrame): (Vector3?, string?)
+	local forwardAttachment = CombatMoveUtil.ResolveNamedAttachment(waveModel, WAVE_CRASH_FORWARD_ATTACHMENT_NAME)
+	if forwardAttachment ~= nil then
+		local forwardAttachmentFacing = resolvePlanarUnitVector(forwardAttachment.WorldPosition - pivotCFrame.Position)
+		if forwardAttachmentFacing ~= nil then
+			return forwardAttachmentFacing, WAVE_CRASH_FORWARD_ATTACHMENT_NAME
+		end
+	end
+
+	local pivotFacing = resolvePlanarUnitVector(pivotCFrame.RightVector)
+	if pivotFacing ~= nil then
+		return pivotFacing, "pivot RightVector"
+	end
+
+	return nil, nil
+end
+
+local function resolveWaveModelMetrics(scaleMultiplier: number): (Vector3?, CFrame?, number?, CFrame?, Vector3?)
 	local waveSource = resolveWaveSourceModel()
 	if waveSource == nil then
 		warn(
@@ -170,13 +204,20 @@ local function resolveWaveModelMetrics(scaleMultiplier: number): (Vector3?, CFra
 
 	local primaryPart = waveModel.PrimaryPart or waveModel:FindFirstChildWhichIsA("BasePart", true)
 	local pivotCFrame = waveModel:GetPivot()
+	local authoredRotation = pivotCFrame - pivotCFrame.Position
+	local authoredPlanarFacing, authoredFacingSource = resolveAuthoredPlanarFacing(waveModel, pivotCFrame)
+	if authoredPlanarFacing == nil then
+		warn("[WaveCrash] Wave VFX model is missing a usable ForwardAttachment/pivot facing; preserving authored rotation.")
+	elseif authoredFacingSource ~= WAVE_CRASH_FORWARD_ATTACHMENT_NAME then
+		warn("[WaveCrash] Wave VFX model is missing a usable ForwardAttachment; falling back to pivot RightVector.")
+	end
 	local boundingCFrame, boundingSize = waveModel:GetBoundingBox()
 	local boundingOffset = pivotCFrame:ToObjectSpace(boundingCFrame)
 	local primaryPartOffset = pivotCFrame:ToObjectSpace(primaryPart.CFrame)
 	local primaryBottomOffset = primaryPartOffset.Position.Y - (primaryPart.Size.Y * 0.5)
 	waveModel:Destroy()
 
-	return boundingSize, boundingOffset, primaryBottomOffset
+	return boundingSize, boundingOffset, primaryBottomOffset, authoredRotation, authoredPlanarFacing
 end
 
 local function resolveFloorY(bossModel: Model, bossRootPart: BasePart): number?
@@ -194,38 +235,46 @@ local function resolveFloorY(bossModel: Model, bossRootPart: BasePart): number?
 	return raycastResult.Position.Y
 end
 
-local function buildWaveFacingCFrame(position: Vector3, planarDirection: Vector3): CFrame
-	local rightVector = planarDirection
-	local upVector = Vector3.yAxis
-	local backVector = -rightVector:Cross(upVector)
-	if backVector.Magnitude <= 0.001 then
-		backVector = Vector3.zAxis
-	else
-		backVector = backVector.Unit
+local function buildWavePivotCFrame(
+	position: Vector3,
+	planarDirection: Vector3,
+	authoredRotation: CFrame,
+	authoredPlanarFacing: Vector3?
+): CFrame
+	local targetPlanarDirection = resolvePlanarUnitVector(planarDirection)
+	if targetPlanarDirection == nil or authoredPlanarFacing == nil then
+		return CFrame.new(position) * authoredRotation
 	end
 
-	return CFrame.fromMatrix(position, rightVector, upVector, backVector)
+	local yawDelta = resolveYawDelta(authoredPlanarFacing, targetPlanarDirection)
+
+	-- WaveCrash visuals and hitboxes share this planar facing convention; the server and client both
+	-- align from a Studio-authored ForwardAttachment and apply only yaw relative to the asset's authored pivot rotation.
+	return CFrame.new(position) * CFrame.Angles(0, yawDelta, 0) * authoredRotation
 end
 
-local function buildGroundedWaveStartCFrame(
+local function resolveGroundedWaveStartPosition(
 	bossModel: Model,
 	bossRootPart: BasePart,
-	planarDirection: Vector3,
 	primaryBottomOffset: number
-): CFrame
+): Vector3
 	local floorY = resolveFloorY(bossModel, bossRootPart) or bossRootPart.Position.Y
-	local startPosition = Vector3.new(
+	return Vector3.new(
 		bossRootPart.Position.X,
 		floorY - primaryBottomOffset,
 		bossRootPart.Position.Z
 	)
-
-	return buildWaveFacingCFrame(startPosition, planarDirection)
 end
 
-local function buildWaveCFrame(startCFrame: CFrame, planarDirection: Vector3, elapsedSeconds: number): CFrame
-	local currentPosition = startCFrame.Position + (planarDirection * (WAVE_TRAVEL_SPEED_STUDS_PER_SECOND * elapsedSeconds))
-	return CFrame.new(currentPosition) * (startCFrame - startCFrame.Position)
+local function buildWaveCFrame(
+	startPosition: Vector3,
+	planarDirection: Vector3,
+	elapsedSeconds: number,
+	authoredRotation: CFrame,
+	authoredPlanarFacing: Vector3?
+): CFrame
+	local currentPosition = startPosition + (planarDirection * (WAVE_TRAVEL_SPEED_STUDS_PER_SECOND * elapsedSeconds))
+	return buildWavePivotCFrame(currentPosition, planarDirection, authoredRotation, authoredPlanarFacing)
 end
 
 local function buildKnockbackDirection(planarDirection: Vector3, wavePosition: Vector3, targetRootPart: BasePart?): Vector3
@@ -263,8 +312,12 @@ function WaveCrash.StartCast(context)
 		return nil
 	end
 
-	local waveSize, waveBoundingOffset, primaryBottomOffset = resolveWaveModelMetrics(context.bossDefinition.scaleMultiplier)
-	if waveSize == nil or waveBoundingOffset == nil or primaryBottomOffset == nil then
+	local waveSize, waveBoundingOffset, primaryBottomOffset, authoredRotation, authoredPlanarFacing =
+		resolveWaveModelMetrics(context.bossDefinition.scaleMultiplier)
+	if waveSize == nil
+		or waveBoundingOffset == nil
+		or primaryBottomOffset == nil
+		or authoredRotation == nil then
 		return nil
 	end
 
@@ -360,7 +413,8 @@ function WaveCrash.StartCast(context)
 		destroyHitbox()
 
 		local planarDirection = resolvePlanarForwardDirection(bossRootPart)
-		local startCFrame = buildGroundedWaveStartCFrame(bossModel, bossRootPart, planarDirection, primaryBottomOffset)
+		local startPosition = resolveGroundedWaveStartPosition(bossModel, bossRootPart, primaryBottomOffset)
+		local startCFrame = buildWavePivotCFrame(startPosition, planarDirection, authoredRotation, authoredPlanarFacing)
 		local startedAt = os.clock()
 		context.EmitPresentation("send", {
 			startCFrame = startCFrame,
@@ -380,7 +434,8 @@ function WaveCrash.StartCast(context)
 				end
 
 				local elapsed = math.clamp(os.clock() - startedAt, 0, WAVE_LIFETIME_SECONDS)
-				return buildWaveCFrame(startCFrame, planarDirection, elapsed) * waveBoundingOffset
+				return buildWaveCFrame(startPosition, planarDirection, elapsed, authoredRotation, authoredPlanarFacing)
+					* waveBoundingOffset
 			end,
 			HitboxSize = waveSize,
 			HitboxType = "SpacialQuery",
@@ -403,10 +458,11 @@ function WaveCrash.StartCast(context)
 				end
 
 				hitTargets[targetModel] = true
-				humanoid:TakeDamage(DAMAGE)
+				humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE))
 
 				local elapsed = math.clamp(os.clock() - startedAt, 0, WAVE_LIFETIME_SECONDS)
-				local wavePosition = buildWaveCFrame(startCFrame, planarDirection, elapsed).Position
+				local wavePosition =
+					buildWaveCFrame(startPosition, planarDirection, elapsed, authoredRotation, authoredPlanarFacing).Position
 				Knockback(targetModel, "Default", {
 					Direction = buildKnockbackDirection(planarDirection, wavePosition, resolveRootPart(targetModel)),
 					Duration = 0.2,

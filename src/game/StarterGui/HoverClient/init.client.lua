@@ -5,6 +5,7 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local Spring = require(ReplicatedStorage.Common.Spring)
+local ToggleSoundUtil = require(ReplicatedStorage.Shared.Audio.ToggleSoundUtil)
 
 local hatchGui = playerGui:FindFirstChild("Hatch")
 
@@ -19,6 +20,10 @@ end
 
 local function shouldPlayClick(button)
 	if button.Name == "TapCatcher" and hatchGui and button:IsDescendantOf(hatchGui) then
+		return false
+	end
+
+	if ToggleSoundUtil.ShouldSuppressDefaultClickSound(button) then
 		return false
 	end
 

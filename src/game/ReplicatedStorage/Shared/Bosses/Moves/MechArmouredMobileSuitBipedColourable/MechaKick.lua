@@ -1,13 +1,12 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace = game:GetService("Workspace")
-
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
-local DAMAGE = 20
+local DAMAGE = 330
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "Destroyer3000"
 local ANIMATION_NAME = "Kick"
@@ -96,48 +95,18 @@ local function resolveHumanoid(model: Model?): Humanoid?
 end
 
 local function buildFloorRaycastParams(bossModel: Model): RaycastParams
-	local includeInstances = {}
-	local activeBossArena = Workspace:FindFirstChild("ActiveBossArena")
-	if activeBossArena then
-		table.insert(includeInstances, activeBossArena)
-	end
-
-	local map = Workspace:FindFirstChild("Map")
-	if map then
-		table.insert(includeInstances, map)
-	end
-
-	local world = Workspace:FindFirstChild("World")
-	local worldMap = world and world:FindFirstChild("Map")
-	if worldMap then
-		table.insert(includeInstances, worldMap)
-	end
-
-	if Workspace.Terrain then
-		table.insert(includeInstances, Workspace.Terrain)
-	end
-
-	local raycastParams = RaycastParams.new()
-	if #includeInstances > 0 then
-		raycastParams.FilterType = Enum.RaycastFilterType.Include
-		raycastParams.FilterDescendantsInstances = includeInstances
-	else
-		raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-		raycastParams.FilterDescendantsInstances = { bossModel }
-	end
-
-	return raycastParams
+	return CombatMoveUtil.BuildFloorRaycastParams({
+		sourceModel = bossModel,
+	})
 end
 
 local function raycastGroundNear(position: Vector3, bossModel: Model): Vector3?
-	local rayOrigin = position + Vector3.new(0, FLOOR_RAYCAST_START_HEIGHT, 0)
-	local rayDirection = Vector3.new(0, -(FLOOR_RAYCAST_START_HEIGHT + FLOOR_RAYCAST_DISTANCE), 0)
-	local raycastResult = Workspace:Raycast(rayOrigin, rayDirection, buildFloorRaycastParams(bossModel))
-	if raycastResult == nil then
-		return nil
-	end
-
-	return raycastResult.Position
+	return CombatMoveUtil.RaycastGroundNearWithParams(
+		position,
+		buildFloorRaycastParams(bossModel),
+		FLOOR_RAYCAST_START_HEIGHT,
+		FLOOR_RAYCAST_DISTANCE
+	)
 end
 
 local function resolveLeftFootPart(bossModel: Model): BasePart?
@@ -181,37 +150,38 @@ local function resolveStandingHeight(bossHumanoid: Humanoid?, bossRootPart: Base
 	return math.max((bossRootPart.Size.Y * 0.5) + bossHumanoid.HipHeight, bossRootPart.Size.Y)
 end
 
-local function resolveGroundedImpactCFrame(bossModel: Model, impactCFrame: CFrame, leftFoot: BasePart?): CFrame
+local function resolveFallbackGroundY(impactCFrame: CFrame, leftFoot: BasePart?): number
 	local footHeight = if leftFoot then leftFoot.Size.Y else 0
-	local footBottomY = impactCFrame.Position.Y - (footHeight * 0.5)
+	return impactCFrame.Position.Y - (footHeight * 0.5)
+end
+
+local function resolveGroundedImpactCFrame(bossModel: Model, impactCFrame: CFrame, leftFoot: BasePart?): CFrame
+	local fallbackGroundY = resolveFallbackGroundY(impactCFrame, leftFoot)
 	local groundPosition = raycastGroundNear(impactCFrame.Position, bossModel)
-	local groundY = if groundPosition then groundPosition.Y else footBottomY
+	local groundY = if groundPosition then groundPosition.Y else fallbackGroundY
 
 	return CFrame.new(impactCFrame.Position.X, groundY, impactCFrame.Position.Z)
 end
 
 local function resolveHitboxGeometry(
-	bossModel: Model,
 	bossHumanoid: Humanoid?,
 	bossRootPart: BasePart,
-	impactCFrame: CFrame,
+	rawImpactCFrame: CFrame,
+	groundedImpactCFrame: CFrame,
 	leftFoot: BasePart?
 ): (CFrame, Vector3)
 	local baseHitboxSize = resolveHitboxSize(leftFoot)
-	local footHeight = if leftFoot then leftFoot.Size.Y else 0
-	local footBottomY = impactCFrame.Position.Y - (footHeight * 0.5)
-	local groundPosition = raycastGroundNear(impactCFrame.Position, bossModel)
-	local groundY = if groundPosition then groundPosition.Y else footBottomY
-	local footTopY = if leftFoot then leftFoot.Position.Y + (leftFoot.Size.Y * 0.5) else impactCFrame.Position.Y
+	local groundY = groundedImpactCFrame.Position.Y
+	local footTopY = if leftFoot then leftFoot.Position.Y + (leftFoot.Size.Y * 0.5) else rawImpactCFrame.Position.Y
 	local standingTopY = bossRootPart.Position.Y + resolveStandingHeight(bossHumanoid, bossRootPart)
 	local rootTopY = bossRootPart.Position.Y + (bossRootPart.Size.Y * 0.5)
 	local topY = math.max(footTopY, standingTopY, rootTopY)
 	local height = math.max(baseHitboxSize.Y, MIN_HITBOX_HEIGHT, topY - groundY)
 	local hitboxSize = Vector3.new(baseHitboxSize.X, height, baseHitboxSize.Z)
 	local centerPosition = Vector3.new(
-		impactCFrame.Position.X,
+		groundedImpactCFrame.Position.X,
 		groundY + (hitboxSize.Y * 0.5),
-		impactCFrame.Position.Z
+		groundedImpactCFrame.Position.Z
 	)
 
 	return CFrame.new(centerPosition), hitboxSize
@@ -238,7 +208,12 @@ local function buildKnockbackDirection(impactPosition: Vector3, bossRootPart: Ba
 	return (direction.Unit * KNOCKBACK_SPEED) + Vector3.new(0, KNOCKBACK_UPWARD_SPEED, 0)
 end
 
-local function spawnKickHitbox(context, impactCFrame: CFrame, hitTargets: { [Model]: boolean })
+local function spawnKickHitbox(
+	context,
+	rawImpactCFrame: CFrame,
+	groundedImpactCFrame: CFrame,
+	hitTargets: { [Model]: boolean }
+)
 	local bossModel = context.bossModel
 	local bossRootPart = context.bossRootPart
 	if bossModel == nil or bossModel.Parent == nil or bossRootPart == nil or bossRootPart.Parent == nil then
@@ -247,13 +222,13 @@ local function spawnKickHitbox(context, impactCFrame: CFrame, hitTargets: { [Mod
 
 	local leftFoot = resolveLeftFootPart(bossModel)
 	local hitboxCFrame, hitboxSize = resolveHitboxGeometry(
-		bossModel,
 		context.bossHumanoid,
 		bossRootPart,
-		impactCFrame,
+		rawImpactCFrame,
+		groundedImpactCFrame,
 		leftFoot
 	)
-	local impactPosition = impactCFrame.Position
+	local impactPosition = groundedImpactCFrame.Position
 	local hitbox
 	hitbox = Hitbox.new({
 		DebugVisibilityAttribute = "BossHitboxesVisible",
@@ -281,7 +256,7 @@ local function spawnKickHitbox(context, impactCFrame: CFrame, hitTargets: { [Mod
 			end
 
 			hitTargets[targetModel] = true
-			humanoid:TakeDamage(DAMAGE)
+			humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE))
 
 			Knockback(targetModel, "Default", {
 				Direction = buildKnockbackDirection(impactPosition, bossRootPart, targetRootPart),
@@ -433,7 +408,7 @@ function MechaKick.StartCast(context)
 			sourceImpactCFrame = impactCFrame,
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
 		})
-		activeHitbox = spawnKickHitbox(context, impactCFrame, hitTargets)
+		activeHitbox = spawnKickHitbox(context, impactCFrame, groundedImpactCFrame, hitTargets)
 	end
 
 	local track = profile:PlayAnimation(animationInstance, Enum.AnimationPriority.Action, 1, {

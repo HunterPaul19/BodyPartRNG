@@ -5,13 +5,13 @@ local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves
 local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local CombatProjectileUtil = require(ReplicatedStorage.Shared.Combat.CombatProjectileUtil)
 
-local DAMAGE = 10
+local DAMAGE = 150
 local AOE_RADIUS = 14
 local HITBOX_DURATION_SECONDS = 0.12
 local MAX_HITBOX_PARTS = 128
 local FIRE_INTERVAL_SECONDS = 0.3
 local MAX_MISSILES = 18
-local PROJECTILE_TRAVEL_SECONDS = 94 / 60
+local BASE_PROJECTILE_TRAVEL_SECONDS = 94 / 60
 local POST_FINAL_IMPACT_PRESENTATION_HOLD_SECONDS = 0.35
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "Destroyer3000"
@@ -82,9 +82,10 @@ local function buildFloorRaycastParams(bossModel: Model): RaycastParams
 	})
 end
 
-local function raycastGroundNear(position: Vector3, bossModel: Model): Vector3?
+local function raycastGroundNear(position: Vector3, bossModel: Model, targetCharacter: Model?): Vector3?
 	return CombatMoveUtil.RaycastGroundNear(position, {
 		sourceModel = bossModel,
+		targetCharacter = targetCharacter,
 		startHeight = FLOOR_RAYCAST_START_HEIGHT,
 		distance = FLOOR_RAYCAST_DISTANCE,
 	})
@@ -94,19 +95,19 @@ local function collectAliveTargets(context): { any }
 	return CombatMoveUtil.CollectAliveTargets(context.aliveTargets or {})
 end
 
-local function resolveImpactPosition(targetRootPart: BasePart, bossModel: Model, rng: Random): Vector3
+local function resolveImpactPosition(targetRootPart: BasePart, targetCharacter: Model?, bossModel: Model, rng: Random): Vector3
 	local angle = rng:NextNumber(0, math.pi * 2)
 	local radius = rng:NextNumber(0, TARGET_OFFSET_RADIUS)
 	local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
 	local targetPosition = targetRootPart.Position + offset
-	return raycastGroundNear(targetPosition, bossModel) or targetPosition
+	return raycastGroundNear(targetPosition, bossModel, targetCharacter) or targetPosition
 end
 
 local function resolveArcControlPosition(startPosition: Vector3, impactPosition: Vector3): Vector3
 	return CombatProjectileUtil.ResolveArcControlPosition(startPosition, impactPosition, MIN_ARC_HEIGHT, MAX_ARC_HEIGHT)
 end
 
-local function applyImpactDamage(bossModel: Model, impactPosition: Vector3)
+local function applyImpactDamage(context, bossModel: Model, impactPosition: Vector3)
 	CombatProjectileUtil.CreateRadiusDamageHitbox({
 		debugVisibilityAttribute = "BossHitboxesVisible",
 		hitboxOwner = bossModel,
@@ -114,7 +115,7 @@ local function applyImpactDamage(bossModel: Model, impactPosition: Vector3)
 		radius = AOE_RADIUS,
 		duration = HITBOX_DURATION_SECONDS,
 		maxParts = MAX_HITBOX_PARTS,
-		damage = DAMAGE,
+		damage = CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE),
 	})
 end
 
@@ -174,6 +175,8 @@ function MissileBarrage.StartCast(context)
 	local recoveryEndsAt = nil :: number?
 	local pendingImpactTokens = {}
 	local completionHoldToken = nil :: any
+	local projectileTravelSeconds =
+		BASE_PROJECTILE_TRAVEL_SECONDS / CombatProjectileUtil.ResolveBasicProjectileSpeedScalar()
 
 	local leftShoulderAttachment = resolveAttachment(bossModel, LEFT_SHOULDER_ATTACHMENT_NAME)
 	local rightShoulderAttachment = resolveAttachment(bossModel, RIGHT_SHOULDER_ATTACHMENT_NAME)
@@ -290,7 +293,7 @@ function MissileBarrage.StartCast(context)
 		local useLeftShoulder = missileCount % 2 == 1
 		local launchCFrame = resolveLaunchCFrame(useLeftShoulder)
 		local startPosition = launchCFrame.Position
-		local impactPosition = resolveImpactPosition(target.rootPart, bossModel, rng)
+		local impactPosition = resolveImpactPosition(target.rootPart, target.character, bossModel, rng)
 		local controlPosition = resolveArcControlPosition(startPosition, impactPosition)
 		local missileIndex = missileCount
 		local impactToken = {}
@@ -304,12 +307,12 @@ function MissileBarrage.StartCast(context)
 			startPosition = startPosition,
 			controlPosition = controlPosition,
 			impactPosition = impactPosition,
-			travelDuration = PROJECTILE_TRAVEL_SECONDS,
+			travelDuration = projectileTravelSeconds,
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
 			targetUserId = target.player.UserId,
 		})
 
-		task.delay(PROJECTILE_TRAVEL_SECONDS, function()
+		task.delay(projectileTravelSeconds, function()
 			if pendingImpactTokens[impactToken] ~= true then
 				return
 			end
@@ -324,7 +327,7 @@ function MissileBarrage.StartCast(context)
 				return
 			end
 
-			applyImpactDamage(bossModel, impactPosition)
+			applyImpactDamage(context, bossModel, impactPosition)
 			context.EmitPresentation("impact", {
 				index = missileIndex,
 				impactPosition = impactPosition,

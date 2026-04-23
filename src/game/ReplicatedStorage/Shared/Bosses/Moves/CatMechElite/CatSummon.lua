@@ -7,6 +7,7 @@ local Workspace = game:GetService("Workspace")
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local MinionDisplay = require(ReplicatedStorage.Shared.Bosses.MinionDisplay)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 
 local ANIMATION_FADE_SECONDS = 0.08
@@ -25,10 +26,12 @@ local MINION_MODEL_NAME = "Cat Mech"
 local MINION_DISPLAY_NAME = "Cat Mech"
 
 local CAT_SUMMON_YAW_OFFSETS_DEGREES = { 0, 15, 30, -15, -30 }
+local SUMMON_FLARE_DAMAGE = 300
+local DEFAULT_SUMMON_IMPACT_SIZE = Vector3.new(24, 12, 24)
 local MINION_SCALE = 3
-local MINION_MAX_HEALTH = 70
+local MINION_MAX_HEALTH = 38000
 local MINION_WALK_SPEED = 14
-local MINION_M1_DAMAGE = 8
+local MINION_M1_DAMAGE = 420
 local MINION_M1_COOLDOWN_SECONDS = 1.15
 local MINION_MOVE_REFRESH_SECONDS = 0.25
 local MINION_ATTACK_RANGE = 9
@@ -118,11 +121,17 @@ local function resolveMinionSourceModel(): Model?
 	return nil
 end
 
-local function resolveRuntimeImpactVfxPartCFrame(rootCFrame: CFrame, scaleMultiplier: number): CFrame
+local function resolveRuntimeImpactGeometry(
+	rootCFrame: CFrame,
+	scaleMultiplier: number
+): { impactCFrame: CFrame, impactSize: Vector3 }
 	local catSummonFolder = resolveCatSummonVfxFolder()
 	local impactSource = catSummonFolder and catSummonFolder:FindFirstChild("Impact")
 	if not (impactSource and impactSource:IsA("Model")) then
-		return rootCFrame
+		return {
+			impactCFrame = rootCFrame,
+			impactSize = DEFAULT_SUMMON_IMPACT_SIZE,
+		}
 	end
 
 	local impactModel = impactSource:Clone()
@@ -132,21 +141,34 @@ local function resolveRuntimeImpactVfxPartCFrame(rootCFrame: CFrame, scaleMultip
 	local impactPart = impactModel:FindFirstChild("Impact", true)
 	if not (impactPart and impactPart:IsA("BasePart")) then
 		impactModel:Destroy()
-		return rootCFrame
+		return {
+			impactCFrame = rootCFrame,
+			impactSize = DEFAULT_SUMMON_IMPACT_SIZE,
+		}
 	end
 
-	local impactCFrame = impactPart.CFrame
+	local impactGeometry = {
+		impactCFrame = impactPart.CFrame,
+		impactSize = Vector3.new(
+			math.max(DEFAULT_SUMMON_IMPACT_SIZE.X, impactPart.Size.X),
+			math.max(DEFAULT_SUMMON_IMPACT_SIZE.Y, impactPart.Size.Y),
+			math.max(DEFAULT_SUMMON_IMPACT_SIZE.Z, impactPart.Size.Z)
+		),
+	}
 	impactModel:Destroy()
-	return impactCFrame
+	return impactGeometry
 end
 
-local function resolveRuntimeImpactVfxPartCFrames(bossRootPart: BasePart, scaleMultiplier: number): { CFrame }
-	local impactCFrames = {}
+local function resolveRuntimeImpactGeometries(
+	bossRootPart: BasePart,
+	scaleMultiplier: number
+): { { impactCFrame: CFrame, impactSize: Vector3 } }
+	local impactGeometries = {}
 	for _, offsetDegrees in ipairs(CAT_SUMMON_YAW_OFFSETS_DEGREES) do
 		local rootCFrame = bossRootPart.CFrame * CFrame.Angles(0, math.rad(offsetDegrees), 0)
-		table.insert(impactCFrames, resolveRuntimeImpactVfxPartCFrame(rootCFrame, scaleMultiplier))
+		table.insert(impactGeometries, resolveRuntimeImpactGeometry(rootCFrame, scaleMultiplier))
 	end
-	return impactCFrames
+	return impactGeometries
 end
 
 local function ensureActiveMinionsFolder(): Folder
@@ -398,6 +420,7 @@ local function resolveMinionHitboxSizeAndOffset(rootPart: BasePart): (Vector3, n
 end
 
 local function spawnMinionAttackHitbox(
+	context,
 	minionModel: Model,
 	minionRootPart: BasePart,
 	damagedTargets: { [Model]: boolean },
@@ -437,7 +460,43 @@ local function spawnMinionAttackHitbox(
 			end
 
 			damagedTargets[targetModel] = true
-			humanoid:TakeDamage(MINION_M1_DAMAGE)
+			humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, MINION_M1_DAMAGE))
+		end,
+		HitboxDestroy = function()
+			activeHitboxes[hitbox] = nil
+		end,
+	})
+
+	activeHitboxes[hitbox] = true
+end
+
+local function spawnSummonImpactHitbox(
+	context,
+	bossModel: Model,
+	impactCFrame: CFrame,
+	impactSize: Vector3,
+	activeHitboxes: { [any]: boolean }
+)
+	local hitTargets = {}
+	local hitbox
+	hitbox = Hitbox.new({
+		DebugVisibilityAttribute = "BossHitboxesVisible",
+		Character = bossModel,
+		HitboxCFrame = CFrame.new(impactCFrame.Position + Vector3.new(0, impactSize.Y * 0.5, 0)),
+		HitboxSize = impactSize,
+		HitboxType = "SpacialQuery",
+		Time = 0.12,
+		MaxParts = MAX_HITBOX_PARTS,
+	}, {
+		HitTarget = function(targetModel: Model)
+			local targetInfo = CombatMoveUtil.DamageOnce(
+				hitTargets,
+				targetModel,
+				CombatMoveUtil.ResolveScaledBossDamage(context, SUMMON_FLARE_DAMAGE)
+			)
+			if targetInfo == nil then
+				return
+			end
 		end,
 		HitboxDestroy = function()
 			activeHitboxes[hitbox] = nil
@@ -674,7 +733,7 @@ function CatSummon.StartCast(context)
 			end
 
 			nextAttackAt = now + MINION_M1_COOLDOWN_SECONDS
-			spawnMinionAttackHitbox(spawnedMinion, rootPart, {}, activeMinionHitboxes)
+			spawnMinionAttackHitbox(context, spawnedMinion, rootPart, {}, activeMinionHitboxes)
 		end))
 	end
 
@@ -744,13 +803,20 @@ function CatSummon.StartCast(context)
 		impactTriggered = true
 		impactThread = nil
 		local scaleMultiplier = tonumber(context.bossDefinition and context.bossDefinition.scaleMultiplier) or 1
-		local impactVfxPartCFrames = resolveRuntimeImpactVfxPartCFrames(bossRootPart, scaleMultiplier)
+		local impactGeometries = resolveRuntimeImpactGeometries(bossRootPart, scaleMultiplier)
 		context.EmitPresentation("impact", {
 			scaleMultiplier = scaleMultiplier,
 			yawOffsetsDegrees = CAT_SUMMON_YAW_OFFSETS_DEGREES,
 		})
-		for _, impactVfxPartCFrame in ipairs(impactVfxPartCFrames) do
-			spawnMinionAtImpact(impactVfxPartCFrame)
+		for _, impactGeometry in ipairs(impactGeometries) do
+			spawnSummonImpactHitbox(
+				context,
+				bossModel,
+				impactGeometry.impactCFrame,
+				impactGeometry.impactSize,
+				activeMinionHitboxes
+			)
+			spawnMinionAtImpact(impactGeometry.impactCFrame)
 		end
 		markComplete()
 	end

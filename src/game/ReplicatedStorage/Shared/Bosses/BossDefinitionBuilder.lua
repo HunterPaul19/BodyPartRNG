@@ -31,6 +31,15 @@ local function normalizePositiveNumber(value: any, defaultValue: number): number
 	return math.max(0, resolvedValue)
 end
 
+local function normalizeNonNegativeInteger(value: any, defaultValue: number): number
+	local resolvedValue = tonumber(value)
+	if resolvedValue == nil then
+		return defaultValue
+	end
+
+	return math.max(0, math.floor(resolvedValue))
+end
+
 local function normalizeTags(tags: any): { string }
 	local normalizedTags = {}
 	local seenTags = {}
@@ -174,6 +183,8 @@ function BossDefinitionBuilder.Create(definition: any)
 		bossId = bossId,
 		displayName = displayName,
 		arenaId = arenaId,
+		recommendedCombatScore = normalizeNonNegativeInteger(definition.recommendedCombatScore, 0),
+		baseHealth = math.max(1, normalizeNonNegativeInteger(definition.baseHealth, 1)),
 		scaleMultiplier = math.max(0.1, normalizePositiveNumber(definition.scaleMultiplier, DEFAULT_SCALE_MULTIPLIER)),
 		walkSpeed = normalizePositiveNumber(definition.walkSpeed, DEFAULT_WALK_SPEED),
 		aggroRadius = aggroRadius,

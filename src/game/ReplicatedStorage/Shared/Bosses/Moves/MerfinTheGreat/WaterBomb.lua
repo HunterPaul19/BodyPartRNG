@@ -8,13 +8,13 @@ local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local CombatProjectileUtil = require(ReplicatedStorage.Shared.Combat.CombatProjectileUtil)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
-local DAMAGE = 22
+local DAMAGE = 90
 local BASE_EXPLOSION_RADIUS = 22
 local EXPLOSION_SCALE_MULTIPLIER = 2
 local EXPLOSION_VISUAL_SCALE_MULTIPLIER = 0.45
 local EXPLOSION_RADIUS = BASE_EXPLOSION_RADIUS * EXPLOSION_SCALE_MULTIPLIER
 local EXPLOSION_HITBOX_DURATION_SECONDS = 0.12
-local PROJECTILE_SPEED_STUDS_PER_SECOND = 100
+local BASE_PROJECTILE_SPEED_STUDS_PER_SECOND = 100
 local PROJECTILE_RADIUS = 5
 local BALL_START_SCALE = 0.075
 local BALL_END_SCALE = 6.25
@@ -110,9 +110,10 @@ local function buildFloorRaycastParams(bossModel: Model): RaycastParams
 	})
 end
 
-local function raycastGroundNear(position: Vector3, bossModel: Model): Vector3?
+local function raycastGroundNear(position: Vector3, bossModel: Model, targetCharacter: Model?): Vector3?
 	return CombatMoveUtil.RaycastGroundNear(position, {
 		sourceModel = bossModel,
+		targetCharacter = targetCharacter,
 		startHeight = FLOOR_RAYCAST_START_HEIGHT,
 		distance = FLOOR_RAYCAST_DISTANCE,
 	})
@@ -128,11 +129,11 @@ end
 
 local function resolveImpactPosition(bossModel: Model, bossRootPart: BasePart, targetData): Vector3
 	if targetData and targetData.rootPart and targetData.rootPart.Parent ~= nil then
-		return raycastGroundNear(targetData.rootPart.Position, bossModel) or targetData.rootPart.Position
+		return raycastGroundNear(targetData.rootPart.Position, bossModel, targetData.character) or targetData.rootPart.Position
 	end
 
 	local fallbackPosition = bossRootPart.Position + (resolvePlanarForwardDirection(bossRootPart) * FALLBACK_THROW_DISTANCE_STUDS)
-	return raycastGroundNear(fallbackPosition, bossModel) or fallbackPosition
+	return raycastGroundNear(fallbackPosition, bossModel, targetData and targetData.character) or fallbackPosition
 end
 
 local function buildKnockbackDirection(impactPosition: Vector3, targetRootPart: BasePart?): Vector3
@@ -144,7 +145,7 @@ local function buildKnockbackDirection(impactPosition: Vector3, targetRootPart: 
 	})
 end
 
-local function applyExplosionDamage(bossModel: Model, impactPosition: Vector3)
+local function applyExplosionDamage(context, bossModel: Model, impactPosition: Vector3)
 	CombatProjectileUtil.CreateRadiusDamageHitbox({
 		debugVisibilityAttribute = "BossHitboxesVisible",
 		hitboxOwner = bossModel,
@@ -152,7 +153,7 @@ local function applyExplosionDamage(bossModel: Model, impactPosition: Vector3)
 		radius = EXPLOSION_RADIUS,
 		duration = EXPLOSION_HITBOX_DURATION_SECONDS,
 		maxParts = 256,
-		damage = DAMAGE,
+		damage = CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE),
 		onHit = function(targetInfo)
 			Knockback(targetInfo.character, "Default", {
 				Direction = buildKnockbackDirection(impactPosition, targetInfo.rootPart),
@@ -224,6 +225,8 @@ function WaterBomb.StartCast(context)
 	local presentationStopped = false
 	local recoveryEndsAt = nil :: number?
 	local projectileMotion = nil
+	local projectileSpeedStudsPerSecond =
+		BASE_PROJECTILE_SPEED_STUDS_PER_SECOND * CombatProjectileUtil.ResolveBasicProjectileSpeedScalar()
 
 	local function disconnectStoppedConnection()
 		if stoppedConnection and stoppedConnection.Connected then
@@ -300,7 +303,7 @@ function WaterBomb.StartCast(context)
 			explosionRadius = EXPLOSION_RADIUS,
 			scaleMultiplier = context.bossDefinition.scaleMultiplier * EXPLOSION_VISUAL_SCALE_MULTIPLIER,
 		})
-		applyExplosionDamage(bossModel, impactPosition)
+		applyExplosionDamage(context, bossModel, impactPosition)
 		stopPresentation()
 		disconnectProjectileConnection()
 		destroyProjectileHitbox()
@@ -320,14 +323,14 @@ function WaterBomb.StartCast(context)
 		projectileMotion = CombatProjectileUtil.CreateLinearMotion(
 			startPosition,
 			impactPosition,
-			PROJECTILE_SPEED_STUDS_PER_SECOND
+			projectileSpeedStudsPerSecond
 		)
 
 		context.EmitPresentation("throw", {
 			startPosition = startPosition,
 			impactPosition = impactPosition,
 			travelDuration = projectileMotion.travelDuration,
-			projectileSpeed = PROJECTILE_SPEED_STUDS_PER_SECOND,
+			projectileSpeed = projectileSpeedStudsPerSecond,
 			ballScale = BALL_END_SCALE,
 			targetUserId = if targetData then targetData.player.UserId else nil,
 		})

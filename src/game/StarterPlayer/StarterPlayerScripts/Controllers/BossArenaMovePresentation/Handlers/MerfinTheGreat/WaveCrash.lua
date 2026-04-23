@@ -6,6 +6,7 @@ local Constants = {
 		WAVE_CRASH_MODULE_ID = "Moves.MerfinTheGreat.WaveCrash",
 	},
 	Vfx = {
+		WAVE_CRASH_FORWARD_ATTACHMENT_NAME = "ForwardAttachment",
 		MERFIN_THE_GREAT_VFX_FOLDER_NAME = "MerfinTheGreat",
 		WAVE_CRASH_LEFT_HAND_MODEL_NAME = "LeftHand",
 		WAVE_CRASH_RIGHT_HAND_MODEL_NAME = "RightHand",
@@ -15,17 +16,74 @@ local Constants = {
 }
 
 local MERFIN_THE_GREAT_VFX_FOLDER_NAME = Constants.Vfx.MERFIN_THE_GREAT_VFX_FOLDER_NAME
+local WAVE_CRASH_FORWARD_ATTACHMENT_NAME = Constants.Vfx.WAVE_CRASH_FORWARD_ATTACHMENT_NAME
 local WAVE_CRASH_LEFT_HAND_MODEL_NAME = Constants.Vfx.WAVE_CRASH_LEFT_HAND_MODEL_NAME
 local WAVE_CRASH_MODULE_ID = Constants.ModuleIds.WAVE_CRASH_MODULE_ID
 local WAVE_CRASH_RIGHT_HAND_MODEL_NAME = Constants.Vfx.WAVE_CRASH_RIGHT_HAND_MODEL_NAME
 local WAVE_CRASH_VFX_NAME = Constants.Vfx.WAVE_CRASH_VFX_NAME
 local WAVE_CRASH_WAVE_MODEL_NAME = Constants.Vfx.WAVE_CRASH_WAVE_MODEL_NAME
-local WAVE_CRASH_WAVE_VISUAL_ROTATION_OFFSET = CFrame.Angles(0, math.pi, 0)
 
 local Handler = {}
 
-local function buildWaveVisualCFrame(baseCFrame: CFrame, position: Vector3): CFrame
-	return CFrame.new(position) * (baseCFrame - baseCFrame.Position) * WAVE_CRASH_WAVE_VISUAL_ROTATION_OFFSET
+local function resolvePlanarUnitVector(vector: Vector3): Vector3?
+	local planarVector = Vector3.new(vector.X, 0, vector.Z)
+	if planarVector.Magnitude <= 0.001 then
+		return nil
+	end
+
+	return planarVector.Unit
+end
+
+local function resolveYawDelta(fromDirection: Vector3, toDirection: Vector3): number
+	local dot = math.clamp(fromDirection:Dot(toDirection), -1, 1)
+	local crossY = (fromDirection.Z * toDirection.X) - (fromDirection.X * toDirection.Z)
+	return math.atan2(crossY, dot)
+end
+
+local function resolveNamedAttachment(root: Instance?, attachmentName: string): Attachment?
+	if root == nil then
+		return nil
+	end
+
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("Attachment") and descendant.Name == attachmentName then
+			return descendant
+		end
+	end
+
+	return nil
+end
+
+local function resolveAuthoredPlanarFacing(waveModel: Model, authoredPivot: CFrame): (Vector3?, string?)
+	local forwardAttachment = resolveNamedAttachment(waveModel, WAVE_CRASH_FORWARD_ATTACHMENT_NAME)
+	if forwardAttachment ~= nil then
+		local forwardAttachmentFacing = resolvePlanarUnitVector(forwardAttachment.WorldPosition - authoredPivot.Position)
+		if forwardAttachmentFacing ~= nil then
+			return forwardAttachmentFacing, WAVE_CRASH_FORWARD_ATTACHMENT_NAME
+		end
+	end
+
+	local pivotFacing = resolvePlanarUnitVector(authoredPivot.RightVector)
+	if pivotFacing ~= nil then
+		return pivotFacing, "pivot RightVector"
+	end
+
+	return nil, nil
+end
+
+local function buildWaveVisualCFrame(
+	position: Vector3,
+	planarDirection: Vector3,
+	authoredRotation: CFrame,
+	authoredPlanarFacing: Vector3?
+): CFrame
+	local targetPlanarDirection = resolvePlanarUnitVector(planarDirection)
+	if targetPlanarDirection == nil or authoredPlanarFacing == nil then
+		return CFrame.new(position) * authoredRotation
+	end
+
+	local yawDelta = resolveYawDelta(authoredPlanarFacing, targetPlanarDirection)
+	return CFrame.new(position) * CFrame.Angles(0, yawDelta, 0) * authoredRotation
 end
 
 function Handler:_updateWaveCrashMotion(record: ActiveRecord, nowServerTime: number)
@@ -42,7 +100,14 @@ function Handler:_updateWaveCrashMotion(record: ActiveRecord, nowServerTime: num
 	end
 
 	local currentPosition = waveMotion.startCFrame.Position + (waveMotion.direction * (waveMotion.speed * elapsed))
-	waveModel:PivotTo(buildWaveVisualCFrame(waveMotion.startCFrame, currentPosition))
+	waveModel:PivotTo(
+		buildWaveVisualCFrame(
+			currentPosition,
+			waveMotion.direction,
+			waveMotion.authoredRotation,
+			waveMotion.authoredPlanarFacing
+		)
+	)
 end
 
 function Handler:_startWaveCrash(record: ActiveRecord, event: PresentationEvent)
@@ -103,8 +168,8 @@ function Handler:_startWaveCrash(record: ActiveRecord, event: PresentationEvent)
 
 	self:playTimedSounds(leftHandModel, scaleMultiplier)
 	self:playTimedSounds(rightHandModel, scaleMultiplier)
-	self:emitVisuals(self:collectEmittableVisuals(leftHandModel))
-	self:emitVisuals(self:collectEmittableVisuals(rightHandModel))
+	self:emitVisuals(leftHandModel)
+	self:emitVisuals(rightHandModel)
 end
 
 function Handler:_sendWaveCrash(record: ActiveRecord, event: PresentationEvent)
@@ -148,8 +213,17 @@ function Handler:_sendWaveCrash(record: ActiveRecord, event: PresentationEvent)
 		return
 	end
 
+	local authoredPivot = waveModel:GetPivot()
+	local authoredRotation = authoredPivot - authoredPivot.Position
+
 	waveModel.Parent = castFolder
-	waveModel:PivotTo(buildWaveVisualCFrame(startCFrame, startCFrame.Position))
+	local authoredPlanarFacing, authoredFacingSource = resolveAuthoredPlanarFacing(waveModel, authoredPivot)
+	if authoredPlanarFacing == nil then
+		self:warnWithPrefix("Wave Crash wave VFX model is missing a usable ForwardAttachment/pivot facing; preserving authored rotation.")
+	elseif authoredFacingSource ~= WAVE_CRASH_FORWARD_ATTACHMENT_NAME then
+		self:warnWithPrefix("Wave Crash wave VFX model is missing a usable ForwardAttachment; falling back to pivot RightVector.")
+	end
+	waveModel:PivotTo(buildWaveVisualCFrame(startCFrame.Position, direction, authoredRotation, authoredPlanarFacing))
 	record.waveModel = waveModel
 	record.waveMotion = {
 		startCFrame = startCFrame,
@@ -157,10 +231,12 @@ function Handler:_sendWaveCrash(record: ActiveRecord, event: PresentationEvent)
 		speed = math.max(0, speed),
 		durationSeconds = math.max(0.05, durationSeconds),
 		startedAtServerTime = if typeof(event.serverTime) == "number" then event.serverTime else self.Workspace:GetServerTimeNow(),
+		authoredRotation = authoredRotation,
+		authoredPlanarFacing = authoredPlanarFacing,
 	}
 
 	self:playTimedSounds(waveModel, scaleMultiplier)
-	self:emitVisuals(self:collectEmittableVisuals(waveModel))
+	self:emitVisuals(waveModel)
 	self:_updateWaveCrashMotion(record, self.Workspace:GetServerTimeNow())
 end
 

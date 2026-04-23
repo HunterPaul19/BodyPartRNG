@@ -13,6 +13,7 @@ local TIMER_STATE_CHANGED_REMOTE_NAME = "EncounterTimerStateChanged"
 local ACTIVE_PROFILE_ID = "boss_arena"
 
 type BossTimerState = {
+	phase: string,
 	startsAtServerTime: number,
 	endsAtServerTime: number,
 	durationSeconds: number,
@@ -51,11 +52,12 @@ local function normalizeTimerState(state: any): BossTimerState?
 		return nil
 	end
 
+	local phase = if typeof(state.phase) == "string" and state.phase ~= "" then state.phase else nil
 	local startsAtServerTime = tonumber(state.startsAtServerTime)
 	local endsAtServerTime = tonumber(state.endsAtServerTime)
 	local durationSeconds = math.max(0, math.floor(tonumber(state.durationSeconds) or 0))
 
-	if startsAtServerTime == nil or endsAtServerTime == nil or durationSeconds <= 0 then
+	if phase == nil or startsAtServerTime == nil or endsAtServerTime == nil or durationSeconds <= 0 then
 		return nil
 	end
 	if endsAtServerTime <= startsAtServerTime then
@@ -63,6 +65,7 @@ local function normalizeTimerState(state: any): BossTimerState?
 	end
 
 	return {
+		phase = phase,
 		startsAtServerTime = startsAtServerTime,
 		endsAtServerTime = endsAtServerTime,
 		durationSeconds = durationSeconds,

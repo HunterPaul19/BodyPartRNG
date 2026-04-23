@@ -4,6 +4,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 
+local BossFightSfxUtil = require(ReplicatedStorage.Shared.Audio.BossFightSfxUtil)
 local CameraShaker = require(ReplicatedStorage.Shared.Camera.CameraShaker)
 local Indication = require(ReplicatedStorage.Shared.Bosses.Indication)
 local EmitModule = require(ReplicatedStorage.Shared.Effects.EmitModule)
@@ -16,6 +17,7 @@ type ActiveRecord = any
 type PresentationEvent = any
 
 local CAT_MECH_ELITE_RAINBOW_BLAST_MODULE_ID = "Moves.CatMechElite.RainbowBlast"
+local FLOOR_SURFACE_CLEARANCE_STUDS = 0.03
 
 local function setVfxDescendantsEnabled(root: Instance?, enabled: boolean)
 	if root == nil then
@@ -78,14 +80,10 @@ end
 
 function Context:emitEffectInstance(instance: Instance, duration: number?)
 	local ok, err = pcall(function()
-		EmitModule.emit(instance)
+		EmitModule.emit(instance, duration)
 	end)
 	if not ok then
 		self:warnWithPrefix(string.format("Failed to emit boss move effect instance: %s", tostring(err)))
-	end
-
-	if duration ~= nil then
-		self:destroyVfxAfter(instance, duration)
 	end
 end
 
@@ -506,10 +504,6 @@ function Context:attachEffectModel(effectModel: Model, targetPart: BasePart)
 	return true
 end
 
-local SOUND_BASE_EMITTER_SIZE_ATTRIBUTE = "BossAudioBaseEmitterSize"
-local SOUND_BASE_ROLL_OFF_MIN_DISTANCE_ATTRIBUTE = "BossAudioBaseRollOffMinDistance"
-local SOUND_BASE_ROLL_OFF_MAX_DISTANCE_ATTRIBUTE = "BossAudioBaseRollOffMaxDistance"
-
 local function normalizeSoundScale(scaleMultiplier: number?): number
 	return math.max(0.1, tonumber(scaleMultiplier) or 1)
 end
@@ -531,28 +525,39 @@ local function resolveRootSoundScale(root: Instance, fallbackScale: number?): nu
 	return 1
 end
 
+function Context:resolveSoundAnchorCFrame(root: Instance?): CFrame?
+	local current = root
+	while current ~= nil do
+		if current:IsA("Attachment") then
+			return current.WorldCFrame
+		end
+		if current:IsA("BasePart") then
+			return current.CFrame
+		end
+		if current:IsA("Model") then
+			local primaryPart = self:resolveEffectModelPrimaryPart(current)
+			if primaryPart ~= nil then
+				return primaryPart.CFrame
+			end
+
+			local ok, pivot = pcall(function()
+				return current:GetPivot()
+			end)
+			if ok then
+				return pivot
+			end
+		end
+
+		current = current.Parent
+	end
+
+	return nil
+end
+
 function Context:scaleSound(sound: Sound, scaleMultiplier: number?)
-	local resolvedScale = normalizeSoundScale(scaleMultiplier)
-	local baseEmitterSize = tonumber(sound:GetAttribute(SOUND_BASE_EMITTER_SIZE_ATTRIBUTE))
-	local baseRollOffMinDistance = tonumber(sound:GetAttribute(SOUND_BASE_ROLL_OFF_MIN_DISTANCE_ATTRIBUTE))
-	local baseRollOffMaxDistance = tonumber(sound:GetAttribute(SOUND_BASE_ROLL_OFF_MAX_DISTANCE_ATTRIBUTE))
-
-	if baseEmitterSize == nil then
-		baseEmitterSize = sound.EmitterSize
-		sound:SetAttribute(SOUND_BASE_EMITTER_SIZE_ATTRIBUTE, baseEmitterSize)
-	end
-	if baseRollOffMinDistance == nil then
-		baseRollOffMinDistance = sound.RollOffMinDistance
-		sound:SetAttribute(SOUND_BASE_ROLL_OFF_MIN_DISTANCE_ATTRIBUTE, baseRollOffMinDistance)
-	end
-	if baseRollOffMaxDistance == nil then
-		baseRollOffMaxDistance = sound.RollOffMaxDistance
-		sound:SetAttribute(SOUND_BASE_ROLL_OFF_MAX_DISTANCE_ATTRIBUTE, baseRollOffMaxDistance)
-	end
-
-	sound.EmitterSize = baseEmitterSize * resolvedScale
-	sound.RollOffMinDistance = baseRollOffMinDistance * resolvedScale
-	sound.RollOffMaxDistance = baseRollOffMaxDistance * resolvedScale
+	BossFightSfxUtil.ApplyArenaBroadcast(sound, {
+		scaleMultiplier = normalizeSoundScale(scaleMultiplier),
+	})
 end
 
 function Context:scaleAttachedSounds(root: Instance, scaleMultiplier: number?)
@@ -567,47 +572,32 @@ function Context:scaleAttachedSounds(root: Instance, scaleMultiplier: number?)
 	end
 end
 
-function Context:collectEmittableVisuals(root: Instance): { Instance }
-	local visuals = {}
-
-	for _, descendant in ipairs(root:GetDescendants()) do
-		if descendant:IsA("ParticleEmitter") or descendant:IsA("Trail") or descendant:IsA("Beam") or descendant:IsA("RayValue") then
-			table.insert(visuals, descendant)
-		end
-	end
-
-	return visuals
-end
-
-function Context:emitVisuals(instances: { Instance })
-	if #instances <= 0 then
+function Context:emitVisuals(root: Instance, duration: number?)
+	if root == nil then
 		return
 	end
 
 	local ok, err = pcall(function()
-		EmitModule.emit(table.unpack(instances))
+		EmitModule.emit(root, duration)
 	end)
 	if not ok then
 		self:warnWithPrefix(string.format("Failed to emit boss move visuals: %s", tostring(err)))
 	end
 end
 
-function Context:emitVisualsAfter(instances: { Instance }, delaySeconds: number?)
+function Context:emitVisualsAfter(root: Instance, delaySeconds: number?, duration: number?)
 	local resolvedDelay = math.max(0, tonumber(delaySeconds) or 0)
 	if resolvedDelay <= 0 then
-		self:emitVisuals(instances)
+		self:emitVisuals(root, duration)
 		return
 	end
 
 	task.delay(resolvedDelay, function()
-		local liveInstances = {}
-		for _, instance in ipairs(instances) do
-			if instance.Parent ~= nil then
-				table.insert(liveInstances, instance)
-			end
+		if root.Parent == nil then
+			return
 		end
 
-		self:emitVisuals(liveInstances)
+		self:emitVisuals(root, duration)
 	end)
 end
 
@@ -708,8 +698,84 @@ function Context:playTimedSounds(root: Instance, scaleMultiplier: number?)
 	end
 end
 
-function Context:playDelayedSoundClones(sourceRoot: Instance, parent: Instance, scaleMultiplier: number?)
+function Context:playSoundsAtPosition(
+	sourceRoot: Instance,
+	worldCFrameOrPosition: CFrame | Vector3,
+	scaleMultiplier: number?,
+	options: { [string]: any }?
+)
 	local resolvedScale = resolveRootSoundScale(sourceRoot, scaleMultiplier)
+	local playbackOptions = options or {}
+	playbackOptions.parent = playbackOptions.parent or self:_ensureVisualFolder()
+	playbackOptions.scaleMultiplier = resolvedScale
+	if playbackOptions.includeDelay == nil then
+		playbackOptions.includeDelay = false
+	end
+	if playbackOptions.useConfiguredStartPosition == nil then
+		playbackOptions.useConfiguredStartPosition = false
+	end
+	if playbackOptions.useConfiguredEndPosition == nil then
+		playbackOptions.useConfiguredEndPosition = false
+	end
+	playbackOptions.cleanupPaddingSeconds = Config.Cleanup.SfxCleanupDelaySeconds
+	return BossFightSfxUtil.PlayAtPosition(sourceRoot, worldCFrameOrPosition, playbackOptions)
+end
+
+function Context:playTimedSoundsAtPosition(
+	sourceRoot: Instance,
+	worldCFrameOrPosition: CFrame | Vector3,
+	scaleMultiplier: number?,
+	options: { [string]: any }?
+)
+	local resolvedScale = resolveRootSoundScale(sourceRoot, scaleMultiplier)
+	local playbackOptions = options or {}
+	playbackOptions.parent = playbackOptions.parent or self:_ensureVisualFolder()
+	playbackOptions.scaleMultiplier = resolvedScale
+	if playbackOptions.includeDelay == nil then
+		playbackOptions.includeDelay = true
+	end
+	if playbackOptions.useConfiguredStartPosition == nil then
+		playbackOptions.useConfiguredStartPosition = true
+	end
+	if playbackOptions.useConfiguredEndPosition == nil then
+		playbackOptions.useConfiguredEndPosition = true
+	end
+	playbackOptions.cleanupPaddingSeconds = Config.Cleanup.SfxCleanupDelaySeconds
+	return BossFightSfxUtil.PlayAtPosition(sourceRoot, worldCFrameOrPosition, playbackOptions)
+end
+
+function Context:playDelayedSoundClones(
+	sourceRoot: Instance,
+	parent: Instance,
+	scaleMultiplier: number?,
+	anchor: CFrame | Vector3 | Instance?,
+	options: { [string]: any }?
+)
+	local resolvedScale = resolveRootSoundScale(sourceRoot, scaleMultiplier)
+	local resolvedAnchor = nil
+	if typeof(anchor) == "CFrame" or typeof(anchor) == "Vector3" then
+		resolvedAnchor = anchor
+	elseif typeof(anchor) == "Instance" then
+		resolvedAnchor = self:resolveSoundAnchorCFrame(anchor)
+	end
+	if resolvedAnchor == nil then
+		resolvedAnchor = self:resolveSoundAnchorCFrame(sourceRoot) or self:resolveSoundAnchorCFrame(parent)
+	end
+
+	if resolvedAnchor ~= nil then
+		local playbackOptions = options or {}
+		playbackOptions.parent = parent
+		playbackOptions.includeDelay = true
+		if playbackOptions.useConfiguredStartPosition == nil then
+			playbackOptions.useConfiguredStartPosition = false
+		end
+		if playbackOptions.useConfiguredEndPosition == nil then
+			playbackOptions.useConfiguredEndPosition = false
+		end
+		self:playSoundsAtPosition(sourceRoot, resolvedAnchor, resolvedScale, playbackOptions)
+		return
+	end
+
 	if sourceRoot:IsA("Sound") then
 		local soundClone = sourceRoot:Clone()
 		soundClone.Parent = parent
@@ -845,6 +911,59 @@ function Context:resolveProjectileCFrame(startPosition: Vector3, endPosition: Ve
 	return CFrame.new(position)
 end
 
+local function resolveSurfaceAlignedCFrame(position: Vector3, normal: Vector3): CFrame
+	local upVector = if normal.Magnitude > 0.001 then normal.Unit else Vector3.yAxis
+	local referenceAxis = if math.abs(upVector:Dot(Vector3.zAxis)) < 0.999 then Vector3.zAxis else Vector3.xAxis
+	local rightVector = referenceAxis:Cross(upVector)
+	if rightVector.Magnitude <= 0.001 then
+		rightVector = Vector3.xAxis:Cross(upVector)
+	end
+
+	rightVector = rightVector.Unit
+	return CFrame.fromMatrix(position, rightVector, upVector)
+end
+
+local function resolvePartHalfProjectionAlongAxis(part: BasePart, direction: Vector3): number
+	return 0.5
+		* (
+			math.abs(part.CFrame.RightVector:Dot(direction)) * part.Size.X
+			+ math.abs(part.CFrame.UpVector:Dot(direction)) * part.Size.Y
+			+ math.abs(part.CFrame.LookVector:Dot(direction)) * part.Size.Z
+		)
+end
+
+local function resolveInstanceMinProjectionAlongAxis(
+	effectInstance: Instance,
+	origin: Vector3,
+	direction: Vector3
+): number?
+	local minProjection = nil :: number?
+
+	local function considerPart(part: BasePart)
+		local centerProjection = (part.Position - origin):Dot(direction)
+		local partMinProjection = centerProjection - resolvePartHalfProjectionAlongAxis(part, direction)
+		if minProjection == nil or partMinProjection < minProjection then
+			minProjection = partMinProjection
+		end
+	end
+
+	if effectInstance:IsA("BasePart") then
+		considerPart(effectInstance)
+	else
+		for _, descendant in ipairs(effectInstance:GetDescendants()) do
+			if descendant:IsA("BasePart") then
+				considerPart(descendant)
+			end
+		end
+	end
+
+	if minProjection == nil and effectInstance:IsA("PVInstance") then
+		minProjection = (effectInstance:GetPivot().Position - origin):Dot(direction)
+	end
+
+	return minProjection
+end
+
 function Context:pivotBroccoliSproutEffectInstance(effectInstance: Instance, cframe: CFrame, scaleMultiplier: number): boolean
 	return self:pivotFloorEffectInstance(effectInstance, cframe, scaleMultiplier)
 end
@@ -890,6 +1009,45 @@ function Context:pivotFloorEffectInstance(effectInstance: Instance, cframe: CFra
 	end
 	if effectInstance:IsA("PVInstance") then
 		effectInstance:PivotTo(cframe)
+		return true
+	end
+
+	return false
+end
+
+function Context:pivotSurfaceAlignedFloorEffectInstance(
+	effectInstance: Instance,
+	floorPosition: Vector3,
+	floorNormal: Vector3,
+	scaleMultiplier: number
+): boolean
+	local surfaceCFrame = resolveSurfaceAlignedCFrame(floorPosition, floorNormal)
+	local surfaceNormal = surfaceCFrame.UpVector
+
+	if effectInstance:IsA("Model") then
+		effectInstance:ScaleTo(scaleMultiplier)
+		self:prepareMovingEffectModel(effectInstance)
+		effectInstance:PivotTo(surfaceCFrame)
+
+		local minProjection = resolveInstanceMinProjectionAlongAxis(effectInstance, floorPosition, surfaceNormal)
+		if minProjection ~= nil then
+			effectInstance:PivotTo(effectInstance:GetPivot() + surfaceNormal * (FLOOR_SURFACE_CLEARANCE_STUDS - minProjection))
+		end
+		return true
+	end
+	if effectInstance:IsA("BasePart") then
+		effectInstance.Size *= scaleMultiplier
+		self:prepareMovingEffectPart(effectInstance)
+		effectInstance.CFrame = surfaceCFrame
+
+		local minProjection = resolveInstanceMinProjectionAlongAxis(effectInstance, floorPosition, surfaceNormal)
+		if minProjection ~= nil then
+			effectInstance.CFrame += surfaceNormal * (FLOOR_SURFACE_CLEARANCE_STUDS - minProjection)
+		end
+		return true
+	end
+	if effectInstance:IsA("PVInstance") then
+		effectInstance:PivotTo(surfaceCFrame)
 		return true
 	end
 
@@ -966,12 +1124,6 @@ function Context:_cleanupRecord(record: ActiveRecord?)
 	end
 
 	self.controller._recordsByCastId[record.castId] = nil
-	if record.eruptionWarningHandles then
-		for _, warningHandle in pairs(record.eruptionWarningHandles) do
-			warningHandle:Destroy()
-		end
-		record.eruptionWarningHandles = nil
-	end
 	if record.broccoliSproutWarningHandles then
 		for _, warningHandle in pairs(record.broccoliSproutWarningHandles) do
 			warningHandle:Destroy()
@@ -1121,8 +1273,8 @@ function Context:_prepareAttachedCastModels(
 		self:playAllSounds(rootModel, scaleMultiplier)
 	end
 
-	self:emitVisuals(self:collectEmittableVisuals(handleModel))
-	self:emitVisuals(self:collectEmittableVisuals(rootModel))
+	self:emitVisuals(handleModel)
+	self:emitVisuals(rootModel)
 	return true
 end
 

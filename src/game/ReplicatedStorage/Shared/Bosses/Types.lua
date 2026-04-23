@@ -28,6 +28,8 @@ export type BossDefinition = {
 	bossId: string,
 	displayName: string,
 	arenaId: string,
+	recommendedCombatScore: number,
+	baseHealth: number,
 	scaleMultiplier: number,
 	walkSpeed: number,
 	aggroRadius: number,
@@ -39,10 +41,17 @@ export type BossDefinition = {
 	moves: { BossMoveDefinition },
 }
 
+export type BossEncounterScaling = {
+	partySize: number,
+	healthMultiplier: number,
+	damageMultiplier: number,
+}
+
 export type BossRuntimeContext = {
 	now: number,
 	castId: string,
 	bossDefinition: BossDefinition,
+	encounterScaling: BossEncounterScaling,
 	move: BossMoveDefinition,
 	bossModel: Model,
 	bossHumanoid: Humanoid,

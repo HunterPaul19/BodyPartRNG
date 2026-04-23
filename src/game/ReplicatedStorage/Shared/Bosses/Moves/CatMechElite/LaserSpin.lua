@@ -4,12 +4,12 @@ local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 
-local DAMAGE_PER_TICK = 7
+local DAMAGE_PER_TICK = 59
 local TICK_INTERVAL_SECONDS = 0.25
-local FALLBACK_ACTIVE_WINDOW_SECONDS = 4
-local MAX_ACTIVE_WINDOW_SECONDS = 6
+local ACTIVE_WINDOW_SECONDS = 4
 local MAX_HITBOX_PARTS = 192
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "CatMechElite"
@@ -31,7 +31,7 @@ local MIN_BEAM_LENGTH_STUDS = 16
 local MAX_BEAM_LENGTH_STUDS = 700
 local MIN_BEAM_THICKNESS_STUDS = 2.25
 local MAX_BEAM_THICKNESS_STUDS = 5.5
-local SPIN_RADIANS_PER_SECOND = (math.pi * 2) / (FALLBACK_ACTIVE_WINDOW_SECONDS * 2)
+local SPIN_RADIANS_PER_SECOND = (math.pi * 2) / (ACTIVE_WINDOW_SECONDS * 2)
 
 type BeamGeometry = {
 	localCFrame: CFrame,
@@ -284,7 +284,7 @@ local function resolveSpinningBeamCFrame(baseCFrame: CFrame, beamGeometry: BeamG
 	return baseCFrame * CFrame.Angles(0, elapsed * SPIN_RADIANS_PER_SECOND, 0) * beamGeometry.localCFrame
 end
 
-local function applyDamage(targetModel: Model, damagedAtByModel: { [Model]: number })
+local function applyDamage(context, targetModel: Model, damagedAtByModel: { [Model]: number })
 	local player = Players:GetPlayerFromCharacter(targetModel)
 	if player == nil then
 		return
@@ -302,7 +302,7 @@ local function applyDamage(targetModel: Model, damagedAtByModel: { [Model]: numb
 	end
 
 	damagedAtByModel[targetModel] = now
-	humanoid:TakeDamage(DAMAGE_PER_TICK)
+	humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE_PER_TICK))
 end
 
 local function spawnBeamHitboxes(context, baseCFrame: CFrame, visualScale: number, startedAt: number)
@@ -330,12 +330,12 @@ local function spawnBeamHitboxes(context, baseCFrame: CFrame, visualScale: numbe
 				return beamGeometry.size
 			end,
 			HitboxType = "SpacialQuery",
-			Time = MAX_ACTIVE_WINDOW_SECONDS,
+			Time = ACTIVE_WINDOW_SECONDS,
 			TickTime = TICK_INTERVAL_SECONDS,
 			MaxParts = MAX_HITBOX_PARTS,
 		}, {
 			HitTarget = function(targetModel: Model)
-				applyDamage(targetModel, damagedAtByModel)
+				applyDamage(context, targetModel, damagedAtByModel)
 			end,
 		})
 		table.insert(hitboxes, hitbox)
@@ -461,7 +461,7 @@ function LaserSpin.StartCast(context)
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
 			visualScale = visualScale,
 			baseCFrame = visualBaseCFrame,
-			activeWindowSeconds = MAX_ACTIVE_WINDOW_SECONDS,
+			activeWindowSeconds = ACTIVE_WINDOW_SECONDS,
 			spinRadiansPerSecond = SPIN_RADIANS_PER_SECOND,
 		})
 	end

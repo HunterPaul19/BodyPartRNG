@@ -15,7 +15,7 @@ local Constants = {
 	},
 	Timing = {
 		AGRYNOTH_BONE_BREAKER_EXPLOSION_LIFETIME_SECONDS = 3,
-		AGRYNOTH_BONE_BREAKER_EXPLOSION_SCALE = 3,
+		AGRYNOTH_BONE_BREAKER_EXPLOSION_SCALE = 18,
 	},
 }
 
@@ -66,109 +66,65 @@ local function withYPosition(cframe: CFrame, yPosition: number): CFrame
 	return CFrame.new(x, yPosition, z, r00, r01, r02, r10, r11, r12, r20, r21, r22)
 end
 
-local function buildGroundRaycastParams(workspaceService: Workspace, ignoreInstances: { Instance }): RaycastParams
-	local include = {}
-
-	local activeBossArena = workspaceService:FindFirstChild("ActiveBossArena")
-	if activeBossArena then
-		table.insert(include, activeBossArena)
-	end
-
-	local map = workspaceService:FindFirstChild("Map")
-	if map then
-		table.insert(include, map)
-	end
-
-	local world = workspaceService:FindFirstChild("World")
-	local worldMap = world and world:FindFirstChild("Map")
-	if worldMap then
-		for _, child in ipairs(worldMap:GetChildren()) do
-			table.insert(include, child)
-		end
-	end
-
-	if workspaceService.Terrain then
-		table.insert(include, workspaceService.Terrain)
-	end
-
+local function buildGroundRaycastParams(playersService: Players, bossModel: Model?): RaycastParams
+	local exclude = {}
 	local params = RaycastParams.new()
 	params.IgnoreWater = false
-	if #include > 0 then
-		params.FilterType = Enum.RaycastFilterType.Include
-		params.FilterDescendantsInstances = include
-	else
-		params.FilterType = Enum.RaycastFilterType.Exclude
-		params.FilterDescendantsInstances = ignoreInstances
+	params.FilterType = Enum.RaycastFilterType.Exclude
+
+	if bossModel ~= nil then
+		table.insert(exclude, bossModel)
 	end
 
+	local localPlayer = playersService.LocalPlayer
+	local localCharacter = localPlayer and localPlayer.Character
+	if localCharacter ~= nil then
+		table.insert(exclude, localCharacter)
+	end
+
+	params.FilterDescendantsInstances = exclude
 	return params
 end
 
-local function resolveFloorY(self, authoredCFrame: CFrame, payload): number
-	if typeof(payload) == "table" and typeof(payload.floorCFrame) == "CFrame" then
-		return payload.floorCFrame.Position.Y
-	end
-
+local function resolveGroundedImpactCFrame(self, authoredCFrame: CFrame, bossModel: Model?): CFrame
 	local rayOrigin = authoredCFrame.Position + Vector3.new(0, 10, 0)
 	local rayDirection = Vector3.new(0, -270, 0)
-	local result = self.Workspace:Raycast(rayOrigin, rayDirection, buildGroundRaycastParams(self.Workspace, {}))
+	local result = self.Workspace:Raycast(rayOrigin, rayDirection, buildGroundRaycastParams(self.Players, bossModel))
 	if result then
-		return result.Position.Y
+		return withYPosition(authoredCFrame, result.Position.Y + 0.5)
 	end
 
-	return authoredCFrame.Position.Y
-end
-
-local function snapModelBottomToFloor(effectModel: Model, floorY: number)
-	local boundingCFrame, boundingSize = effectModel:GetBoundingBox()
-	local bottomY = boundingCFrame.Position.Y - (boundingSize.Y * 0.5)
-	effectModel:PivotTo(effectModel:GetPivot() + Vector3.new(0, floorY - bottomY, 0))
-end
-
-local function collectSounds(root: Instance): { Sound }
-	local sounds = {}
-	if root:IsA("Sound") then
-		table.insert(sounds, root)
-	end
-	for _, descendant in ipairs(root:GetDescendants()) do
-		if descendant:IsA("Sound") then
-			table.insert(sounds, descendant)
-		end
-	end
-	return sounds
+	return authoredCFrame
 end
 
 local function getSoundDelay(sound: Sound): number
 	return math.max(0, tonumber(sound:GetAttribute("Delay")) or tonumber(sound:GetAttribute("Start")) or 0)
 end
 
-function Handler:_playAuthoredSoundCueClones(sourceRoot: Instance, parent: Instance, scaleMultiplier: number, elapsedSeconds: number)
-	for _, sourceSound in ipairs(collectSounds(sourceRoot)) do
-		local soundClone = sourceSound:Clone()
-		soundClone.Parent = parent
-
-		local delaySeconds = math.max(0, getSoundDelay(sourceSound) - elapsedSeconds)
+local function playAuthoredSoundCuesInPlace(handler, sourceRoot: Instance, scaleMultiplier: number, elapsedSeconds: number)
+	if sourceRoot:IsA("Sound") then
+		local delaySeconds = math.max(0, getSoundDelay(sourceRoot) - elapsedSeconds)
 		task.delay(delaySeconds, function()
-			if soundClone.Parent == nil then
+			if sourceRoot.Parent == nil then
 				return
 			end
 
-			self:playSoundFromConfiguredPosition(soundClone, scaleMultiplier)
-			local cleanupDelay = math.max(1, tonumber(soundClone.TimeLength) or 0) + 1
-			self:destroyAfter(soundClone, cleanupDelay)
+			handler:playSoundFromConfiguredPosition(sourceRoot, scaleMultiplier)
 		end)
 	end
-end
 
-function Handler:_playAuthoredSoundCuesInPlace(sourceRoot: Instance, scaleMultiplier: number, elapsedSeconds: number)
-	for _, sourceSound in ipairs(collectSounds(sourceRoot)) do
-		local delaySeconds = math.max(0, getSoundDelay(sourceSound) - elapsedSeconds)
+	for _, descendant in ipairs(sourceRoot:GetDescendants()) do
+		if not descendant:IsA("Sound") then
+			continue
+		end
+
+		local delaySeconds = math.max(0, getSoundDelay(descendant) - elapsedSeconds)
 		task.delay(delaySeconds, function()
-			if sourceSound.Parent == nil then
+			if descendant.Parent == nil then
 				return
 			end
 
-			self:playSoundFromConfiguredPosition(sourceSound, scaleMultiplier)
+			handler:playSoundFromConfiguredPosition(descendant, scaleMultiplier)
 		end)
 	end
 end
@@ -214,12 +170,11 @@ function Handler:_emitAuthoredExplosion(record: ActiveRecord, event: Presentatio
 	local payload = event.payload
 	local scaleMultiplier = math.max(0.1, tonumber(payload and payload.scaleMultiplier) or 1)
 	local authoredCFrame = resolveScaledAuthoredCFrame(bossRootPart, rootPartSource, explosionSource, scaleMultiplier)
-	local floorY = resolveFloorY(self, authoredCFrame, payload)
+	local groundedCFrame = resolveGroundedImpactCFrame(self, authoredCFrame, bossModel)
 	local explosionModel = explosionSource:Clone()
 	explosionModel:ScaleTo(AGRYNOTH_BONE_BREAKER_EXPLOSION_SCALE)
 	self:prepareMovingEffectModel(explosionModel)
-	explosionModel:PivotTo(withYPosition(authoredCFrame, floorY))
-	snapModelBottomToFloor(explosionModel, floorY)
+	explosionModel:PivotTo(groundedCFrame)
 	explosionModel.Parent = self:_ensureVisualFolder()
 
 	self:emitEffectInstance(explosionModel, AGRYNOTH_BONE_BREAKER_EXPLOSION_LIFETIME_SECONDS)
@@ -266,7 +221,7 @@ function Handler:_startAgrynothBoneBreaker(record: ActiveRecord, event: Presenta
 		return
 	end
 
-	self:_playAuthoredSoundCuesInPlace(leftHandModel, scaleMultiplier, resolveEventElapsedSeconds(self, event))
+	playAuthoredSoundCuesInPlace(self, leftHandModel, scaleMultiplier, resolveEventElapsedSeconds(self, event))
 	self:emitEffectInstance(leftHandModel)
 end
 
@@ -279,11 +234,16 @@ function Handler:_slamStartAgrynothBoneBreaker(record: ActiveRecord, event: Pres
 	local scaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1)
 	local elapsedSeconds = resolveEventElapsedSeconds(self, event)
 	local castFolder = self:_ensureCastFolder(record)
+	local bossModel = record.bossModel or event.bossModel
+	local bossRootPart = self:resolveBossRootPart(bossModel)
 
 	local effectFolder = self:resolveBossVfxFolder(AGRYNOTH_VFX_FOLDER_NAME, AGRYNOTH_BONE_BREAKER_VFX_NAME)
 	local soundsFolder = effectFolder and effectFolder:FindFirstChild(AGRYNOTH_BONE_BREAKER_SOUNDS_FOLDER_NAME)
-	if soundsFolder then
-		self:_playAuthoredSoundCueClones(soundsFolder, castFolder, scaleMultiplier, elapsedSeconds)
+	if soundsFolder and bossRootPart ~= nil then
+		self:playTimedSoundsAtPosition(soundsFolder, bossRootPart.CFrame, scaleMultiplier, {
+			parent = castFolder,
+			delayOffsetSeconds = -elapsedSeconds,
+		})
 	end
 end
 

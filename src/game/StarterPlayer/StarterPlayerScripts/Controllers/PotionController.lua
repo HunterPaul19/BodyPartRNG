@@ -10,6 +10,7 @@ local PotionRuntimeBonuses = require(ReplicatedStorage.Shared.Character.PotionRu
 local Schema = require(ReplicatedStorage.Lists.Schema)
 local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
+local ToggleSoundUtil = require(ReplicatedStorage.Shared.Audio.ToggleSoundUtil)
 local PotionPresentation = require(ReplicatedStorage.Shared.UI.PotionPresentation)
 local DataController = require(script.Parent.DataController)
 
@@ -748,6 +749,9 @@ function PotionController:ToggleFavorite(potionId: string, isFavorite: boolean?)
 	end
 
 	showNotification(tostring(result.message or (result.ok and "Potion favorite updated." or "Could not update potion favorite state.")))
+	if result.ok == true then
+		ToggleSoundUtil.PlayToggle(isFavorite == true)
+	end
 	return result.ok == true
 end
 

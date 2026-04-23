@@ -7,12 +7,12 @@ local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves
 local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local CombatProjectileUtil = require(ReplicatedStorage.Shared.Combat.CombatProjectileUtil)
 
-local DAMAGE = 18
+local DAMAGE = 34
 local CANNON_FIRE_SECONDS = 2.65
 local CANNON_EMIT_SECONDS = 162 / 60
 local PROJECTILE_FLY_VFX_SECONDS = 181 / 60
 local ANIMATION_FADE_SECONDS = 0.08
-local PROJECTILE_SPEED_STUDS_PER_SECOND = 75
+local BASE_PROJECTILE_SPEED_STUDS_PER_SECOND = 75
 local PROJECTILE_RADIUS = 5
 local EXPLOSION_RADIUS = 16
 local EXPLOSION_LIFETIME_SECONDS = 0.08
@@ -111,29 +111,53 @@ local function resolveCannonBaseCFrame(originPosition: Vector3, targetPosition: 
 	return CFrame.lookAt(originPosition, originPosition + planarDirection) * CFrame.Angles(0, CANNON_ASSET_YAW_OFFSET_RADIANS, 0)
 end
 
-local function resolveCannonBarrelCFrame(middleBaseCFrame: CFrame, targetPosition: Vector3?): CFrame
+local function buildAimBasis(aimVector: Vector3, upReference: Vector3): (Vector3, Vector3)
+	local rightVector = upReference:Cross(aimVector)
+	if rightVector.Magnitude <= 0.001 then
+		rightVector = Vector3.xAxis:Cross(aimVector)
+	end
+	rightVector = rightVector.Unit
+
+	local upVector = aimVector:Cross(rightVector)
+	if upVector.Magnitude <= 0.001 then
+		upVector = Vector3.yAxis
+	else
+		upVector = upVector.Unit
+	end
+
+	return rightVector, upVector
+end
+
+local function resolveAlignedCannonCFrame(originPosition: Vector3, aimDirection: Vector3, localAimVector: Vector3): CFrame
+	local worldRightVector, worldUpVector = buildAimBasis(aimDirection, Vector3.yAxis)
+	local localRightVector, localUpVector = buildAimBasis(localAimVector, Vector3.yAxis)
+	local worldFrame = CFrame.fromMatrix(originPosition, worldRightVector, worldUpVector, -aimDirection)
+	local localFrame = CFrame.fromMatrix(Vector3.zero, localRightVector, localUpVector, -localAimVector)
+	return worldFrame * localFrame:Inverse()
+end
+
+local function resolveCannonModelCFrame(baseCFrame: CFrame, middleLocalCFrame: CFrame, targetPosition: Vector3?): CFrame
 	if typeof(targetPosition) ~= "Vector3" then
-		return middleBaseCFrame
+		return baseCFrame
 	end
 
-	local offset = targetPosition - middleBaseCFrame.Position
-	if offset.Magnitude <= 0.001 then
-		return middleBaseCFrame
+	local localAimVector = -middleLocalCFrame.RightVector
+	if localAimVector.Magnitude <= 0.001 then
+		return baseCFrame
 	end
 
-	local rightVector = -offset.Unit
-	local upVector = middleBaseCFrame.UpVector - (rightVector * middleBaseCFrame.UpVector:Dot(rightVector))
-	if upVector.Magnitude <= 0.001 then
-		upVector = Vector3.yAxis - (rightVector * Vector3.yAxis:Dot(rightVector))
-	end
-	if upVector.Magnitude <= 0.001 then
-		upVector = middleBaseCFrame.LookVector - (rightVector * middleBaseCFrame.LookVector:Dot(rightVector))
-	end
-	if upVector.Magnitude <= 0.001 then
-		return middleBaseCFrame
+	local modelCFrame = baseCFrame
+	for _ = 1, 3 do
+		local middlePosition = (modelCFrame * middleLocalCFrame).Position
+		local aimOffset = targetPosition - middlePosition
+		if aimOffset.Magnitude <= 0.001 then
+			break
+		end
+
+		modelCFrame = resolveAlignedCannonCFrame(baseCFrame.Position, aimOffset.Unit, localAimVector.Unit)
 	end
 
-	return CFrame.fromMatrix(middleBaseCFrame.Position, rightVector, upVector.Unit)
+	return modelCFrame
 end
 
 local function resolveModelPrimaryPart(model: Model?): BasePart?
@@ -193,8 +217,8 @@ local function probeCannonMuzzlePosition(
 	end
 
 	local pivotCFrame = resolveCannonBaseCFrame(bossRootPart.Position, impactPosition)
-	cannonModel:PivotTo(pivotCFrame)
-	middle.CFrame = resolveCannonBarrelCFrame(middle.CFrame, impactPosition)
+	local middleLocalCFrame = cannonModel:GetPivot():ToObjectSpace(middle.CFrame)
+	cannonModel:PivotTo(resolveCannonModelCFrame(pivotCFrame, middleLocalCFrame, impactPosition))
 
 	local muzzlePosition = muzzleAttachment.WorldPosition
 	cannonModel:Destroy()
@@ -219,6 +243,7 @@ local function resolveLockedTargetState(
 end
 
 local function applyExplosionDamage(
+	context,
 	bossModel: Model,
 	impactPosition: Vector3,
 	damagedTargets: { [Model]: boolean }
@@ -230,7 +255,7 @@ local function applyExplosionDamage(
 		radius = EXPLOSION_RADIUS,
 		duration = EXPLOSION_LIFETIME_SECONDS,
 		maxParts = 128,
-		damage = DAMAGE,
+		damage = CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE),
 		requirePlayerCharacter = false,
 		onHit = function(targetInfo)
 			damagedTargets[targetInfo.character] = true
@@ -278,6 +303,8 @@ function SquidCall.StartCast(context)
 	local projectileImpactPosition = nil :: Vector3?
 	local aimSequenceStarted = false
 	local fireTriggered = false
+	local projectileSpeedStudsPerSecond =
+		BASE_PROJECTILE_SPEED_STUDS_PER_SECOND * CombatProjectileUtil.ResolveBasicProjectileSpeedScalar()
 
 	local function stopPresentation()
 		if presentationStopped then
@@ -366,7 +393,7 @@ function SquidCall.StartCast(context)
 			explosionRadius = EXPLOSION_RADIUS,
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
 		})
-		activeExplosionHitbox = applyExplosionDamage(bossModel, impactPosition, damagedTargets)
+		activeExplosionHitbox = applyExplosionDamage(context, bossModel, impactPosition, damagedTargets)
 	end
 
 	local function fireProjectile()
@@ -399,7 +426,7 @@ function SquidCall.StartCast(context)
 		projectileMotion = CombatProjectileUtil.CreateLinearMotion(
 			resolvedStartPosition,
 			resolvedImpactPosition,
-			PROJECTILE_SPEED_STUDS_PER_SECOND
+			projectileSpeedStudsPerSecond
 		)
 		projectileImpactPosition = resolvedImpactPosition
 
@@ -408,7 +435,7 @@ function SquidCall.StartCast(context)
 			startPosition = resolvedStartPosition,
 			impactPosition = resolvedImpactPosition,
 			travelDuration = projectileMotion.travelDuration,
-			projectileSpeed = PROJECTILE_SPEED_STUDS_PER_SECOND,
+			projectileSpeed = projectileSpeedStudsPerSecond,
 			explosionRadius = EXPLOSION_RADIUS,
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
 			flyDelaySeconds = math.max(0, PROJECTILE_FLY_VFX_SECONDS - CANNON_FIRE_SECONDS),

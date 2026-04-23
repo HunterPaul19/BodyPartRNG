@@ -4,24 +4,28 @@ local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
+local CombatProjectileUtil = require(ReplicatedStorage.Shared.Combat.CombatProjectileUtil)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
+local RaycastUtil = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Utilities.RaycastUtil)
 local CharacterPhysicsContext = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Utilities.CharacterPhysicsContext)
 
 local GRAB_RANGE_STUDS = 100
-local LANDING_DAMAGE = 25
+local LANDING_DAMAGE = 280
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "BroccoliBro"
 local GRAB_ANIMATION_NAME = "Grab"
 local THROW_ANIMATION_NAME = "Throw"
 local THROW_MARKER_NAME = "Throw"
 local HAND_PART_NAME = "LeftHand"
-local THROW_FORWARD_DISTANCE_STUDS = 58
-local THROW_DURATION_SECONDS = 0.65
-local THROW_DOWNWARD_SPEED = 130
-local THROW_RAGDOLL_SECONDS = 4.5
-local THROW_LANDED_RAGDOLL_DELAY = 1.25
-local LAND_RAYCAST_LIFT = 8
-local LAND_RAYCAST_DEPTH = 220
+local THROW_DOWNWARD_ANGLE_DEGREES = 45
+local THROW_PROXY_SPEED_STUDS_PER_SECOND = 250
+local THROW_PROXY_TRACE_DISTANCE_STUDS = 512
+local THROW_POST_IMPACT_RAGDOLL_SECONDS = 2
+local THROW_FALLBACK_DOWN_TRACE_LIFT = 8
+local THROW_FALLBACK_DOWN_TRACE_DEPTH = 320
+local IMPACT_FLOOR_TRACE_LIFT = 8
+local IMPACT_FLOOR_TRACE_DEPTH = 64
 
 local stub = CreateExplicitBossMoveStub({
 	bossId = "Broccoli Bro",
@@ -125,10 +129,10 @@ local function buildFlatLookDirection(rootPart: BasePart): Vector3
 	return flatDirection.Unit
 end
 
-local function buildThrowVelocity(bossRootPart: BasePart): Vector3
+local function buildThrowDirection(bossRootPart: BasePart): Vector3
 	local planarDirection = buildFlatLookDirection(bossRootPart)
-	local planarVelocity = THROW_FORWARD_DISTANCE_STUDS / THROW_DURATION_SECONDS
-	return (planarDirection * planarVelocity) + Vector3.new(0, -THROW_DOWNWARD_SPEED, 0)
+	local downwardWeight = math.tan(math.rad(THROW_DOWNWARD_ANGLE_DEGREES))
+	return (planarDirection + Vector3.new(0, -downwardWeight, 0)).Unit
 end
 
 local function setAssemblyVelocities(model: Model, linearVelocity: Vector3, angularVelocity: Vector3)
@@ -174,55 +178,54 @@ local function resolveNearestTarget(bossRootPart: BasePart, maxDistance: number)
 	return nearestTarget
 end
 
-local function buildGroundRaycastParams(ignoreInstances: { Instance }): RaycastParams
-	local include = {}
-
-	local activeBossArena = Workspace:FindFirstChild("ActiveBossArena")
-	if activeBossArena then
-		table.insert(include, activeBossArena)
+local function resolveThrowImpactPosition(startPosition: Vector3, throwDirection: Vector3, character: Model, bossModel: Model): Vector3?
+	local supportSurface = RaycastUtil.raycastSupportSurface(startPosition, throwDirection * THROW_PROXY_TRACE_DISTANCE_STUDS, {
+		character = character,
+		extraExclude = { bossModel },
+		ignoreWater = true,
+		fallbackToMap = false,
+	})
+	if supportSurface then
+		return supportSurface.Position
 	end
 
-	local map = Workspace:FindFirstChild("Map")
-	if map then
-		table.insert(include, map)
+	local fallbackStart = startPosition + (throwDirection * THROW_PROXY_TRACE_DISTANCE_STUDS)
+	local fallbackSurface = RaycastUtil.raycastSupportSurface(
+		fallbackStart + Vector3.new(0, THROW_FALLBACK_DOWN_TRACE_LIFT, 0),
+		Vector3.new(0, -(THROW_FALLBACK_DOWN_TRACE_DEPTH + THROW_FALLBACK_DOWN_TRACE_LIFT), 0),
+		{
+			character = character,
+			extraExclude = { bossModel },
+			ignoreWater = true,
+			fallbackToMap = false,
+		}
+	)
+	if fallbackSurface then
+		return fallbackSurface.Position
 	end
 
-	local world = Workspace:FindFirstChild("World")
-	local worldMap = world and world:FindFirstChild("Map")
-	if worldMap then
-		for _, child in ipairs(worldMap:GetChildren()) do
-			table.insert(include, child)
-		end
-	end
-
-	if Workspace.Terrain then
-		table.insert(include, Workspace.Terrain)
-	end
-
-	local params = RaycastParams.new()
-	params.IgnoreWater = false
-	if #include > 0 then
-		params.FilterType = Enum.RaycastFilterType.Include
-		params.FilterDescendantsInstances = include
-	else
-		params.FilterType = Enum.RaycastFilterType.Exclude
-		params.FilterDescendantsInstances = ignoreInstances
-	end
-
-	return params
+	return nil
 end
 
-local function resolveLandingCFrame(character: Model?, rootPart: BasePart?): CFrame?
-	if rootPart == nil or rootPart.Parent == nil then
-		return nil
+local function resolveImpactFloorCFrame(impactPosition: Vector3, targetCharacter: Model?): CFrame
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+	raycastParams.IgnoreWater = true
+
+	if targetCharacter ~= nil then
+		raycastParams.FilterDescendantsInstances = { targetCharacter }
 	end
 
-	local rayOrigin = rootPart.Position + Vector3.new(0, LAND_RAYCAST_LIFT, 0)
-	local rayDirection = Vector3.new(0, -(LAND_RAYCAST_DEPTH + LAND_RAYCAST_LIFT), 0)
-	local result = Workspace:Raycast(rayOrigin, rayDirection, buildGroundRaycastParams({ character or rootPart }))
-	local floorPosition = if result then result.Position else rootPart.Position
+	local floorResult = Workspace:Raycast(
+		impactPosition + Vector3.new(0, IMPACT_FLOOR_TRACE_LIFT, 0),
+		Vector3.new(0, -(IMPACT_FLOOR_TRACE_LIFT + IMPACT_FLOOR_TRACE_DEPTH), 0),
+		raycastParams
+	)
+	if floorResult then
+		return CFrame.new(floorResult.Position)
+	end
 
-	return CFrame.new(floorPosition)
+	return CFrame.new(impactPosition)
 end
 
 local function attachTargetToHand(handPart: BasePart, targetData): { [string]: any }?
@@ -333,6 +336,7 @@ local function releaseTarget(captiveState, restoreNetworkOwner: boolean)
 		character = character,
 		humanoid = humanoid,
 		rootPart = rootPart,
+		physicsContext = physicsContext,
 	}
 end
 
@@ -397,12 +401,37 @@ function Grab.StartCast(context)
 	local captiveState = nil
 	local throwTriggered = false
 	local landed = false
+	local throwState = nil
 
 	local function disconnectStoppedConnection()
 		if stoppedConnection and stoppedConnection.Connected then
 			stoppedConnection:Disconnect()
 		end
 		stoppedConnection = nil
+	end
+
+	local function cleanupThrowState(options)
+		if throwState == nil then
+			return nil
+		end
+
+		options = type(options) == "table" and options or {}
+		local activeThrowState = throwState
+		throwState = nil
+
+		if activeThrowState.impactDelayThread then
+			task.cancel(activeThrowState.impactDelayThread)
+		end
+
+		if options.invalidateKnockback == true
+			and activeThrowState.character
+			and activeThrowState.character.Parent ~= nil
+			and type(activeThrowState.knockbackID) == "string"
+			and activeThrowState.character:GetAttribute("KnockbackID") == activeThrowState.knockbackID then
+			activeThrowState.character:SetAttribute("KnockbackID", "")
+		end
+
+		return activeThrowState
 	end
 
 	local function releaseCaptiveAndClear(restoreNetworkOwner: boolean)
@@ -420,14 +449,17 @@ function Grab.StartCast(context)
 		recoveryEndsAt = os.clock() + (tonumber(context.move and context.move.recoverySeconds) or 0)
 	end
 
-	local function cleanup(stopAnimation: boolean, restoreNetworkOwner: boolean)
+	local function cleanup(stopAnimation: boolean)
 		if cleanedUp then
 			return
 		end
 
 		cleanedUp = true
 		disconnectStoppedConnection()
-		releaseCaptiveAndClear(restoreNetworkOwner)
+		releaseCaptiveAndClear(true)
+		cleanupThrowState({
+			invalidateKnockback = true,
+		})
 
 		if stopAnimation then
 			profile:StopAnimation(grabAnimation, ANIMATION_FADE_SECONDS)
@@ -435,28 +467,26 @@ function Grab.StartCast(context)
 		end
 	end
 
-	local function handleLanded(releasedTarget)
+	local function handleImpact(activeThrowState)
 		if landed then
 			return
 		end
 
 		landed = true
-		local character = releasedTarget.character
-		local humanoid = resolveHumanoid(character) or releasedTarget.humanoid
-		local rootPart = resolveRootPart(character) or releasedTarget.rootPart
+		local character = activeThrowState.character
+		local humanoid = resolveHumanoid(character) or activeThrowState.humanoid
 		if character == nil or character.Parent == nil or humanoid == nil or humanoid.Health <= 0 then
 			return
 		end
 
-		local floorCFrame = resolveLandingCFrame(character, rootPart)
-		if floorCFrame then
-			context.EmitPresentation("impact", {
-				floorCFrame = floorCFrame,
-				scaleMultiplier = context.bossDefinition.scaleMultiplier,
-			})
-		end
+		context.EmitPresentation("impact", {
+			floorCFrame = resolveImpactFloorCFrame(activeThrowState.impactPosition, activeThrowState.character),
+			scaleMultiplier = context.bossDefinition.scaleMultiplier,
+			targetCharacter = activeThrowState.character,
+			targetUserId = if activeThrowState.player then activeThrowState.player.UserId else nil,
+		})
 
-		humanoid:TakeDamage(LANDING_DAMAGE)
+		humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, LANDING_DAMAGE))
 	end
 
 	local function handleThrow()
@@ -465,7 +495,7 @@ function Grab.StartCast(context)
 		end
 
 		throwTriggered = true
-		local releasedTarget = releaseCaptiveAndClear(false)
+		local releasedTarget = releaseCaptiveAndClear(true)
 		if releasedTarget == nil then
 			return
 		end
@@ -473,20 +503,67 @@ function Grab.StartCast(context)
 			return
 		end
 
-		Knockback(releasedTarget.character, "Default", {
-			Direction = buildThrowVelocity(bossRootPart),
-			Duration = THROW_DURATION_SECONDS,
-			RagdollDuration = THROW_RAGDOLL_SECONDS,
-			Landed = {
-				Delay = 0.05,
-				DistanceFromGround = 4,
-				DisableRagdollDelay = THROW_LANDED_RAGDOLL_DELAY,
-				OnLand = function()
-					handleLanded(releasedTarget)
-				end,
-			},
-			GroundMode = "DeterministicMap",
+		local rootPart = resolveRootPart(releasedTarget.character) or releasedTarget.rootPart
+		if rootPart == nil then
+			markComplete()
+			return
+		end
+
+		local startPosition = rootPart.Position
+		local throwDirection = buildThrowDirection(bossRootPart)
+		local impactPosition = resolveThrowImpactPosition(startPosition, throwDirection, releasedTarget.character, bossModel)
+		if impactPosition == nil then
+			warn("[BroccoliGrab] Throw could not resolve a valid support surface.")
+			markComplete()
+			return
+		end
+
+		local projectileMotion = CombatProjectileUtil.CreateLinearMotion(
+			startPosition,
+			impactPosition,
+			THROW_PROXY_SPEED_STUDS_PER_SECOND
+		)
+		local travelDuration = projectileMotion.travelDuration
+
+		if travelDuration <= 0 then
+			handleImpact({
+				player = releasedTarget.player,
+				character = releasedTarget.character,
+				humanoid = releasedTarget.humanoid,
+				impactPosition = impactPosition,
+			})
+			markComplete()
+			return
+		end
+
+		Knockback(releasedTarget.character, "LinearProxy", {
+			StartPosition = startPosition,
+			ImpactPosition = impactPosition,
+			Duration = travelDuration,
+			RagdollDuration = travelDuration + THROW_POST_IMPACT_RAGDOLL_SECONDS,
+			AuthorityMode = "VictimClient",
+			FaceDirection = throwDirection,
 		})
+
+		local currentThrowState = {
+			player = releasedTarget.player,
+			character = releasedTarget.character,
+			humanoid = releasedTarget.humanoid,
+			impactPosition = impactPosition,
+			knockbackID = releasedTarget.character:GetAttribute("KnockbackID"),
+			impactDelayThread = nil,
+		}
+		throwState = currentThrowState
+
+		currentThrowState.impactDelayThread = task.delay(travelDuration, function()
+			if throwState ~= currentThrowState or cancelled or bossModel.Parent == nil then
+				return
+			end
+
+			throwState = nil
+			handleImpact(currentThrowState)
+			markComplete()
+		end)
 	end
 
 	local function playThrowAnimation()
@@ -501,7 +578,7 @@ function Grab.StartCast(context)
 		if track == nil then
 			warn("[BroccoliGrab] Failed to play Throw animation.")
 			markComplete()
-			cleanup(false, true)
+			cleanup(false)
 			return
 		end
 
@@ -518,7 +595,9 @@ function Grab.StartCast(context)
 				releaseCaptiveAndClear(true)
 			end
 
-			markComplete()
+			if throwState == nil then
+				markComplete()
+			end
 		end)
 	end
 
@@ -561,7 +640,7 @@ function Grab.StartCast(context)
 			handleGrabFinished()
 			return
 		end
-		if activePhase == "Throw" then
+		if activePhase == "Throw" and throwState == nil then
 			markComplete()
 		end
 	end)
@@ -575,7 +654,7 @@ function Grab.StartCast(context)
 			cancelled = true
 			completed = true
 			recoveryEndsAt = os.clock()
-			cleanup(true, true)
+			cleanup(true)
 		end,
 		IsComplete = function()
 			return completed

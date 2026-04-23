@@ -206,6 +206,7 @@ function AuraService:GrantAuraUnlock(player: Player, auraId: string): (boolean, 
 	Notify.Send(player, string.format('Unlocked aura "%s".', auraConfig.label), {
 		channel = "auras",
 		duration = 5,
+		tone = "good",
 	})
 
 	return true, string.format('Unlocked "%s".', auraConfig.label), true

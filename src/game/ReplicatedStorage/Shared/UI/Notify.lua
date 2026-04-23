@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
+local SoundUtil = require(ReplicatedStorage.Shared.Audio.SoundUtil)
 local NotificationPresenter = require(ReplicatedStorage.Shared.UI.NotificationPresenter)
 
 local REMOTES_FOLDER_NAME = "Remotes"
@@ -23,11 +24,21 @@ local CHANNEL_COLORS = {
 	system = Color3.fromRGB(148, 163, 184),
 }
 
+type NotificationTone = "neutral" | "good"
+
+local DEFAULT_TONE: NotificationTone = "neutral"
+
+local TONE_SOUNDS: { [NotificationTone]: string } = {
+	neutral = "NeutralNotificationSound",
+	good = "GoodNotificationSound",
+}
+
 type NotificationPayload = {
 	title: string,
 	text: string,
 	duration: number,
 	channel: string,
+	tone: NotificationTone,
 }
 
 type QueuedNotification = {
@@ -43,6 +54,7 @@ Notify.Defaults = {
 	title = "Notice",
 	duration = 4,
 	channel = DEFAULT_CHANNEL,
+	tone = DEFAULT_TONE,
 }
 
 local function ensureServerRemote(): RemoteEvent
@@ -112,6 +124,20 @@ local function resolveChannel(opts): string
 	return DEFAULT_CHANNEL
 end
 
+local function resolveTone(opts): NotificationTone
+	if typeof(opts) == "table" then
+		local tone = opts.tone
+		if typeof(tone) == "string" then
+			tone = string.lower(tone)
+			if TONE_SOUNDS[tone] ~= nil then
+				return tone :: NotificationTone
+			end
+		end
+	end
+
+	return DEFAULT_TONE
+end
+
 local function normalizePayload(text: any, opts): NotificationPayload
 	opts = opts or {}
 
@@ -125,6 +151,7 @@ local function normalizePayload(text: any, opts): NotificationPayload
 		text = tostring(text),
 		duration = duration,
 		channel = resolveChannel(opts),
+		tone = resolveTone(opts),
 	}
 end
 
@@ -215,6 +242,15 @@ local function renderToast(container: Frame, template: GuiObject, payload: Notif
 	})
 end
 
+local function playNotificationTone(tone: NotificationTone)
+	local soundName = TONE_SOUNDS[tone]
+	if soundName == nil then
+		return
+	end
+
+	SoundUtil.Play(soundName)
+end
+
 local function warnDroppedNotification(payload: NotificationPayload)
 	warn(string.format("[Notify] Dropped notification after waiting for %s UI: %s", SCREEN_GUI_NAME, payload.text))
 end
@@ -262,7 +298,10 @@ local function processQueue()
 					if entry.expiresAt <= now then
 						warnDroppedNotification(entry.payload)
 					else
-						renderToast(container, template, entry.payload)
+						local didRender = renderToast(container, template, entry.payload)
+						if didRender then
+							playNotificationTone(entry.payload.tone)
+						end
 					end
 				end
 			end

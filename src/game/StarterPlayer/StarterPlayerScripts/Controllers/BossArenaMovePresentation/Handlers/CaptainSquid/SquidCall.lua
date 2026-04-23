@@ -36,32 +36,107 @@ local SQUID_CALL_LEFT_HAND_MODEL_NAME = Constants.Vfx.SQUID_CALL_LEFT_HAND_MODEL
 local SQUID_CALL_MODULE_ID = Constants.ModuleIds.SQUID_CALL_MODULE_ID
 local SQUID_CALL_PROJECTILE_FLY_ATTACHMENT_NAME = Constants.Vfx.SQUID_CALL_PROJECTILE_FLY_ATTACHMENT_NAME
 local SQUID_CALL_PROJECTILE_IMPACT_PART_NAME = Constants.Values.SQUID_CALL_PROJECTILE_IMPACT_PART_NAME
+local DEFAULT_SQUID_CALL_FADE_SECONDS = 1.0
 
 local Handler = {}
 
-local function resolveSquidCallBarrelCFrame(middleBaseCFrame: CFrame, targetPosition: Vector3?): CFrame
+local function buildAimBasis(aimVector: Vector3, upReference: Vector3): (Vector3, Vector3)
+	local rightVector = upReference:Cross(aimVector)
+	if rightVector.Magnitude <= 0.001 then
+		rightVector = Vector3.xAxis:Cross(aimVector)
+	end
+	rightVector = rightVector.Unit
+
+	local upVector = aimVector:Cross(rightVector)
+	if upVector.Magnitude <= 0.001 then
+		upVector = Vector3.yAxis
+	else
+		upVector = upVector.Unit
+	end
+
+	return rightVector, upVector
+end
+
+local function resolveAlignedCannonCFrame(originPosition: Vector3, aimDirection: Vector3, localAimVector: Vector3): CFrame
+	local worldRightVector, worldUpVector = buildAimBasis(aimDirection, Vector3.yAxis)
+	local localRightVector, localUpVector = buildAimBasis(localAimVector, Vector3.yAxis)
+	local worldFrame = CFrame.fromMatrix(originPosition, worldRightVector, worldUpVector, -aimDirection)
+	local localFrame = CFrame.fromMatrix(Vector3.zero, localRightVector, localUpVector, -localAimVector)
+	return worldFrame * localFrame:Inverse()
+end
+
+local function resolveSquidCallModelCFrame(baseCFrame: CFrame, middleLocalCFrame: CFrame, targetPosition: Vector3?): CFrame
 	if typeof(targetPosition) ~= "Vector3" then
-		return middleBaseCFrame
+		return baseCFrame
 	end
 
-	local offset = targetPosition - middleBaseCFrame.Position
-	if offset.Magnitude <= 0.001 then
-		return middleBaseCFrame
+	local localAimVector = -middleLocalCFrame.RightVector
+	if localAimVector.Magnitude <= 0.001 then
+		return baseCFrame
 	end
 
-	local rightVector = -offset.Unit
-	local upVector = middleBaseCFrame.UpVector - (rightVector * middleBaseCFrame.UpVector:Dot(rightVector))
-	if upVector.Magnitude <= 0.001 then
-		upVector = Vector3.yAxis - (rightVector * Vector3.yAxis:Dot(rightVector))
-	end
-	if upVector.Magnitude <= 0.001 then
-		upVector = middleBaseCFrame.LookVector - (rightVector * middleBaseCFrame.LookVector:Dot(rightVector))
-	end
-	if upVector.Magnitude <= 0.001 then
-		return middleBaseCFrame
+	local modelCFrame = baseCFrame
+	for _ = 1, 3 do
+		local middlePosition = (modelCFrame * middleLocalCFrame).Position
+		local aimOffset = targetPosition - middlePosition
+		if aimOffset.Magnitude <= 0.001 then
+			break
+		end
+
+		modelCFrame = resolveAlignedCannonCFrame(baseCFrame.Position, aimOffset.Unit, localAimVector.Unit)
 	end
 
-	return CFrame.fromMatrix(middleBaseCFrame.Position, rightVector, upVector.Unit)
+	return modelCFrame
+end
+
+local function setVisualsEnabled(root: Instance?, enabled: boolean)
+	if root == nil then
+		return
+	end
+
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("ParticleEmitter") or descendant:IsA("Trail") or descendant:IsA("Beam") then
+			descendant.Enabled = enabled
+		end
+	end
+end
+
+function Handler:_fadeSquidCallPart(part: BasePart, fadeSeconds: number)
+	local tween = self.TweenService:Create(
+		part,
+		TweenInfo.new(fadeSeconds, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ Transparency = 1 }
+	)
+	tween:Play()
+end
+
+function Handler:_beginSquidCallFade(record: ActiveRecord, fadeSeconds: number)
+	local modelsToFade = {
+		record.cannonModel,
+		record.projectileModel,
+	}
+	local hasActiveModel = false
+
+	for _, model in ipairs(modelsToFade) do
+		if model and model.Parent ~= nil then
+			hasActiveModel = true
+			setVisualsEnabled(model, false)
+			for _, descendant in ipairs(model:GetDescendants()) do
+				if descendant:IsA("BasePart") then
+					self:_fadeSquidCallPart(descendant, fadeSeconds)
+				end
+			end
+		end
+	end
+
+	if not hasActiveModel then
+		self:_cleanupRecord(record)
+		return
+	end
+
+	task.delay(fadeSeconds, function()
+		self:_cleanupRecord(record)
+	end)
 end
 
 function Handler:_applySquidCallCannonPose(record: ActiveRecord, targetPosition: Vector3?, alpha: number)
@@ -78,11 +153,9 @@ function Handler:_applySquidCallCannonPose(record: ActiveRecord, targetPosition:
 		targetPosition,
 		aimData.initialBaseCFrame.RightVector
 	)
-	local baseCFrame = aimData.initialBaseCFrame:Lerp(desiredBaseCFrame, math.clamp(alpha, 0, 1))
-	cannonModel:PivotTo(baseCFrame)
-
-	local middleBaseCFrame = baseCFrame * aimData.middleLocalCFrame
-	cannonMiddle.CFrame = resolveSquidCallBarrelCFrame(middleBaseCFrame, targetPosition)
+	local desiredModelCFrame = resolveSquidCallModelCFrame(desiredBaseCFrame, aimData.middleLocalCFrame, targetPosition)
+	local modelCFrame = aimData.initialBaseCFrame:Lerp(desiredModelCFrame, math.clamp(alpha, 0, 1))
+	cannonModel:PivotTo(modelCFrame)
 end
 
 function Handler:_updateSquidCallMotion(record: ActiveRecord, nowServerTime: number)
@@ -230,7 +303,7 @@ function Handler:_summonSquidCall(record: ActiveRecord, event: PresentationEvent
 			return
 		end
 
-		self:emitVisuals(self:collectEmittableVisuals(cannonModel))
+		self:emitVisuals(cannonModel)
 	end)
 end
 
@@ -263,10 +336,8 @@ function Handler:_fireSquidCall(record: ActiveRecord, event: PresentationEvent)
 				impactPosition,
 				record.cannonModel:GetPivot().RightVector
 			)
-			record.cannonModel:PivotTo(baseCFrame)
-			local middleLocalCFrame = if storedAimData then storedAimData.middleLocalCFrame else baseCFrame:ToObjectSpace(record.cannonMiddle.CFrame)
-			local middleBaseCFrame = baseCFrame * middleLocalCFrame
-			record.cannonMiddle.CFrame = resolveSquidCallBarrelCFrame(middleBaseCFrame, impactPosition)
+			local middleLocalCFrame = if storedAimData then storedAimData.middleLocalCFrame else record.cannonModel:GetPivot():ToObjectSpace(record.cannonMiddle.CFrame)
+			record.cannonModel:PivotTo(resolveSquidCallModelCFrame(baseCFrame, middleLocalCFrame, impactPosition))
 		end
 	end
 
@@ -274,7 +345,7 @@ function Handler:_fireSquidCall(record: ActiveRecord, event: PresentationEvent)
 	if cannonMuzzleAttachment then
 		local muzzleSound = cannonMuzzleAttachment:FindFirstChild("Cannon Fire")
 		self:playSound(if muzzleSound and muzzleSound:IsA("Sound") then muzzleSound else nil, scaleMultiplier)
-		self:emitVisuals(self:collectEmittableVisuals(cannonMuzzleAttachment))
+		self:emitVisuals(cannonMuzzleAttachment)
 	end
 
 	local projectileSource = self:resolveBossVfxModel(
@@ -313,7 +384,7 @@ function Handler:_fireSquidCall(record: ActiveRecord, event: PresentationEvent)
 				return
 			end
 
-			self:emitVisuals(self:collectEmittableVisuals(flyAttachment))
+			self:emitVisuals(flyAttachment)
 		end)
 	end
 end
@@ -322,6 +393,8 @@ function Handler:_impactSquidCall(record: ActiveRecord, event: PresentationEvent
 	self:_shakeImpact()
 
 	local payload = event.payload
+	local fadeSeconds = if typeof(payload) == "table" then tonumber(payload.fadeSeconds) else nil
+	fadeSeconds = math.max(0, fadeSeconds or DEFAULT_SQUID_CALL_FADE_SECONDS)
 	if typeof(payload) ~= "table" then
 		self:_cleanupRecord(record)
 		return
@@ -347,7 +420,7 @@ function Handler:_impactSquidCall(record: ActiveRecord, event: PresentationEvent
 		self:emitEffectInstance(impactPart, SQUID_CALL_IMPACT_LIFETIME_SECONDS)
 	end
 
-	self:_cleanupRecord(record)
+	self:_beginSquidCallFade(record, fadeSeconds)
 end
 
 Handler.moduleIds = {

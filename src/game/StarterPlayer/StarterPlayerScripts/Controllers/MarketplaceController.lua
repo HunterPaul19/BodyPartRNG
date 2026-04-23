@@ -5,6 +5,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local FrameController = require(script.Parent.FrameController)
 local UIController = require(script.Parent.UIController)
+local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
+local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 
 local LOCAL_PLAYER = Players.LocalPlayer
@@ -107,14 +109,18 @@ end
 local function buildGiftPromptText(displayName: string, hasRecipients: boolean): string
 	local resolvedName = normalizeString(displayName)
 	if resolvedName == "" then
-		resolvedName = "Gift"
+		resolvedName = TranslationHelper.formatByKey(LocalizationKeys.Marketplace.Gift.DefaultName)
 	end
 
 	if hasRecipients then
-		return string.format("Choose player to receive gift: %s", resolvedName)
+		return TranslationHelper.formatByKey(LocalizationKeys.Marketplace.Gift.ChooseRecipient, {
+			DisplayName = resolvedName,
+		})
 	end
 
-	return string.format("No other players available to receive gift: %s", resolvedName)
+	return TranslationHelper.formatByKey(LocalizationKeys.Marketplace.Gift.NoRecipients, {
+		DisplayName = resolvedName,
+	})
 end
 
 function MarketplaceController:_ensureState()
@@ -223,7 +229,9 @@ function MarketplaceController:_ensurePromptLabel(line: Instance?): TextLabel?
 	promptLabel.BackgroundTransparency = 1
 	promptLabel.Size = UDim2.fromScale(1, 1)
 	promptLabel.Position = UDim2.fromScale(0, 0)
-	promptLabel.Text = "Choose player to receive gift"
+	TranslationHelper.setKeyText(promptLabel, LocalizationKeys.Marketplace.Gift.ChooseRecipient, {
+		DisplayName = TranslationHelper.formatByKey(LocalizationKeys.Marketplace.Gift.DefaultName),
+	})
 	promptLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 	promptLabel.TextScaled = true
 	promptLabel.Font = Enum.Font.GothamBold
@@ -365,7 +373,7 @@ function MarketplaceController:_resolvePriceLabelText(presentation: any): (strin
 		return nil, "Marketplace presentation data is invalid."
 	end
 	if presentation.isOwned == true then
-		return "Owned", nil
+		return TranslationHelper.formatByKey(LocalizationKeys.Marketplace.Price.Owned), nil
 	end
 	if presentation.exists ~= true then
 		return nil, string.format("Marketplace offer '%s' does not exist.", tostring(presentation.offerKey))
@@ -613,11 +621,11 @@ end
 function MarketplaceController:_setGiftHeader(displayName: string)
 	local ui = self._ui
 	if ui.header and ui.header:IsA("TextLabel") then
-		ui.header.Text = displayName
+		TranslationHelper.setLiteralText(ui.header, displayName)
 	end
 
 	if ui.promptLabel and ui.promptLabel:IsA("TextLabel") then
-		ui.promptLabel.Text = buildGiftPromptText(displayName, true)
+		TranslationHelper.setLiteralText(ui.promptLabel, buildGiftPromptText(displayName, true))
 	end
 end
 
@@ -680,7 +688,13 @@ function MarketplaceController:_buildGiftPlayerEntries()
 
 	sortPlayers(playersList)
 	if ui.promptLabel and ui.promptLabel:IsA("TextLabel") then
-		ui.promptLabel.Text = buildGiftPromptText(tostring(self._giftOffer and self._giftOffer.displayName or "Gift"), #playersList > 0)
+		TranslationHelper.setLiteralText(
+			ui.promptLabel,
+			buildGiftPromptText(
+				tostring(self._giftOffer and self._giftOffer.displayName or TranslationHelper.formatByKey(LocalizationKeys.Marketplace.Gift.DefaultName)),
+				#playersList > 0
+			)
+		)
 	end
 
 	for _, player in ipairs(playersList) do
@@ -696,10 +710,10 @@ function MarketplaceController:_buildGiftPlayerEntries()
 		local imageLabel = playerIconFrame and playerIconFrame:FindFirstChild("Image", true)
 
 		if displayNameLabel and displayNameLabel:IsA("TextLabel") then
-			displayNameLabel.Text = player.DisplayName
+			TranslationHelper.setLiteralText(displayNameLabel, player.DisplayName)
 		end
 		if usernameLabel and usernameLabel:IsA("TextLabel") then
-			usernameLabel.Text = "@" .. player.Name
+			TranslationHelper.setLiteralText(usernameLabel, "@" .. player.Name)
 		end
 		if imageLabel and imageLabel:IsA("ImageLabel") then
 			self:_loadThumbnail(imageLabel, player)
@@ -754,7 +768,9 @@ function MarketplaceController:_openGiftingFlow(offerKey: string, sourceButton: 
 
 	self._giftOffer = offer
 	self._giftReturnFrameName = self:_deriveReturnFrameName(sourceButton)
-	self:_setGiftHeader(tostring(offer.displayName or offer.offerKey or "Gift"))
+	self:_setGiftHeader(
+		tostring(offer.displayName or offer.offerKey or TranslationHelper.formatByKey(LocalizationKeys.Marketplace.Gift.DefaultName))
+	)
 	self:_buildGiftPlayerEntries()
 	FrameController:OpenFrame(MODAL_NAME)
 end

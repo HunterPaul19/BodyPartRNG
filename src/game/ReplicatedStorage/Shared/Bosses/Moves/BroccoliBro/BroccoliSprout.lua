@@ -4,14 +4,16 @@ local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 
-local DAMAGE = 22
+local DAMAGE = 250
 local FLOOR_CUE_DELAY_SECONDS = 107 / 60
 local TREE_RISE_START_DELAY_SECONDS = 163 / 60
 local RISE_DURATION_SECONDS = (183 - 163) / 60
 local CAST_END_DELAY_SECONDS = 467 / 60
-local TREE_SCALE_MULTIPLIER = 4.5
+local CUE_SCALE_MULTIPLIER = 4.5
+local TREE_GAMEPLAY_SCALE_MULTIPLIER = CUE_SCALE_MULTIPLIER * 2
 local HITBOX_DURATION_SECONDS = RISE_DURATION_SECONDS
 local MAX_HITBOX_PARTS = 256
 local ANIMATION_FADE_SECONDS = 0.08
@@ -154,16 +156,19 @@ local function resolveSproutGeometry(): SproutGeometry?
 		return nil
 	end
 	local treeRotationCorrection, treeUprightAxis = resolveTreeRotationCorrection(sourceTreeSize)
-	local treeSize = scaleVector3(resolveCorrectedTreeSize(sourceTreeSize), TREE_SCALE_MULTIPLIER)
+	local treeSize = scaleVector3(resolveCorrectedTreeSize(sourceTreeSize), TREE_GAMEPLAY_SCALE_MULTIPLIER)
 
 	local footprintSize = FALLBACK_FOOTPRINT_SIZE
 	if floorModel:IsA("Model") then
 		local _, floorSize = floorModel:GetBoundingBox()
 		if floorSize.X > 0.1 and floorSize.Z > 0.1 then
-			footprintSize = scaleVector3(Vector3.new(floorSize.X, math.max(0.01, floorSize.Y), floorSize.Z), TREE_SCALE_MULTIPLIER)
+			footprintSize = scaleVector3(
+				Vector3.new(floorSize.X, math.max(0.01, floorSize.Y), floorSize.Z),
+				TREE_GAMEPLAY_SCALE_MULTIPLIER
+			)
 		end
 	elseif floorModel:IsA("BasePart") then
-		footprintSize = scaleVector3(floorModel.Size, TREE_SCALE_MULTIPLIER)
+		footprintSize = scaleVector3(floorModel.Size, TREE_GAMEPLAY_SCALE_MULTIPLIER)
 	end
 
 	footprintSize = Vector3.new(
@@ -180,7 +185,7 @@ local function resolveSproutGeometry(): SproutGeometry?
 		treeUprightAxis = treeUprightAxis,
 		scaledPivotToBoundingCenter = scalePivotToBoundingCenter(
 			treeModel:GetPivot():ToObjectSpace(treeBoundingCFrame),
-			TREE_SCALE_MULTIPLIER
+			TREE_GAMEPLAY_SCALE_MULTIPLIER
 		),
 	}
 end
@@ -211,42 +216,31 @@ local function resolveRootPart(model: Model?): BasePart?
 	return model:FindFirstChildWhichIsA("BasePart", true)
 end
 
-local function buildFloorRaycastParams(bossModel: Model): RaycastParams
-	local includeInstances = {}
-	local activeBossArena = Workspace:FindFirstChild("ActiveBossArena")
-	if activeBossArena then
-		table.insert(includeInstances, activeBossArena)
+local function addUniqueInstance(instances: { Instance }, seen: { [Instance]: boolean }, instance: Instance?)
+	if instance == nil or instance.Parent == nil or seen[instance] == true then
+		return
 	end
 
-	local map = Workspace:FindFirstChild("Map")
-	if map then
-		table.insert(includeInstances, map)
-	end
+	seen[instance] = true
+	table.insert(instances, instance)
+end
 
-	local world = Workspace:FindFirstChild("World")
-	local worldMap = world and world:FindFirstChild("Map")
-	if worldMap then
-		table.insert(includeInstances, worldMap)
-	end
+local function buildFloorRaycastParams(targetCharacter: Model?, bossModel: Model): RaycastParams
+	local excludedInstances = {}
+	local seen = {}
 
-	if Workspace.Terrain then
-		table.insert(includeInstances, Workspace.Terrain)
-	end
+	addUniqueInstance(excludedInstances, seen, targetCharacter)
+	addUniqueInstance(excludedInstances, seen, bossModel)
 
 	local raycastParams = RaycastParams.new()
-	if #includeInstances > 0 then
-		raycastParams.FilterType = Enum.RaycastFilterType.Include
-		raycastParams.FilterDescendantsInstances = includeInstances
-	else
-		raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-		raycastParams.FilterDescendantsInstances = { bossModel }
-	end
-
+	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+	raycastParams.FilterDescendantsInstances = excludedInstances
+	raycastParams.IgnoreWater = false
 	return raycastParams
 end
 
-local function raycastGroundNear(position: Vector3, bossModel: Model): Vector3?
-	local raycastParams = buildFloorRaycastParams(bossModel)
+local function raycastGroundNear(position: Vector3, targetCharacter: Model?, bossModel: Model): Vector3?
+	local raycastParams = buildFloorRaycastParams(targetCharacter, bossModel)
 	local rayOrigin = position + Vector3.new(0, FLOOR_RAYCAST_START_HEIGHT, 0)
 	local rayDirection = Vector3.new(0, -(FLOOR_RAYCAST_START_HEIGHT + FLOOR_RAYCAST_DISTANCE), 0)
 	local raycastResult = Workspace:Raycast(rayOrigin, rayDirection, raycastParams)
@@ -282,15 +276,11 @@ local function buildSproutPoint(index: number, groundPosition: Vector3, geometry
 	}
 end
 
-local function collectSproutPoints(context, geometry: SproutGeometry): { SproutPoint }
+local function collectSproutPoints(targets: { any }, geometry: SproutGeometry, bossModel: Model): { SproutPoint }
 	local points = {}
 	local seenPlayers = {}
-	local bossModel = context.bossModel
-	if bossModel == nil then
-		return points
-	end
 
-	for _, targetContext in ipairs(context.aliveTargets or {}) do
+	for _, targetContext in ipairs(targets) do
 		local player = targetContext.player
 		if player == nil or seenPlayers[player] == true then
 			continue
@@ -304,11 +294,30 @@ local function collectSproutPoints(context, geometry: SproutGeometry): { SproutP
 		end
 
 		seenPlayers[player] = true
-		local groundPosition = raycastGroundNear(rootPart.Position, bossModel) or rootPart.Position
+		local groundPosition = raycastGroundNear(rootPart.Position, character, bossModel) or rootPart.Position
 		table.insert(points, buildSproutPoint(#points + 1, groundPosition, geometry))
 	end
 
 	return points
+end
+
+local function collectWarningSproutPoints(context, geometry: SproutGeometry): { SproutPoint }
+	local bossModel = context.bossModel
+	if bossModel == nil then
+		return {}
+	end
+
+	return collectSproutPoints(context.aliveTargets or {}, geometry, bossModel)
+end
+
+local function collectSpawnSproutPoints(context, geometry: SproutGeometry): { SproutPoint }
+	local bossModel = context.bossModel
+	if bossModel == nil then
+		return {}
+	end
+
+	local aliveTargets = CombatMoveUtil.CollectAliveTargets(context.aliveTargets or {})
+	return collectSproutPoints(aliveTargets, geometry, bossModel)
 end
 
 local function resolveRisingCFrame(point: SproutPoint, startedAt: number): CFrame
@@ -356,7 +365,7 @@ local function spawnSproutHitboxes(
 				end
 
 				hitTargets[targetModel] = true
-				humanoid:TakeDamage(DAMAGE)
+				humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE))
 			end,
 			HitboxDestroy = function()
 				for index, activeHitbox in ipairs(activeHitboxes) do
@@ -406,7 +415,7 @@ function BroccoliSprout.StartCast(context)
 	local sproutTriggered = false
 	local presentationStopped = false
 	local recoveryEndsAt = nil :: number?
-	local sproutPoints = collectSproutPoints(context, geometry)
+	local warningPoints = collectWarningSproutPoints(context, geometry)
 
 	local function disconnectStoppedConnection()
 		if stoppedConnection and stoppedConnection.Connected then
@@ -460,13 +469,13 @@ function BroccoliSprout.StartCast(context)
 			return
 		end
 
-		if #sproutPoints <= 0 then
+		if #warningPoints <= 0 then
 			return
 		end
 
 		context.EmitPresentation("floor", {
-			points = sproutPoints,
-			scaleMultiplier = TREE_SCALE_MULTIPLIER,
+			points = warningPoints,
+			scaleMultiplier = CUE_SCALE_MULTIPLIER,
 		})
 	end
 
@@ -476,7 +485,8 @@ function BroccoliSprout.StartCast(context)
 		end
 
 		sproutTriggered = true
-		if #sproutPoints <= 0 then
+		local spawnPoints = collectSpawnSproutPoints(context, geometry)
+		if #spawnPoints <= 0 then
 			warn("[BroccoliSprout] Rise timing reached with no alive targets.")
 			stopPresentation()
 			markComplete()
@@ -484,13 +494,14 @@ function BroccoliSprout.StartCast(context)
 		end
 
 		context.EmitPresentation("sprout", {
-			points = sproutPoints,
+			points = spawnPoints,
 			riseDurationSeconds = RISE_DURATION_SECONDS,
-			scaleMultiplier = TREE_SCALE_MULTIPLIER,
+			scaleMultiplier = CUE_SCALE_MULTIPLIER,
+			treeScaleMultiplier = TREE_GAMEPLAY_SCALE_MULTIPLIER,
 			treeRotationCorrection = geometry.treeRotationCorrection,
 			treeUprightAxis = geometry.treeUprightAxis,
 		})
-		spawnSproutHitboxes(bossModel, sproutPoints, hitTargets, activeHitboxes)
+		spawnSproutHitboxes(bossModel, spawnPoints, hitTargets, activeHitboxes)
 	end
 
 	local function completeCast()
@@ -509,12 +520,12 @@ function BroccoliSprout.StartCast(context)
 	end
 
 	context.EmitPresentation("start", {
-		scaleMultiplier = TREE_SCALE_MULTIPLIER,
+		scaleMultiplier = CUE_SCALE_MULTIPLIER,
 		treeRotationCorrection = geometry.treeRotationCorrection,
 		treeUprightAxis = geometry.treeUprightAxis,
 	})
 
-	if #sproutPoints > 0 then
+	if #warningPoints > 0 then
 		task.delay(FLOOR_CUE_DELAY_SECONDS, emitFloor)
 		task.delay(TREE_RISE_START_DELAY_SECONDS, sprout)
 		task.delay(CAST_END_DELAY_SECONDS, completeCast)

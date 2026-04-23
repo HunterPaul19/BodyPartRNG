@@ -3,7 +3,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 local AchievementState = require(ReplicatedStorage.Shared.Titles.AchievementState)
 local TitleConfig = require(ReplicatedStorage.Shared.Config.TitleConfig)
+local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
+local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local TitleUtil = require(ReplicatedStorage.Shared.Titles.TitleUtil)
+local ToggleSoundUtil = require(ReplicatedStorage.Shared.Audio.ToggleSoundUtil)
 local DataController = require(script.Parent.DataController)
 local FrameController = require(script.Parent.FrameController)
 local UIController = require(script.Parent.UIController)
@@ -155,7 +158,15 @@ function TitleController:_applyRowStyle(row: GuiButton, title, isSelected: boole
 	local label = row:FindFirstChild("BundleName")
 	if label and label:IsA("TextLabel") then
 		label.TextColor3 = title.displayColor
-		label.Text = if isEquipped then string.format("%s [Equipped]", title.label) else title.label
+		if isEquipped then
+			TranslationHelper.setLiteralText(label, string.format(
+				"%s [%s]",
+				title.label,
+				TranslationHelper.formatByKey(LocalizationKeys.Title.Action.EquippedTag)
+			))
+		else
+			TranslationHelper.setSourceText(label, title.label)
+		end
 	end
 end
 
@@ -197,9 +208,12 @@ function TitleController:_syncList()
 	local emptyStateLabel = self:_ensureEmptyStateLabel(indexFrame)
 	emptyStateLabel.Visible = #titles == 0
 	if #titles == 0 then
-		emptyStateLabel.Text = if self._searchText ~= ""
-			then "No unlocked titles match your search."
-			else "Keep progressing to unlock your first title."
+		TranslationHelper.setKeyText(
+			emptyStateLabel,
+			if self._searchText ~= ""
+				then LocalizationKeys.Title.EmptyState.SearchNoMatches
+				else LocalizationKeys.Title.EmptyState.FirstUnlock
+		)
 	end
 end
 
@@ -219,15 +233,21 @@ function TitleController:_syncPreview()
 	end
 
 	previewHolder.Visible = true
-	titleNameLabel.Text = selectedTitle.label
+	TranslationHelper.setSourceText(titleNameLabel, selectedTitle.label)
 	titleNameLabel.TextColor3 = selectedTitle.displayColor
-	titleDescriptionLabel.Text = string.format("%s\n\nUnlock by: %s", selectedTitle.description, selectedTitle.howToGet)
+	TranslationHelper.setKeyText(titleDescriptionLabel, LocalizationKeys.Title.Preview.UnlockBy, {
+		Description = selectedTitle.description,
+		HowToGet = selectedTitle.howToGet,
+	})
 
 	local equippedTitleId = getEquippedTitleId()
 	local isEquipped = equippedTitleId == selectedTitle.id
 	local buttonText = equipButton:FindFirstChild("TextLabel")
 	if buttonText and buttonText:IsA("TextLabel") then
-		buttonText.Text = if isEquipped then "Unequip" else "Equip"
+		TranslationHelper.setKeyText(
+			buttonText,
+			if isEquipped then LocalizationKeys.Title.Action.Unequip else LocalizationKeys.Title.Action.Equip
+		)
 	end
 
 	for _, imageName in ipairs({ "Rays", "Cover", "Cover2" }) do
@@ -251,7 +271,7 @@ function TitleController:_submitEquipToggle()
 
 	local remote = self:_getRemote()
 	if not remote then
-		Notify.Show("The title equip remote is unavailable right now.", { channel = "titles" })
+		Notify.Show(TranslationHelper.formatByKey(LocalizationKeys.Title.Message.RemoteUnavailable), { channel = "titles" })
 		return
 	end
 
@@ -263,7 +283,7 @@ function TitleController:_submitEquipToggle()
 	end)
 
 	if not ok then
-		Notify.Show("Failed to update your equipped title.", { channel = "titles" })
+		Notify.Show(TranslationHelper.formatByKey(LocalizationKeys.Title.Message.UpdateFailed), { channel = "titles" })
 		return
 	end
 
@@ -276,6 +296,7 @@ function TitleController:_submitEquipToggle()
 	end
 
 	self:_syncAll()
+	ToggleSoundUtil.PlayToggle(isEquipped ~= true)
 end
 
 function TitleController:_bindOpenButton(openButton: GuiButton)
@@ -367,6 +388,8 @@ function TitleController:_ensureFullUi(playerGui: PlayerGui)
 	end
 
 	self:_cacheUi(playerGui)
+
+	ToggleSoundUtil.MarkToggleButton(self._ui.equipButton)
 
 	UIController:CreateButton(self._ui.closeButton, function()
 		FrameController:CloseFrame(WINDOW_NAME)

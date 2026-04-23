@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Schema = require(ReplicatedStorage.Lists.Schema)
+local SoundUtil = require(ReplicatedStorage.Shared.Audio.SoundUtil)
 local BodyPartEconomy = require(ReplicatedStorage.Shared.Character.BodyPartEconomy)
 local AppraisalPricing = require(ReplicatedStorage.Shared.Character.AppraisalPricing)
 local AppraisalState = require(ReplicatedStorage.Shared.Character.AppraisalState)
@@ -11,6 +12,8 @@ local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormat
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
+local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
+local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
 local ConfirmationWarning = require(ReplicatedStorage.Shared.UI.ConfirmationWarning)
 local RollWarningNotifier = require(ReplicatedStorage.Shared.UI.RollWarningNotifier)
@@ -167,15 +170,19 @@ local function formatWholeNumber(value: number): string
 end
 
 local function formatAppraisalCost(value: number): string
-	return string.format("Cost: %s$", formatWholeNumber(value))
+	return TranslationHelper.formatByKey(LocalizationKeys.Appraisal.Fields.Cost, {
+		Cost = formatWholeNumber(value),
+	})
 end
 
 local function formatWorth(value: number?): string
 	if value == nil then
-		return "Worth:"
+		return TranslationHelper.formatByKey(LocalizationKeys.Appraisal.Fields.WorthEmpty)
 	end
 
-	return string.format("Worth: $%s", formatWholeNumber(value))
+	return TranslationHelper.formatByKey(LocalizationKeys.Appraisal.Fields.Worth, {
+		Worth = formatWholeNumber(value),
+	})
 end
 
 function AppraisalController:_ensureState()
@@ -307,16 +314,20 @@ function AppraisalController:_getSelectedAppraisalRiskMessage(): string?
 
 	local riskDescriptors = {}
 	if hasRiskyMutation then
-		table.insert(riskDescriptors, string.format("%s mutation", MutationConfig.GetDisplayName(mutationId)))
+		table.insert(riskDescriptors, TranslationHelper.formatByKey(LocalizationKeys.Appraisal.Risk.Mutation, {
+			MutationName = MutationConfig.GetDisplayName(mutationId),
+		}))
 	end
 	if hasRiskySize then
 		table.insert(
 			riskDescriptors,
-			string.format(
-				"%s size (%sx)",
-				BodyPartPresentation.GetSizeDescriptor(sizeScale, if sizeEntry then sizeEntry.id else ownedRecord.sizeId),
-				BodyPartPresentation.FormatMultiplier(sizeScale)
-			)
+			TranslationHelper.formatByKey(LocalizationKeys.Appraisal.Risk.Size, {
+				SizeDescriptor = BodyPartPresentation.GetSizeDescriptor(
+					sizeScale,
+					if sizeEntry then sizeEntry.id else ownedRecord.sizeId
+				),
+				SizeMultiplier = BodyPartPresentation.FormatMultiplier(sizeScale),
+			})
 		)
 	end
 
@@ -324,13 +335,15 @@ function AppraisalController:_getSelectedAppraisalRiskMessage(): string?
 	if #riskDescriptors == 1 then
 		riskText = riskDescriptors[1]
 	else
-		riskText = string.format("%s and %s", riskDescriptors[1], riskDescriptors[2])
+		riskText = TranslationHelper.formatByKey(LocalizationKeys.Appraisal.Risk.JoinTwo, {
+			FirstRisk = riskDescriptors[1],
+			SecondRisk = riskDescriptors[2],
+		})
 	end
 
-	return string.format(
-		"This appraisal may reroll your current %s into something worse. Continue?",
-		riskText
-	)
+	return TranslationHelper.formatByKey(LocalizationKeys.Appraisal.Risk.Continue, {
+		RiskText = riskText,
+	})
 end
 
 function AppraisalController:_applyPreviewLabelStyles(previewModel: any?)
@@ -358,7 +371,10 @@ end
 function AppraisalController:_setSelectText(text: string?)
 	local label = self._ui and self._ui.selectTextLabel or nil
 	if label then
-		label.Text = if typeof(text) == "string" and text ~= "" then text else self._defaultSelectText
+		TranslationHelper.setLiteralText(
+			label,
+			if typeof(text) == "string" and text ~= "" then text else TranslationHelper.formatByKey(LocalizationKeys.Appraisal.Select.Default)
+		)
 	end
 end
 
@@ -369,7 +385,7 @@ function AppraisalController:_setSelectedText(region: string?)
 	end
 
 	if typeof(region) ~= "string" or region == "" then
-		label.Text = self._defaultSelectedText
+		TranslationHelper.setSourceText(label, self._defaultSelectedText)
 		return
 	end
 
@@ -379,7 +395,9 @@ function AppraisalController:_setSelectedText(region: string?)
 		prefix = string.sub(prefix, 1, colonIndex)
 	end
 
-	label.Text = string.format("%s %s", prefix, BodyPartPresentation.GetRegionLabel(region))
+	TranslationHelper.setKeyText(label, LocalizationKeys.Appraisal.Select.Selected, {
+		RegionLabel = BodyPartPresentation.GetLocalizedRegionLabel(region),
+	}, "Text", string.format("%s {RegionLabel}", prefix))
 end
 
 function AppraisalController:_hidePreview()
@@ -400,14 +418,14 @@ function AppraisalController:_syncPreview()
 
 	local region = self._selectedRegion
 	if not region then
-		self:_setSelectText(self._defaultSelectText)
+		self:_setSelectText(nil)
 		self:_setSelectedText(nil)
 		self:_hidePreview()
 		return
 	end
 
 	local previewModel = self:_buildPreviewPresentationForRegion(region)
-	self:_setSelectText(self._defaultSelectText)
+	self:_setSelectText(nil)
 	self:_setSelectedText(region)
 
 	if not previewModel then
@@ -417,14 +435,16 @@ function AppraisalController:_syncPreview()
 
 	ui.previewHolder.Visible = true
 	self:_applyPreviewLabelStyles(previewModel)
-	ui.previewLabels.Bundle.Text = previewModel.inventoryBundleText or previewModel.bundleText
-	ui.previewLabels.Part.Text = previewModel.partText
-	ui.previewLabels.Rarity.Text = previewModel.rarityText
-	ui.previewLabels.Mutation.Text = previewModel.mutationText
-	ui.previewLabels.Content.Text = previewModel.sizeText
-	ui.previewLabels.Existing.Text = "Existing: N/A"
-	ui.previewLabels.Cash.Text = previewModel.cashText
-	ui.previewLabels.Chance.Text = previewModel.chanceText
+	TranslationHelper.setLiteralText(ui.previewLabels.Bundle, previewModel.inventoryBundleText or previewModel.bundleText)
+	TranslationHelper.setLiteralText(ui.previewLabels.Part, previewModel.partText)
+	TranslationHelper.setLiteralText(ui.previewLabels.Rarity, previewModel.rarityText)
+	TranslationHelper.setLiteralText(ui.previewLabels.Mutation, previewModel.mutationText)
+	TranslationHelper.setLiteralText(ui.previewLabels.Content, previewModel.sizeText)
+	TranslationHelper.setKeyText(ui.previewLabels.Existing, LocalizationKeys.BodyPart.Preview.Existing, {
+		Count = TranslationHelper.formatByKey(LocalizationKeys.Common.NotAvailable),
+	})
+	TranslationHelper.setLiteralText(ui.previewLabels.Cash, previewModel.cashText)
+	TranslationHelper.setLiteralText(ui.previewLabels.Chance, previewModel.chanceText)
 end
 
 function AppraisalController:_syncSlots()
@@ -478,7 +498,7 @@ end
 function AppraisalController:_syncDialogueName()
 	local ui = self._ui
 	if ui then
-		ui.dialogueNameLabel.Text = DEFAULT_DIALOGUE_NAME
+		TranslationHelper.setSourceText(ui.dialogueNameLabel, DEFAULT_DIALOGUE_NAME)
 	end
 end
 
@@ -503,8 +523,10 @@ function AppraisalController:_syncStatus()
 	end
 
 	local state = self._appraisalState
-	local statusText = if state.isAvailable then ACTIVE_STATUS_TEXT else INACTIVE_STATUS_TEXT
-	ui.statusLabel.Text = statusText
+	TranslationHelper.setKeyText(
+		ui.statusLabel,
+		if state.isAvailable then LocalizationKeys.Appraisal.Status.Active else LocalizationKeys.Appraisal.Status.Inactive
+	)
 end
 
 function AppraisalController:_setRollButtonEnabled(enabled: boolean)
@@ -519,7 +541,7 @@ function AppraisalController:_setRollButtonEnabled(enabled: boolean)
 	button.AutoButtonColor = false
 
 	if ui.rollButtonLabel then
-		ui.rollButtonLabel.Text = "Appraise"
+		TranslationHelper.setKeyText(ui.rollButtonLabel, LocalizationKeys.Appraisal.Fields.Action)
 		ui.rollButtonLabel.TextTransparency = if enabled then 0 else 0.35
 	end
 
@@ -556,7 +578,7 @@ function AppraisalController:_showInsufficientFundsWarning(message: string?)
 		RollWarningNotifier.ShowInsufficientFundsWarning(
 			if typeof(message) == "string" and message ~= ""
 				then message
-				else "You don't have enough money to appraise this body part."
+				else TranslationHelper.formatByKey(LocalizationKeys.Appraisal.Message.InsufficientFunds)
 		)
 		return
 	end
@@ -565,7 +587,7 @@ function AppraisalController:_showInsufficientFundsWarning(message: string?)
 		DEFAULT_DIALOGUE_NAME,
 		if typeof(message) == "string" and message ~= ""
 			then message
-			else "You don't have enough money to appraise this body part."
+			else TranslationHelper.formatByKey(LocalizationKeys.Appraisal.Message.InsufficientFunds)
 	)
 end
 
@@ -617,10 +639,10 @@ function AppraisalController:_showMessage(title: string, description: string)
 
 	ui.messageRoot.Visible = true
 	if ui.messageTitle then
-		ui.messageTitle.Text = title
+		TranslationHelper.setLiteralText(ui.messageTitle, title)
 	end
 	if ui.messageDescription then
-		ui.messageDescription.Text = description
+		TranslationHelper.setLiteralText(ui.messageDescription, description)
 	end
 end
 
@@ -638,15 +660,14 @@ function AppraisalController:_buildSuccessDescription(appraisalResult: any): str
 	local beforeSizeDescriptor = escapeRichText(BodyPartPresentation.GetSizeDescriptor(beforeSizeScale, beforeSizeId))
 	local afterSizeDescriptor = escapeRichText(BodyPartPresentation.GetSizeDescriptor(afterSizeScale, afterSizeId))
 
-	return string.format(
-		"You have appraised your item.<br/><br/><b>Mutation:</b> %s -> %s<br/><b>Size:</b> %s (%sx) -> %s (%sx)",
-		beforeMutation,
-		afterMutation,
-		beforeSizeDescriptor,
-		BodyPartPresentation.FormatMultiplier(beforeSizeScale),
-		afterSizeDescriptor,
-		BodyPartPresentation.FormatMultiplier(afterSizeScale)
-	)
+	return TranslationHelper.formatByKey(LocalizationKeys.Appraisal.Message.Success, {
+		BeforeMutation = beforeMutation,
+		AfterMutation = afterMutation,
+		BeforeSize = beforeSizeDescriptor,
+		BeforeScale = BodyPartPresentation.FormatMultiplier(beforeSizeScale),
+		AfterSize = afterSizeDescriptor,
+		AfterScale = BodyPartPresentation.FormatMultiplier(afterSizeScale),
+	})
 end
 
 function AppraisalController:_ensureRemotes(): boolean
@@ -706,7 +727,7 @@ function AppraisalController:_requestState(showFailureMessage: boolean?): boolea
 	if not self:_ensureRemotes() then
 		self._appraisalState = AppraisalState.CreateEmptyState()
 		if showFailureMessage then
-			self:_showMessage(DEFAULT_DIALOGUE_NAME, "The appraiser is not ready right now.")
+			self:_showMessage(DEFAULT_DIALOGUE_NAME, TranslationHelper.formatByKey(LocalizationKeys.Appraisal.Message.NotReady))
 		end
 		return false
 	end
@@ -715,14 +736,17 @@ function AppraisalController:_requestState(showFailureMessage: boolean?): boolea
 	if typeof(result) ~= "table" then
 		self._appraisalState = AppraisalState.CreateEmptyState()
 		if showFailureMessage then
-			self:_showMessage(DEFAULT_DIALOGUE_NAME, "The appraiser is not ready right now.")
+			self:_showMessage(DEFAULT_DIALOGUE_NAME, TranslationHelper.formatByKey(LocalizationKeys.Appraisal.Message.NotReady))
 		end
 		return false
 	end
 
 	self._appraisalState = AppraisalState.CloneState(result.appraisalState)
 	if result.ok ~= true and showFailureMessage then
-		self:_showMessage(DEFAULT_DIALOGUE_NAME, tostring(result.message or "The appraiser is unavailable right now."))
+		self:_showMessage(
+			DEFAULT_DIALOGUE_NAME,
+			tostring(result.message or TranslationHelper.formatByKey(LocalizationKeys.Appraisal.Message.Unavailable))
+		)
 	end
 
 	return result.ok == true
@@ -734,14 +758,14 @@ function AppraisalController:_performAppraisal()
 	end
 
 	if not self:_ensureRemotes() then
-		self:_showMessage(DEFAULT_DIALOGUE_NAME, "The appraiser is not ready right now.")
+		self:_showMessage(DEFAULT_DIALOGUE_NAME, TranslationHelper.formatByKey(LocalizationKeys.Appraisal.Message.NotReady))
 		return
 	end
 
 	local selectedRegion = self._selectedRegion
 	local selectedEntry = self:_getSelectedEntry()
 	if not (selectedRegion and selectedEntry) then
-		self:_showMessage(DEFAULT_DIALOGUE_NAME, "Select an equipped body part first.")
+		self:_showMessage(DEFAULT_DIALOGUE_NAME, TranslationHelper.formatByKey(LocalizationKeys.Appraisal.Message.SelectFirst))
 		return
 	end
 
@@ -770,6 +794,7 @@ function AppraisalController:_performAppraisal()
 	self:_syncUi()
 
 	if result.ok == true then
+		SoundUtil.Play(AppraisalConfig.successSoundName)
 		self:_showMessage(DEFAULT_DIALOGUE_NAME, self:_buildSuccessDescription(result.appraisalResult))
 		return
 	end

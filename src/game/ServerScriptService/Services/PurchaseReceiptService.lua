@@ -600,6 +600,7 @@ local function sendPurchaseThanks(player: Player, offerKey: string, source: stri
 		if source == "gift_delivery" then
 			Notify.Send(player, string.format("You received %s as a gift!", getOfferDisplayName(offerKey)), {
 				channel = "marketplace",
+				tone = "good",
 			})
 		end
 		return
@@ -608,6 +609,7 @@ local function sendPurchaseThanks(player: Player, offerKey: string, source: stri
 	if source == "prompt" or source == "receipt" then
 		Notify.Send(player, string.format("Thanks for purchasing %s!", getOfferDisplayName(offerKey)), {
 			channel = "marketplace",
+			tone = "good",
 		})
 	end
 end
@@ -942,6 +944,7 @@ local function processProductReceipt(receiptInfo)
 
 		Notify.Send(player, string.format("Sent %s as a gift.", getOfferDisplayName(offer.offerKey)), {
 			channel = "marketplace",
+			tone = "good",
 		})
 		return Enum.ProductPurchaseDecision.PurchaseGranted
 	end

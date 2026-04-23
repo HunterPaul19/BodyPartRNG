@@ -5,6 +5,7 @@ local DataController = require(script.Parent.DataController)
 local FrameController = require(script.Parent.FrameController)
 local UIController = require(script.Parent.UIController)
 local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
+local ToggleSoundUtil = require(ReplicatedStorage.Shared.Audio.ToggleSoundUtil)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local WINDOW_NAME = "AutoSell"
@@ -110,9 +111,16 @@ function AutoSellController:_toggleRarity(rarity: string, enabled: boolean)
 		return
 	end
 
-	if typeof(result) == "table" and result.ok ~= true then
-		warn(string.format("[AutoSellController] Failed to toggle %s auto-sell: %s", rarity, tostring(result.message)))
+	if typeof(result) ~= "table" then
+		return
 	end
+
+	if result.ok ~= true then
+		warn(string.format("[AutoSellController] Failed to toggle %s auto-sell: %s", rarity, tostring(result.message)))
+		return
+	end
+
+	ToggleSoundUtil.PlayToggle(enabled == true)
 end
 
 function AutoSellController:_toggleCutsceneRarity(rarity: string, enabled: boolean)
@@ -132,9 +140,16 @@ function AutoSellController:_toggleCutsceneRarity(rarity: string, enabled: boole
 		return
 	end
 
-	if typeof(result) == "table" and result.ok ~= true then
-		warn(string.format("[AutoSellController] Failed to toggle %s cutscenes: %s", rarity, tostring(result.message)))
+	if typeof(result) ~= "table" then
+		return
 	end
+
+	if result.ok ~= true then
+		warn(string.format("[AutoSellController] Failed to toggle %s cutscenes: %s", rarity, tostring(result.message)))
+		return
+	end
+
+	ToggleSoundUtil.PlayToggle(enabled == true)
 end
 
 function AutoSellController:_bindOpenButton(openButton: GuiButton)
@@ -145,6 +160,11 @@ end
 
 function AutoSellController:_bindRarityButtons()
 	for rarity, buttonSet: RarityButtonSet in pairs(self._ui.rarityButtons) do
+		ToggleSoundUtil.MarkToggleButton(buttonSet.disabled)
+		ToggleSoundUtil.MarkToggleButton(buttonSet.enabled)
+		ToggleSoundUtil.MarkToggleButton(buttonSet.cutsceneOff)
+		ToggleSoundUtil.MarkToggleButton(buttonSet.cutsceneOn)
+
 		UIController:CreateButton(buttonSet.disabled, function()
 			self:_toggleRarity(rarity, true)
 		end)

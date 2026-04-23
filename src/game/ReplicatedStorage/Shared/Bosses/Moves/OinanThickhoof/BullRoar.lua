@@ -14,6 +14,7 @@ local HITBOX_SCALE = 1.5
 local HITBOX_RADIUS = 50 * HITBOX_SCALE
 local HITBOX_HEIGHT = 100 * HITBOX_SCALE
 local HITBOX_DURATION_SECONDS = 0.12
+local DAMAGE = 25
 local STUN_DURATION_SECONDS = 3
 
 local stub = CreateExplicitBossMoveStub({
@@ -149,6 +150,7 @@ local function spawnRoarHitbox(context, hitTargets: { [Model]: boolean })
 			end
 
 			hitTargets[targetModel] = true
+			humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE))
 			stopCharacterMovement(targetModel, humanoid, targetRootPart)
 		end,
 	})

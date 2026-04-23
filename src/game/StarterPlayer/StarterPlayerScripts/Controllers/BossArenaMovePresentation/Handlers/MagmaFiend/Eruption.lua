@@ -27,18 +27,6 @@ local MAGMA_FIEND_VFX_FOLDER_NAME = Constants.Vfx.MAGMA_FIEND_VFX_FOLDER_NAME
 
 local Handler = {}
 
-function Handler:_clearMagmaEruptionWarnings(record: ActiveRecord)
-	if record.eruptionWarningHandles == nil then
-		return
-	end
-
-	for _, warningHandle in pairs(record.eruptionWarningHandles) do
-		warningHandle:Destroy()
-	end
-
-	record.eruptionWarningHandles = nil
-end
-
 function Handler:_startMagmaEruption(record: ActiveRecord, event: PresentationEvent)
 	local bossModel = event.bossModel
 	if bossModel == nil or bossModel.Parent == nil then
@@ -94,44 +82,11 @@ function Handler:_startMagmaEruption(record: ActiveRecord, event: PresentationEv
 
 	self:playTimedSounds(leftHandModel, scaleMultiplier)
 	self:playTimedSounds(rightHandModel, scaleMultiplier)
-	self:emitVisuals(self:collectEmittableVisuals(leftHandModel))
-	self:emitVisuals(self:collectEmittableVisuals(rightHandModel))
-end
-
-function Handler:_warnMagmaEruption(record: ActiveRecord, event: PresentationEvent)
-	local payload = event.payload
-	if typeof(payload) ~= "table" or typeof(payload.points) ~= "table" then
-		return
-	end
-
-	self:_clearMagmaEruptionWarnings(record)
-	local castFolder = self:_ensureCastFolder(record)
-	local warningSeconds = math.max(0.05, tonumber(payload.warningSeconds) or 1)
-	record.eruptionWarningHandles = {}
-
-	for _, pointData in ipairs(payload.points) do
-		if typeof(pointData) ~= "table" then
-			continue
-		end
-
-		local floorCFrame = pointData.floorCFrame
-		local footprintSize = pointData.footprintSize
-		if typeof(floorCFrame) ~= "CFrame" or typeof(footprintSize) ~= "Vector3" then
-			continue
-		end
-
-		local index = math.max(1, math.floor(tonumber(pointData.index) or (#record.eruptionWarningHandles + 1)))
-		record.eruptionWarningHandles[index] = self.Indication.CreateCircle({
-			parent = castFolder,
-			cframe = floorCFrame,
-			diameter = math.max(footprintSize.X, footprintSize.Z),
-			duration = warningSeconds,
-		})
-	end
+	self:emitVisuals(leftHandModel)
+	self:emitVisuals(rightHandModel)
 end
 
 function Handler:_eruptMagmaEruption(record: ActiveRecord, event: PresentationEvent)
-	self:_clearMagmaEruptionWarnings(record)
 	self:_shakeImpact()
 
 	local payload = event.payload
@@ -153,12 +108,32 @@ function Handler:_eruptMagmaEruption(record: ActiveRecord, event: PresentationEv
 
 	local scaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1)
 	for _, pointData in ipairs(payload.points) do
-		if typeof(pointData) ~= "table" or typeof(pointData.floorCFrame) ~= "CFrame" then
+		if typeof(pointData) ~= "table" then
+			continue
+		end
+
+		local floorPosition = pointData.floorPosition
+		if typeof(floorPosition) ~= "Vector3" then
+			local floorCFrame = pointData.floorCFrame
+			if typeof(floorCFrame) == "CFrame" then
+				floorPosition = floorCFrame.Position
+			end
+		end
+
+		local floorNormal = pointData.floorNormal
+		if typeof(floorNormal) ~= "Vector3" then
+			floorNormal = Vector3.yAxis
+		end
+		if typeof(floorPosition) ~= "Vector3" then
 			continue
 		end
 
 		local floorModel = floorSource:Clone()
-		self:pivotFloorEffectInstance(floorModel, pointData.floorCFrame, scaleMultiplier)
+		if not self:pivotSurfaceAlignedFloorEffectInstance(floorModel, floorPosition, floorNormal, scaleMultiplier) then
+			self:warnWithPrefix("Magma Eruption floor VFX model cannot be pivoted.")
+			floorModel:Destroy()
+			continue
+		end
 		floorModel.Parent = self:_ensureVisualFolder()
 
 		self:playTimedSounds(floorModel, scaleMultiplier)
@@ -173,7 +148,6 @@ Handler.moduleIds = {
 }
 Handler.start = Handler._startMagmaEruption
 Handler.actions = {
-	warn = Handler._warnMagmaEruption,
 	erupt = Handler._eruptMagmaEruption,
 }
 Handler.requiredParentFields = {

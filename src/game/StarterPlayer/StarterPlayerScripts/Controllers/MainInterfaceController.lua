@@ -3,6 +3,7 @@ local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
+local SoundUtil = require(ReplicatedStorage.Shared.Audio.SoundUtil)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 
@@ -17,6 +18,9 @@ MainInterfaceController.PanelNames = {
 	Leaderboard = "Leaderboard",
 	Roll = "Roll",
 }
+
+local MENU_OPEN_SOUND_NAME = "MenuOpen"
+local MENU_CLOSE_SOUND_NAME = "MenuClose"
 
 local function setGuiObjectEnabled(guiObject: GuiObject?, isEnabled: boolean)
 	if not guiObject then
@@ -219,6 +223,12 @@ function MainInterfaceController:OpenPanel(panelName: string, forceOpen: boolean
 			found.currentlyTransitioning = true
 		end
 
+		if found.Frame.Visible and not forceOpen then
+			found.currentlyTransitioning = false
+			return
+		end
+
+		SoundUtil.Play(MENU_OPEN_SOUND_NAME)
 		found.Frame.Visible = true
 
 		local offsetPosition = UDim2.fromScale(found.Position.X.Scale, found.Position.Y.Scale * 1.1)
@@ -258,6 +268,12 @@ function MainInterfaceController:ClosePanel(panelName: string, forceClose: boole
 			found.currentlyTransitioning = true
 		end
 
+		if not found.Frame.Visible and not forceClose then
+			found.currentlyTransitioning = false
+			return
+		end
+
+		SoundUtil.Play(MENU_CLOSE_SOUND_NAME)
 		found.Frame.Visible = true
 
 		local offsetPosition = UDim2.fromScale(found.Position.X.Scale, found.Position.Y.Scale * 1.1)

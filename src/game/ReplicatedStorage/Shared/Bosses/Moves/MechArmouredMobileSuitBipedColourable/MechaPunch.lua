@@ -1,14 +1,14 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
-local DAMAGE_PER_TICK = 10
-local FINAL_DAMAGE = 10
+local DAMAGE_PER_TICK = 60
+local FINAL_DAMAGE = 300
 local TICK_INTERVAL_SECONDS = 1
 local HAZARD_DURATION_SECONDS = 3
 local FINAL_HITBOX_DURATION_SECONDS = 0.12
@@ -93,49 +93,12 @@ local function resolveRootPart(model: Model?): BasePart?
 	return model:FindFirstChildWhichIsA("BasePart", true)
 end
 
-local function buildFloorRaycastParams(bossModel: Model): RaycastParams
-	local includeInstances = {}
-	local activeBossArena = Workspace:FindFirstChild("ActiveBossArena")
-	if activeBossArena then
-		table.insert(includeInstances, activeBossArena)
-	end
-
-	local map = Workspace:FindFirstChild("Map")
-	if map then
-		table.insert(includeInstances, map)
-	end
-
-	local world = Workspace:FindFirstChild("World")
-	local worldMap = world and world:FindFirstChild("Map")
-	if worldMap then
-		table.insert(includeInstances, worldMap)
-	end
-
-	if Workspace.Terrain then
-		table.insert(includeInstances, Workspace.Terrain)
-	end
-
-	local raycastParams = RaycastParams.new()
-	if #includeInstances > 0 then
-		raycastParams.FilterType = Enum.RaycastFilterType.Include
-		raycastParams.FilterDescendantsInstances = includeInstances
-	else
-		raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-		raycastParams.FilterDescendantsInstances = { bossModel }
-	end
-
-	return raycastParams
-end
-
 local function raycastGroundNear(position: Vector3, bossModel: Model): Vector3?
-	local rayOrigin = position + Vector3.new(0, FLOOR_RAYCAST_START_HEIGHT, 0)
-	local rayDirection = Vector3.new(0, -(FLOOR_RAYCAST_START_HEIGHT + FLOOR_RAYCAST_DISTANCE), 0)
-	local raycastResult = Workspace:Raycast(rayOrigin, rayDirection, buildFloorRaycastParams(bossModel))
-	if raycastResult == nil then
-		return nil
-	end
-
-	return raycastResult.Position
+	return CombatMoveUtil.RaycastGroundNear(position, {
+		sourceModel = bossModel,
+		startHeight = FLOOR_RAYCAST_START_HEIGHT,
+		distance = FLOOR_RAYCAST_DISTANCE,
+	})
 end
 
 local function resolvePlanarForward(bossRootPart: BasePart): Vector3
@@ -210,16 +173,16 @@ local function resolveLaunchDirection(hazardCFrame: CFrame): Vector3
 	return (forward.Unit * LAUNCH_SPEED) + Vector3.new(0, LAUNCH_UPWARD_SPEED, 0)
 end
 
-local function resolveExplosionCFrame(hazardCFrame: CFrame, bossRootPart: BasePart): CFrame
+local function resolveImpactCFrame(hazardCFrame: CFrame, hazardSize: Vector3): CFrame
 	return CFrame.fromMatrix(
-		Vector3.new(hazardCFrame.Position.X, bossRootPart.Position.Y, hazardCFrame.Position.Z),
+		hazardCFrame.Position - (hazardCFrame.UpVector * (hazardSize.Y * 0.5)),
 		hazardCFrame.RightVector,
 		hazardCFrame.UpVector,
 		hazardCFrame.ZVector
 	)
 end
 
-local function applyTickDamage(targetModel: Model)
+local function applyTickDamage(context, targetModel: Model)
 	local player = Players:GetPlayerFromCharacter(targetModel)
 	if player == nil then
 		return
@@ -230,10 +193,10 @@ local function applyTickDamage(targetModel: Model)
 		return
 	end
 
-	humanoid:TakeDamage(DAMAGE_PER_TICK)
+	humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE_PER_TICK))
 end
 
-local function applyFinalHit(targetModel: Model, hazardCFrame: CFrame)
+local function applyFinalHit(context, targetModel: Model, hazardCFrame: CFrame)
 	local player = Players:GetPlayerFromCharacter(targetModel)
 	if player == nil then
 		return
@@ -244,7 +207,7 @@ local function applyFinalHit(targetModel: Model, hazardCFrame: CFrame)
 		return
 	end
 
-	humanoid:TakeDamage(FINAL_DAMAGE)
+	humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, FINAL_DAMAGE))
 	Knockback(targetModel, "Default", {
 		Direction = resolveLaunchDirection(hazardCFrame),
 		Duration = 0.28,
@@ -278,7 +241,7 @@ local function spawnFinalHitbox(context, hazardCFrame: CFrame, hazardSize: Vecto
 			end
 
 			hitTargets[targetModel] = true
-			applyFinalHit(targetModel, hazardCFrame)
+			applyFinalHit(context, targetModel, hazardCFrame)
 		end,
 		HitboxDestroy = function()
 			finalHitbox = nil
@@ -303,7 +266,9 @@ local function spawnHazardHitbox(context, hazardCFrame: CFrame, hazardSize: Vect
 		TickTime = TICK_INTERVAL_SECONDS,
 		MaxParts = MAX_HITBOX_PARTS,
 	}, {
-		HitTarget = applyTickDamage,
+		HitTarget = function(targetModel: Model)
+			applyTickDamage(context, targetModel)
+		end,
 		HitboxDestroy = function()
 			hitbox = nil
 		end,
@@ -444,7 +409,7 @@ function MechaPunch.StartCast(context)
 
 		local hazardCFrame, hazardSize = resolveHazardGeometry(context)
 		context.EmitPresentation("impact", {
-			impactCFrame = resolveExplosionCFrame(hazardCFrame, bossRootPart),
+			impactCFrame = resolveImpactCFrame(hazardCFrame, hazardSize),
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
 		})
 		activeHitbox = spawnHazardHitbox(context, hazardCFrame, hazardSize)

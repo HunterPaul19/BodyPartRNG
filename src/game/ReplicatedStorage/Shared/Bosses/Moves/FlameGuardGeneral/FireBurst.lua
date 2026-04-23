@@ -1,30 +1,29 @@
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
+local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
-local DAMAGE = 16
+local DAMAGE = 22
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "FlameGuardGeneral"
 local ANIMATION_NAME = "FlameBurst"
-local ANIMATION_IMPACT_TIME_SECONDS = 1.2
-local ANIMATION_END_TIME_SECONDS = 3.9833333492279054
-local SHOCKWAVE_DURATION_SECONDS = ANIMATION_END_TIME_SECONDS - ANIMATION_IMPACT_TIME_SECONDS
-local SHOCKWAVE_LIFETIME_EPSILON_SECONDS = 0.05
-local GROUND_OFFSET = 0.15
-local POP_HORIZONTAL_SPEED = 18
-local POP_VERTICAL_SPEED = 9
-local VISUAL_TEMPLATE_PATH = "ReplicatedStorage.GameAssets.VFX.FlameGuardGeneral.FlameBurst.MapRing"
+local IMPACT_MARKER_NAME = "Impact"
+local HITBOX_SIZE = Vector3.new(150, 48, 150)
+local HITBOX_VERTICAL_OFFSET = HITBOX_SIZE.Y * 0.5
+local HITBOX_DURATION_SECONDS = 0.12
+local MAX_HITBOX_PARTS = 128
+local KNOCKBACK_SPEED = 46
+local KNOCKBACK_UPWARD_SPEED = 14
 
 local stub = CreateExplicitBossMoveStub({
 	bossId = "Flame Guard General",
 	moveLabel = "Fire Burst",
 	targetMode = "wide_area",
-	summaryTemplate = "{moveLabel} blasts a jumping shockwave around {target}",
-	description = "Flame Guard General stabs his sword into the ground and releases a shockwave of fire that players have to jump over.",
+	summaryTemplate = "{moveLabel} slams a fiery burst into the ground around {target}",
+	description = "Flame Guard General stabs his sword into the ground and erupts a fiery blast around himself.",
 })
 
 local FireBurst = {
@@ -53,30 +52,19 @@ local function getWeightedValue(distance: number, points: { { distance: number, 
 	return points[#points].weight
 end
 
-local function resolveHumanoid(model: Model?): Humanoid?
-	if model == nil then
-		return nil
-	end
-
-	return model:FindFirstChildOfClass("Humanoid")
+local function resolveImpactCFrames(context, bossModel: Model, bossRootPart: BasePart): (CFrame, CFrame?)
+	return CombatMoveUtil.ResolveFloorImpactCFrames({
+		rawImpactCFrame = bossRootPart.CFrame,
+		sourceModel = bossModel,
+		targetCharacter = context.targetCharacter,
+		aliveTargets = context.aliveTargets,
+		warnPrefix = "[FireBurst]",
+		distance = 2048,
+	})
 end
 
-local function resolveRootPart(model: Model?): BasePart?
-	if model == nil then
-		return nil
-	end
-
-	local humanoidRootPart = model:FindFirstChild("HumanoidRootPart")
-	if humanoidRootPart and humanoidRootPart:IsA("BasePart") then
-		return humanoidRootPart
-	end
-
-	local primaryPart = model.PrimaryPart
-	if primaryPart then
-		return primaryPart
-	end
-
-	return model:FindFirstChildWhichIsA("BasePart", true)
+local function resolveHitboxCFrame(impactCFrame: CFrame): CFrame
+	return CFrame.new(impactCFrame.Position + Vector3.new(0, HITBOX_VERTICAL_OFFSET, 0))
 end
 
 local function resolveAnimationInstance(): Animation?
@@ -103,66 +91,67 @@ local function resolveAnimationInstance(): Animation?
 	return nil
 end
 
-local function resolveStandingHeight(bossHumanoid: Humanoid?, bossRootPart: BasePart): number
-	if bossHumanoid == nil then
-		return bossRootPart.Size.Y
-	end
-
-	return math.max((bossRootPart.Size.Y * 0.5) + bossHumanoid.HipHeight, bossRootPart.Size.Y)
+local function buildKnockbackDirection(bossRootPart: BasePart, impactPosition: Vector3, targetRootPart: BasePart?): Vector3
+	return CombatMoveUtil.BuildRadialKnockbackDirection({
+		impactPosition = impactPosition,
+		targetRootPart = targetRootPart,
+		fallbackPosition = bossRootPart.Position,
+		speed = KNOCKBACK_SPEED,
+		upwardSpeed = KNOCKBACK_UPWARD_SPEED,
+	})
 end
 
-local function resolveArenaEndRadius(): number?
-	local activeBossArena = Workspace:FindFirstChild("ActiveBossArena")
-	if not (activeBossArena and activeBossArena:IsA("Model")) then
+local function spawnFireBurstHitbox(
+	context,
+	impactCFrame: CFrame,
+	hitTargets: { [Model]: boolean },
+	onDestroy: (() -> ())?
+)
+	local bossModel = context.bossModel
+	local bossRootPart = context.bossRootPart
+	if bossModel == nil or bossModel.Parent == nil or bossRootPart == nil or bossRootPart.Parent == nil then
 		return nil
 	end
 
-	local _, arenaSize = activeBossArena:GetBoundingBox()
-	return math.max(arenaSize.X, arenaSize.Z) * 0.5
-end
+	local impactPosition = impactCFrame.Position
+	local hitbox
+	hitbox = Hitbox.new({
+		DebugVisibilityAttribute = "BossHitboxesVisible",
+		Character = bossModel,
+		HitboxCFrame = resolveHitboxCFrame(impactCFrame),
+		HitboxSize = HITBOX_SIZE,
+		HitboxType = "SpacialQuery",
+		Time = HITBOX_DURATION_SECONDS,
+		MaxParts = MAX_HITBOX_PARTS,
+	}, {
+		HitTarget = function(targetModel: Model)
+		local targetInfo =
+			CombatMoveUtil.DamageOnce(hitTargets, targetModel, CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE))
+			if targetInfo == nil then
+				return
+			end
 
-local function resolveShockwaveData(bossHumanoid: Humanoid?, bossRootPart: BasePart)
-	local standingHeight = resolveStandingHeight(bossHumanoid, bossRootPart)
-	local rootWidth = bossRootPart.Size.X
-	local hitboxHeight = math.clamp(standingHeight * 0.18, 2.5, 4.5)
-	local arenaEndRadius = resolveArenaEndRadius()
-	if arenaEndRadius == nil then
-		warn("[FireBurst] Missing Workspace.ActiveBossArena, falling back to boss-scaled shockwave radius.")
-	end
+			Knockback(targetModel, "Default", {
+				Direction = buildKnockbackDirection(bossRootPart, impactPosition, targetInfo.rootPart),
+				Duration = 0.2,
+				RagdollDuration = 0.5,
+				Stun = 0.35,
+				IFrames = 0.2,
+				AntiStun = 0.4,
+				GroundMode = "DeterministicMap",
+			})
+		end,
+		HitboxDestroy = function()
+			if onDestroy then
+				onDestroy()
+			end
+			if hitbox then
+				hitbox = nil
+			end
+		end,
+	})
 
-	return {
-		startRadius = math.clamp(rootWidth * 0.9, 4, 8),
-		endRadius = arenaEndRadius or math.clamp(rootWidth * 5.5, 20, 34),
-		ringThickness = math.clamp(rootWidth * 0.8, 3.5, 6),
-		hitboxHeight = hitboxHeight,
-		visualTemplatePath = VISUAL_TEMPLATE_PATH,
-		standingHeight = standingHeight,
-	}
-end
-
-local function applyLightPop(targetRootPart: BasePart?, bossRootPart: BasePart)
-	if targetRootPart == nil or targetRootPart.Parent == nil then
-		return
-	end
-
-	local offset = targetRootPart.Position - bossRootPart.Position
-	local planarOffset = Vector3.new(offset.X, 0, offset.Z)
-	local awayDirection = planarOffset.Magnitude > 0.001 and planarOffset.Unit
-		or Vector3.new(bossRootPart.CFrame.LookVector.X, 0, bossRootPart.CFrame.LookVector.Z).Unit
-	local popVelocity = (awayDirection * POP_HORIZONTAL_SPEED) + Vector3.new(0, POP_VERTICAL_SPEED, 0)
-
-	targetRootPart.AssemblyLinearVelocity = targetRootPart.AssemblyLinearVelocity + popVelocity
-end
-
-local function buildImpactPresentationPayload(context, bossRootPart: BasePart, shockwaveData): { [string]: any }
-	return {
-		impactPosition = bossRootPart.Position - Vector3.new(0, shockwaveData.standingHeight, 0),
-		startRadius = shockwaveData.startRadius,
-		endRadius = shockwaveData.endRadius,
-		ringThickness = shockwaveData.ringThickness,
-		durationSeconds = SHOCKWAVE_DURATION_SECONDS,
-		scaleMultiplier = context.bossDefinition.scaleMultiplier,
-	}
+	return hitbox
 end
 
 function FireBurst.GetSelectionWeight(context)
@@ -183,7 +172,6 @@ end
 
 function FireBurst.StartCast(context)
 	local bossModel = context.bossModel
-	local bossHumanoid = context.bossHumanoid
 	local bossRootPart = context.bossRootPart
 	local emitPresentation = context.EmitPresentation
 	if bossModel == nil or bossModel.Parent == nil or bossRootPart == nil or bossRootPart.Parent == nil then
@@ -213,7 +201,6 @@ function FireBurst.StartCast(context)
 	local cleanedUp = false
 	local hitTargets = {}
 	local stoppedConnection = nil
-	local shockwaveData = resolveShockwaveData(bossHumanoid, bossRootPart)
 	local stoppedPresentation = false
 
 	local function disconnectStoppedConnection()
@@ -281,62 +268,17 @@ function FireBurst.StartCast(context)
 		end
 
 		impactTriggered = true
-		emitPresentation("impact", buildImpactPresentationPayload(context, bossRootPart, shockwaveData))
+		emitPresentation("impact")
 		destroyHitbox()
 
-		local hitbox
-		hitbox = Hitbox.new({
-			DebugVisibilityAttribute = "BossHitboxesVisible",
-			Character = bossModel,
-			HitboxCFrame = function()
-				if bossRootPart.Parent == nil then
-					return nil
-				end
-				return bossRootPart.CFrame
-			end,
-			HitboxType = "GroundShockwave",
-			StartRadius = shockwaveData.startRadius,
-			EndRadius = shockwaveData.endRadius,
-			RingThickness = shockwaveData.ringThickness,
-			HitboxHeight = shockwaveData.hitboxHeight,
-			VisualTemplatePath = shockwaveData.visualTemplatePath,
-			GroundOffset = GROUND_OFFSET,
-			Time = SHOCKWAVE_DURATION_SECONDS + SHOCKWAVE_LIFETIME_EPSILON_SECONDS,
-			MaxParts = 256,
-		}, {
-			HitTarget = function(targetModel: Model)
-				if cleanedUp or hitTargets[targetModel] == true then
-					return
-				end
-
-				local player = Players:GetPlayerFromCharacter(targetModel)
-				if player == nil then
-					return
-				end
-
-				local humanoid = resolveHumanoid(targetModel)
-				if humanoid == nil or humanoid.Health <= 0 then
-					return
-				end
-
-				hitTargets[targetModel] = true
-				humanoid:TakeDamage(DAMAGE)
-
-				local targetRootPart = resolveRootPart(targetModel)
-				applyLightPop(targetRootPart, bossRootPart)
-			end,
-			HitboxDestroy = function()
-				if activeHitbox == hitbox then
-					activeHitbox = nil
-				end
-			end,
-		})
-
-		activeHitbox = hitbox
+		local impactCFrame = resolveImpactCFrames(context, bossModel, bossRootPart)
+		activeHitbox = spawnFireBurstHitbox(context, impactCFrame, hitTargets, function()
+			activeHitbox = nil
+		end)
 	end
 
 	local track = profile:PlayAnimation(animationInstance, Enum.AnimationPriority.Action, 1, {
-		Impact = handleImpact,
+		[IMPACT_MARKER_NAME] = handleImpact,
 		End = markComplete,
 	}, ANIMATION_FADE_SECONDS)
 	if track == nil then

@@ -9,6 +9,7 @@ local BossArenas = require(ReplicatedStorage.Shared.BossArenas)
 local Bosses = require(ReplicatedStorage.Shared.Bosses)
 local BossQueueConstants = require(ReplicatedStorage.Shared.BossQueue.Constants)
 local BossQueueTeleportPayload = require(ReplicatedStorage.Shared.BossQueue.TeleportPayload)
+local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 
 type PortalState = {
@@ -17,6 +18,7 @@ type PortalState = {
 	bossName: string,
 	hitbox: BasePart,
 	zone: any,
+	recommendedCombatScoreLabel: TextLabel?,
 	occupancyLabel: TextLabel,
 	countdownLabel: TextLabel,
 	playersInZone: { [Player]: number },
@@ -85,6 +87,10 @@ local function getPortalDebugName(instance: Instance): string
 	return instance:GetFullName()
 end
 
+local function formatRecommendedCombatScoreText(score: number): string
+	return string.format("Recommended Combat Score: %s", NumberFormatter.Format(math.max(0, score)))
+end
+
 local function setCountdownInactive(state: PortalState)
 	state.countdownActive = false
 	state.countdownDeadline = 0
@@ -126,6 +132,10 @@ end
 function BossQueueService:_refreshPortalUi(state: PortalState)
 	state.queuedPlayers = computeQueuedPlayers(state)
 	state.occupancyLabel.Text = BossQueueConstants.FormatOccupancyText(#state.queuedPlayers)
+	local bossDefinition = Bosses.GetDefinition(state.bossName)
+	if state.recommendedCombatScoreLabel and bossDefinition then
+		state.recommendedCombatScoreLabel.Text = formatRecommendedCombatScoreText(bossDefinition.recommendedCombatScore)
+	end
 
 	if not state.countdownActive then
 		state.countdownLabel.Visible = false
@@ -357,6 +367,7 @@ function BossQueueService:_buildPortalState(instance: Instance): (PortalState?, 
 	if Bosses.HasDefinition(bossName) ~= true then
 		return nil, string.format("Unknown boss '%s'.", bossName)
 	end
+	local bossDefinition = Bosses.GetDefinition(bossName)
 
 	local hitbox = instance:FindFirstChild("Hitbox", true)
 	if not (hitbox and hitbox:IsA("BasePart")) then
@@ -378,6 +389,17 @@ function BossQueueService:_buildPortalState(instance: Instance): (PortalState?, 
 		return nil, "Missing billboard label 'Countdown'."
 	end
 
+	local recommendedCombatScoreLabel = billboardGui:FindFirstChild("RecommendedCombatScore", true)
+	if recommendedCombatScoreLabel ~= nil and not recommendedCombatScoreLabel:IsA("TextLabel") then
+		return nil, "Billboard child 'RecommendedCombatScore' must be a TextLabel."
+	end
+	if recommendedCombatScoreLabel == nil then
+		warn(string.format(
+			"[BossQueueService] Portal %s is missing optional billboard label 'RecommendedCombatScore'.",
+			getPortalDebugName(instance)
+		))
+	end
+
 	local zone = Zone.new(hitbox)
 	zone:setDetection("WholeBody")
 
@@ -387,6 +409,7 @@ function BossQueueService:_buildPortalState(instance: Instance): (PortalState?, 
 		bossName = bossName,
 		hitbox = hitbox,
 		zone = zone,
+		recommendedCombatScoreLabel = recommendedCombatScoreLabel,
 		occupancyLabel = occupancyLabel,
 		countdownLabel = countdownLabel,
 		playersInZone = {},
@@ -402,6 +425,9 @@ function BossQueueService:_buildPortalState(instance: Instance): (PortalState?, 
 
 	setCountdownInactive(state)
 	state.occupancyLabel.Text = BossQueueConstants.FormatOccupancyText(0)
+	if state.recommendedCombatScoreLabel and bossDefinition then
+		state.recommendedCombatScoreLabel.Text = formatRecommendedCombatScoreText(bossDefinition.recommendedCombatScore)
+	end
 
 	return state, nil
 end

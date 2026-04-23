@@ -1,5 +1,8 @@
 local Lighting = game:GetService("Lighting")
 local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local SoundUtil = require(ReplicatedStorage.Shared.Audio.SoundUtil)
 
 local HUDWindowController = {}
 
@@ -15,6 +18,9 @@ HUDWindowController.OpenFOV = 72
 HUDWindowController.ClosedFOV = 70
 HUDWindowController.AutoBindCloseButtons = false
 HUDWindowController.CloseButtonName = "Close"
+
+local MENU_OPEN_SOUND_NAME = "MenuOpen"
+local MENU_CLOSE_SOUND_NAME = "MenuClose"
 
 local function scaleUDim2(value: UDim2, factor: number): UDim2
 	return UDim2.new(
@@ -257,6 +263,7 @@ function HUDWindowController:OpenWindow(name: string, forceOpen: boolean?)
 		fader.GroupTransparency = 1
 	end
 
+	SoundUtil.Play(MENU_OPEN_SOUND_NAME)
 	window.Visible = true
 	window.Size = smallSize
 
@@ -309,6 +316,7 @@ function HUDWindowController:CloseWindow(name: string, instant: boolean?)
 		return
 	end
 
+	SoundUtil.Play(MENU_CLOSE_SOUND_NAME)
 	self._tweens[name] = TweenService:Create(window, self.CloseTween, { Size = smallSize })
 	self._tweens[name]:Play()
 

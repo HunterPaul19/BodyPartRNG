@@ -54,8 +54,12 @@ export type SetConfig = {
 	displayName: string,
 	bundleLink: string?,
 	bundleId: number?,
+	rollEnabled: boolean?,
 	rollDisplay: RollDisplay,
 	piecesByRegion: { [BodyRegion]: string },
+	strength: number,
+	health: number,
+	speed: number,
 	fullSetBonus: SetBonus,
 }
 
@@ -90,6 +94,33 @@ local REGION_LABELS: { [BodyRegion]: string } = {
 	RightLeg = "Right Leg",
 }
 
+local REGION_COMBAT_WEIGHTS = table.freeze({
+	strength = table.freeze({
+		Head = 0.15,
+		Torso = 0.20,
+		LeftArm = 0.25,
+		RightArm = 0.25,
+		LeftLeg = 0.075,
+		RightLeg = 0.075,
+	}),
+	health = table.freeze({
+		Head = 0.20,
+		Torso = 0.30,
+		LeftArm = 0.10,
+		RightArm = 0.10,
+		LeftLeg = 0.15,
+		RightLeg = 0.15,
+	}),
+	speed = table.freeze({
+		Head = 0.05,
+		Torso = 0.10,
+		LeftArm = 0.10,
+		RightArm = 0.10,
+		LeftLeg = 0.325,
+		RightLeg = 0.325,
+	}),
+})
+
 local VALID_REGIONS: { [string]: boolean } = {}
 for _, region in ipairs(REGION_ORDER) do
 	VALID_REGIONS[region] = true
@@ -112,6 +143,12 @@ local REQUIRED_SET_BONUS_FIELDS = {
 	"speedBonus",
 	"damageBonus",
 	"healthBonus",
+}
+
+local REQUIRED_SET_COMBAT_TOTAL_FIELDS = {
+	"strength",
+	"health",
+	"speed",
 }
 
 local REQUIRED_ROLL_DISPLAY_NUMBER_FIELDS = {
@@ -229,12 +266,38 @@ local function getCombatStatTier(chance: any): number
 	return 0
 end
 
-local function getDefaultPieceCombatStats(piece: any): (number, number, number)
+local function hasExplicitSetCombatStats(setConfig: any): boolean
+	return typeof(setConfig) == "table"
+		and typeof(setConfig.strength) == "number"
+		and typeof(setConfig.health) == "number"
+		and typeof(setConfig.speed) == "number"
+end
+
+local function getDerivedPieceCombatStatsFromSet(setConfig: any, region: BodyRegion?): (number?, number?, number?)
+	if not hasExplicitSetCombatStats(setConfig) or typeof(region) ~= "string" then
+		return nil, nil, nil
+	end
+
+	local strengthWeight = REGION_COMBAT_WEIGHTS.strength[region] or 0
+	local healthWeight = REGION_COMBAT_WEIGHTS.health[region] or 0
+	local speedWeight = REGION_COMBAT_WEIGHTS.speed[region] or 0
+
+	return (tonumber(setConfig.speed) or 0) * speedWeight,
+		(tonumber(setConfig.strength) or 0) * strengthWeight,
+		(tonumber(setConfig.health) or 0) * healthWeight
+end
+
+local function getDefaultPieceCombatStats(piece: any, setConfig: any?): (number, number, number)
+	local region = if typeof(piece) == "table" then piece.region else nil
+	local derivedSpeedBonus, derivedDamageBonus, derivedHealthBonus = getDerivedPieceCombatStatsFromSet(setConfig, region)
+	if derivedSpeedBonus ~= nil and derivedDamageBonus ~= nil and derivedHealthBonus ~= nil then
+		return derivedSpeedBonus, derivedDamageBonus, derivedHealthBonus
+	end
+
 	local weight = getCombatStatTier(piece and piece.rarity) + 1
 	local speedBonus = 0.1 * weight
 	local damageBonus = 0.5 * weight
 	local healthBonus = 2 * weight
-	local region = if typeof(piece) == "table" then piece.region else nil
 
 	if region == "Torso" then
 		healthBonus += 3 * weight
@@ -250,21 +313,13 @@ local function getDefaultPieceCombatStats(piece: any): (number, number, number)
 	return speedBonus, damageBonus, healthBonus
 end
 
-local function getDefaultSetCombatStats(setConfig: any): (number, number, number)
-	local chance = if typeof(setConfig) == "table" and typeof(setConfig.rollDisplay) == "table"
-		then setConfig.rollDisplay.chance
-		else 1
-	local weight = getCombatStatTier(chance) + 1
-	return 0.25 * weight, 1.5 * weight, 8 * weight
-end
-
-local function withDefaultPieceCombatStats(piece: any): any
+local function withDefaultPieceCombatStats(piece: any, setConfig: any?): any
 	if typeof(piece) ~= "table" then
 		return piece
 	end
 
 	local normalized = deepCopy(piece)
-	local defaultSpeedBonus, defaultDamageBonus, defaultHealthBonus = getDefaultPieceCombatStats(normalized)
+	local defaultSpeedBonus, defaultDamageBonus, defaultHealthBonus = getDefaultPieceCombatStats(normalized, setConfig)
 	normalized.speedBonus = tonumber(normalized.speedBonus) or defaultSpeedBonus
 	normalized.damageBonus = tonumber(normalized.damageBonus) or defaultDamageBonus
 	normalized.healthBonus = tonumber(normalized.healthBonus) or defaultHealthBonus
@@ -281,10 +336,50 @@ local function withDefaultSetCombatStats(setConfig: any): any
 		return normalized
 	end
 
-	local defaultSpeedBonus, defaultDamageBonus, defaultHealthBonus = getDefaultSetCombatStats(normalized)
-	normalized.fullSetBonus.speedBonus = tonumber(normalized.fullSetBonus.speedBonus) or defaultSpeedBonus
-	normalized.fullSetBonus.damageBonus = tonumber(normalized.fullSetBonus.damageBonus) or defaultDamageBonus
-	normalized.fullSetBonus.healthBonus = tonumber(normalized.fullSetBonus.healthBonus) or defaultHealthBonus
+	normalized.fullSetBonus.speedBonus = tonumber(normalized.fullSetBonus.speedBonus) or 0
+	normalized.fullSetBonus.damageBonus = tonumber(normalized.fullSetBonus.damageBonus) or 0
+	normalized.fullSetBonus.healthBonus = tonumber(normalized.fullSetBonus.healthBonus) or 0
+
+	if not hasExplicitSetCombatStats(normalized) then
+		normalized.strength = nil
+		normalized.health = nil
+		normalized.speed = nil
+	end
+
+	return normalized
+end
+
+local function finalizeSetCombatStats(setConfig: any, piecesById: { [string]: PieceConfig }): any
+	if typeof(setConfig) ~= "table" then
+		return setConfig
+	end
+
+	local normalized = deepCopy(setConfig)
+	if hasExplicitSetCombatStats(normalized) then
+		normalized.strength = tonumber(normalized.strength) or 0
+		normalized.health = tonumber(normalized.health) or 0
+		normalized.speed = tonumber(normalized.speed) or 0
+		return normalized
+	end
+
+	local totalStrength = 0
+	local totalHealth = 0
+	local totalSpeed = 0
+	local piecesByRegion = if typeof(normalized.piecesByRegion) == "table" then normalized.piecesByRegion else {}
+
+	for _, region in ipairs(REGION_ORDER) do
+		local pieceId = piecesByRegion[region]
+		local piece = if typeof(pieceId) == "string" then piecesById[pieceId] else nil
+		if piece then
+			totalStrength += tonumber(piece.damageBonus) or 0
+			totalHealth += tonumber(piece.healthBonus) or 0
+			totalSpeed += tonumber(piece.speedBonus) or 0
+		end
+	end
+
+	normalized.strength = totalStrength
+	normalized.health = totalHealth
+	normalized.speed = totalSpeed
 	return normalized
 end
 
@@ -357,6 +452,9 @@ local function validateSetConfig(setKey: string, setConfig: any, piecesById: { [
 
 	if typeof(setConfig.displayName) ~= "string" or setConfig.displayName == "" then
 		pushError(errors, `Set "{setKey}" is missing a displayName`)
+	end
+	if setConfig.rollEnabled ~= nil and typeof(setConfig.rollEnabled) ~= "boolean" then
+		pushError(errors, `Set "{setKey}" must provide rollEnabled as a boolean when present`)
 	end
 	if setConfig.bundleLink ~= nil and (typeof(setConfig.bundleLink) ~= "string" or setConfig.bundleLink == "") then
 		pushError(errors, `Set "{setKey}" must provide bundleLink as a non-empty string when present`)
@@ -453,6 +551,12 @@ local function validateSetConfig(setKey: string, setConfig: any, piecesById: { [
 			end
 		end
 	end
+
+	for _, fieldName in ipairs(REQUIRED_SET_COMBAT_TOTAL_FIELDS) do
+		if typeof(setConfig[fieldName]) ~= "number" then
+			pushError(errors, `Set "{setKey}" must provide numeric field "{fieldName}"`)
+		end
+	end
 end
 
 local function buildCatalog()
@@ -465,17 +569,25 @@ local function buildCatalog()
 	local setByPieceId: { [string]: SetConfig } = {}
 	local allPieces = {}
 	local allSets = {}
+	local normalizedRawSetsById: { [string]: any } = {}
+
+	for setKey, rawSetConfig in pairs(RawSets) do
+		normalizedRawSetsById[setKey] = withDefaultSetCombatStats(rawSetConfig)
+	end
 
 	for pieceKey, rawPiece in pairs(RawPieces) do
-		local piece = withDefaultPieceCombatStats(rawPiece)
+		local setConfig = if typeof(rawPiece) == "table" and typeof(rawPiece.setId) == "string"
+			then normalizedRawSetsById[rawPiece.setId]
+			else nil
+		local piece = withDefaultPieceCombatStats(rawPiece, setConfig)
 		validatePieceConfig(pieceKey, piece, seenPieceIds, errors)
 		if typeof(piece) == "table" and typeof(piece.id) == "string" and piece.id ~= "" then
 			piecesById[piece.id] = piece
 		end
 	end
 
-	for setKey, rawSetConfig in pairs(RawSets) do
-		local setConfig = withDefaultSetCombatStats(rawSetConfig)
+	for setKey, normalizedRawSetConfig in pairs(normalizedRawSetsById) do
+		local setConfig = finalizeSetCombatStats(normalizedRawSetConfig, piecesById)
 		validateSetConfig(setKey, setConfig, piecesById, seenSetIds, errors)
 		if typeof(setConfig) == "table" and typeof(setConfig.id) == "string" and setConfig.id ~= "" then
 			setsById[setConfig.id] = setConfig
@@ -554,7 +666,15 @@ local function buildCatalog()
 	end)
 	table.freeze(allSets)
 
-	local rollEntries = RollMath.RebuildExactBaseChances(allSets, function(setConfig)
+	local rollableSets = {}
+	for _, setConfig in ipairs(allSets) do
+		if setConfig.rollEnabled ~= false then
+			table.insert(rollableSets, setConfig)
+		end
+	end
+	table.freeze(rollableSets)
+
+	local rollEntries = RollMath.RebuildExactBaseChances(rollableSets, function(setConfig)
 		return setConfig.rollDisplay.chance
 	end)
 	for index, entry in ipairs(rollEntries) do

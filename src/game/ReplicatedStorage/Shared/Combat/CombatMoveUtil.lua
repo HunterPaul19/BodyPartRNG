@@ -20,12 +20,21 @@ export type DamageTargetInfo = {
 	rootPart: BasePart?,
 }
 
+export type BossEncounterScalingLike = {
+	damageMultiplier: number?,
+}
+
+export type BossDamageContextLike = {
+	encounterScaling: BossEncounterScalingLike?,
+}
+
 export type FloorRaycastOptions = {
 	sourceModel: Model?,
-	includeRoots: { Instance }?,
+	targetCharacter: Model?,
 	excludeRoots: { Instance }?,
 	startHeight: number?,
 	distance: number?,
+	ignoreWater: boolean?,
 }
 
 local DEFAULT_FLOOR_RAYCAST_START_HEIGHT = 20
@@ -176,53 +185,19 @@ function CombatMoveUtil.BuildRadialKnockbackDirection(options: {
 		+ Vector3.new(0, math.max(0, tonumber(options.upwardSpeed) or 0), 0)
 end
 
-function CombatMoveUtil.BuildDefaultFloorRaycastRoots(): { Instance }
-	local roots = {}
-	local activeBossArena = Workspace:FindFirstChild("ActiveBossArena")
-	if activeBossArena then
-		table.insert(roots, activeBossArena)
-	end
-
-	local map = Workspace:FindFirstChild("Map")
-	if map then
-		table.insert(roots, map)
-	end
-
-	local world = Workspace:FindFirstChild("World")
-	local worldMap = world and world:FindFirstChild("Map")
-	if worldMap then
-		table.insert(roots, worldMap)
-	end
-
-	if Workspace.Terrain then
-		table.insert(roots, Workspace.Terrain)
-	end
-
-	return roots
-end
-
 function CombatMoveUtil.BuildFloorRaycastParams(options: FloorRaycastOptions): RaycastParams
-	local includeRoots = options.includeRoots
-	if typeof(includeRoots) ~= "table" or #includeRoots <= 0 then
-		includeRoots = CombatMoveUtil.BuildDefaultFloorRaycastRoots()
-	end
-
+	local excludedInstances = {}
+	local seen = {}
 	local raycastParams = RaycastParams.new()
-	if #includeRoots > 0 then
-		raycastParams.FilterType = Enum.RaycastFilterType.Include
-		raycastParams.FilterDescendantsInstances = includeRoots
-	else
-		local excludeRoots = {}
-		if options.sourceModel ~= nil then
-			table.insert(excludeRoots, options.sourceModel)
-		end
-		for _, root in ipairs(options.excludeRoots or {}) do
-			table.insert(excludeRoots, root)
-		end
-
-		raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-		raycastParams.FilterDescendantsInstances = excludeRoots
+	addUniqueInstance(excludedInstances, seen, options.sourceModel)
+	addUniqueInstance(excludedInstances, seen, options.targetCharacter)
+	for _, root in ipairs(options.excludeRoots or {}) do
+		addUniqueInstance(excludedInstances, seen, root)
 	end
+
+	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+	raycastParams.FilterDescendantsInstances = excludedInstances
+	raycastParams.IgnoreWater = options.ignoreWater == true
 
 	return raycastParams
 end
@@ -306,11 +281,9 @@ function CombatMoveUtil.ResolveFloorImpactCFrames(options: {
 	visualOffsetY: number?,
 }): (CFrame, CFrame?)
 	local fallbackImpactCFrame = CFrame.new(options.rawImpactCFrame.Position)
-	local raycastParams = CombatMoveUtil.BuildExcludingCharactersRaycastParams({
+	local raycastParams = CombatMoveUtil.BuildFloorRaycastParams({
 		sourceModel = options.sourceModel,
 		targetCharacter = options.targetCharacter,
-		aliveTargets = options.aliveTargets,
-		excludeLivePlayerCharacters = true,
 		excludeRoots = options.excludeRoots,
 		ignoreWater = true,
 	})
@@ -408,6 +381,17 @@ function CombatMoveUtil.ResolveDamageTarget(targetModel: Model?, requirePlayerCh
 		humanoid = humanoid,
 		rootPart = CombatMoveUtil.ResolveRootPart(targetModel),
 	}
+end
+
+function CombatMoveUtil.ResolveScaledBossDamage(context: BossDamageContextLike?, baseDamage: number): number
+	local resolvedBaseDamage = math.max(0, tonumber(baseDamage) or 0)
+	local damageMultiplier = 1
+
+	if typeof(context) == "table" and typeof(context.encounterScaling) == "table" then
+		damageMultiplier = tonumber(context.encounterScaling.damageMultiplier) or damageMultiplier
+	end
+
+	return math.max(0, math.round(resolvedBaseDamage * damageMultiplier))
 end
 
 function CombatMoveUtil.DamageOnce(

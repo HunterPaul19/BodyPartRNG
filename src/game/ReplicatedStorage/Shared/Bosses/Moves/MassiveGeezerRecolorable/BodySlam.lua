@@ -5,10 +5,11 @@ local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
-local DAMAGE = 35
+local DAMAGE = 1200
 local IMPACT_RADIUS = 55
 local IMPACT_HITBOX_HEIGHT = 36
 local IMPACT_HITBOX_DURATION_SECONDS = 0.16
@@ -287,7 +288,7 @@ local function spawnImpactHitbox(context, impactPosition: Vector3)
 			end
 
 			hitTargets[targetModel] = true
-			humanoid:TakeDamage(DAMAGE)
+			humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE))
 
 			Knockback(targetModel, "Default", {
 				Direction = buildKnockbackDirection(impactPosition, resolveRootPart(targetModel)),

@@ -231,6 +231,7 @@ local function buildRollTypeState(player: Player)
 			displayName = rollType.displayName,
 			moneyCost = rollType.moneyCost,
 			luckMultiplier = rollType.luckMultiplier,
+			bandLuckScalar = math.max(0, tonumber(rollType.bandLuckScalar) or 1),
 			uiOrder = rollType.uiOrder,
 			selected = selectedRollTypeId == rollType.id,
 		})
@@ -358,6 +359,8 @@ local function computeLuckState(player: Player, rollTypeConfig, successfulRollCo
 	local bonusLuck = (baseLuck * bonusRollMultiplier) + specialLuckBonus
 	local vipLuck = bonusLuck * vipMultiplier
 	local rawLuck = vipLuck
+	local bandLuckScalar = math.max(0, tonumber(rollTypeConfig and rollTypeConfig.bandLuckScalar) or 1)
+	local bandLuckInput = rawLuck * bandLuckScalar
 
 	return {
 		machineLuck = machineLuck,
@@ -370,6 +373,8 @@ local function computeLuckState(player: Player, rollTypeConfig, successfulRollCo
 		vipLuck = vipLuck,
 		equippedLuckMultiplier = equippedLuckMultiplier,
 		rawLuck = rawLuck,
+		bandLuckScalar = bandLuckScalar,
+		bandLuckInput = bandLuckInput,
 		useBonusRoll = useBonusRoll,
 		luckBoostReady = luckBoostReady,
 		isVipOwned = isVipOwned,
@@ -396,6 +401,12 @@ local function buildBandLuckSummary(finalLuck: number): { [string]: any }
 	end
 
 	return summary
+end
+
+local function buildBandLuckInput(rawLuck: number, rollTypeConfig): number
+	local resolvedRawLuck = math.max(0, tonumber(rawLuck) or 0)
+	local bandLuckScalar = math.max(0, tonumber(rollTypeConfig and rollTypeConfig.bandLuckScalar) or 1)
+	return resolvedRawLuck * bandLuckScalar
 end
 
 local function buildRollListEntries(finalLuck: number)
@@ -724,16 +735,18 @@ function RollService:GetProbabilityDebug(player: Player, options: any?)
 			luckState.bonusLuck = (luckState.baseLuck * luckState.bonusRollMultiplier) + luckState.specialLuckBonus
 			luckState.vipLuck = luckState.bonusLuck * luckState.vipMultiplier
 			luckState.rawLuck = luckState.vipLuck
+			luckState.bandLuckInput = buildBandLuckInput(luckState.rawLuck, rollType)
 		end
 		if options.forceVipOwned ~= nil then
 			luckState.isVipOwned = options.forceVipOwned == true
 			luckState.vipMultiplier = if luckState.isVipOwned then RollingConfig.VipMultiplier else 1
 			luckState.vipLuck = luckState.bonusLuck * luckState.vipMultiplier
 			luckState.rawLuck = luckState.vipLuck
+			luckState.bandLuckInput = buildBandLuckInput(luckState.rawLuck, rollType)
 		end
 	end
 
-	local entries, activeEntries, bandLuckSummary = buildRollListEntries(luckState.rawLuck)
+	local entries, activeEntries, bandLuckSummary = buildRollListEntries(luckState.bandLuckInput)
 	local rarityShares = buildRarityShareSummary(activeEntries)
 
 	return {
@@ -755,6 +768,8 @@ function RollService:GetProbabilityDebug(player: Player, options: any?)
 		vipMultiplier = RollingConfig.VipMultiplier,
 		bonuses = bonuses,
 		finalLuck = luckState.rawLuck,
+		bandLuckScalar = luckState.bandLuckScalar,
+		bandLuckInput = luckState.bandLuckInput,
 		bandLuckSummary = bandLuckSummary,
 		rarityShares = rarityShares,
 		entries = entries,
@@ -794,6 +809,7 @@ function RollService:GetRollingState(player: Player, message: string?)
 			displayName = selectedRollType.displayName,
 			moneyCost = selectedRollType.moneyCost,
 			luckMultiplier = selectedRollType.luckMultiplier,
+			bandLuckScalar = math.max(0, tonumber(selectedRollType.bandLuckScalar) or 1),
 		},
 		bonuses = bonuses,
 		successfulRollCount = successfulRollCount,
@@ -813,6 +829,8 @@ function RollService:GetRollingState(player: Player, message: string?)
 		bonusInterval = RollingConfig.BonusInterval,
 		bonusMultiplier = RollingConfig.BonusMultiplier,
 		vipMultiplier = RollingConfig.VipMultiplier,
+		bandLuckScalar = luckState.bandLuckScalar,
+		bandLuckInput = luckState.bandLuckInput,
 		nextRollNumber = luckState.nextRollNumber,
 		potionBonuses = potionBonuses,
 		quickRoll = quickRollState,
@@ -847,6 +865,7 @@ function RollService:GetRollingDeltaState(player: Player, message: string?)
 			displayName = selectedRollType.displayName,
 			moneyCost = selectedRollType.moneyCost,
 			luckMultiplier = selectedRollType.luckMultiplier,
+			bandLuckScalar = math.max(0, tonumber(selectedRollType.bandLuckScalar) or 1),
 		},
 		bonuses = bonuses,
 		potionBonuses = potionBonuses,
@@ -867,6 +886,8 @@ function RollService:GetRollingDeltaState(player: Player, message: string?)
 		bonusInterval = RollingConfig.BonusInterval,
 		bonusMultiplier = RollingConfig.BonusMultiplier,
 		vipMultiplier = RollingConfig.VipMultiplier,
+		bandLuckScalar = luckState.bandLuckScalar,
+		bandLuckInput = luckState.bandLuckInput,
 		nextRollNumber = luckState.nextRollNumber,
 		quickRoll = quickRollState,
 		effectiveRollCooldown = effectiveRollCooldown,
@@ -1126,7 +1147,7 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 	local triggerSource = if typeof(payload) == "table" and payload.triggerSource == "auto" then "auto" else "manual"
 	local skipPresentation = quickRollApplied and triggerSource == "auto"
 	local skipPreview = quickRollApplied and triggerSource ~= "auto"
-	local _, activeEntries = buildRollListEntries(luckState.rawLuck)
+	local _, activeEntries = buildRollListEntries(luckState.bandLuckInput)
 	local randomSource = Random.new()
 	local finalSet = chooseWeightedSet(randomSource, activeEntries)
 	if not finalSet then
@@ -1266,6 +1287,8 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		totalLuck = luckState.rawLuck,
 		baseRawLuck = luckState.baseLuck,
 		rawLuck = luckState.rawLuck,
+		bandLuckScalar = luckState.bandLuckScalar,
+		bandLuckInput = luckState.bandLuckInput,
 		bonusLuck = luckState.bonusLuck,
 		vipLuck = luckState.vipLuck,
 		equippedLuckMultiplier = luckState.equippedLuckMultiplier,

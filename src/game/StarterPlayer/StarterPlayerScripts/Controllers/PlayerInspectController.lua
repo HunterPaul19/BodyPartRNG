@@ -5,6 +5,8 @@ local UserInputService = game:GetService("UserInputService")
 
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
+local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local AuraPresentation = require(ReplicatedStorage.Shared.UI.AuraPresentation)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
@@ -421,7 +423,7 @@ end
 function PlayerInspectController:_setSelectText(text: string)
 	local ui = self._ui
 	if ui and ui.selectTextLabel then
-		ui.selectTextLabel.Text = text
+		TranslationHelper.setLiteralText(ui.selectTextLabel, text)
 	end
 end
 
@@ -457,7 +459,7 @@ end
 function PlayerInspectController:_setExistingText(text: string)
 	local ui = self._ui
 	if ui then
-		ui.partInfoLabels.Existing.Text = text
+		TranslationHelper.setLiteralText(ui.partInfoLabels.Existing, text)
 	end
 end
 
@@ -469,15 +471,13 @@ function PlayerInspectController:_setEverRolledText(leadingText: string?)
 	end
 
 	if typeof(leadingText) ~= "string" or leadingText == "" then
-		everRolledLabel.Text = self._partInfoEverRolledNativeText or everRolledLabel.Text
+		TranslationHelper.setSourceText(everRolledLabel, self._partInfoEverRolledNativeText or everRolledLabel.Text)
 		return
 	end
 
-	local suffixText = self._partInfoEverRolledSuffixText
-		or extractTrailingLabelText(self._partInfoEverRolledNativeText, "Ever Rolled")
-	everRolledLabel.Text = if suffixText ~= ""
-		then string.format("%s %s", leadingText, suffixText)
-		else leadingText
+	TranslationHelper.setKeyText(everRolledLabel, LocalizationKeys.BodyPart.Preview.EverRolled, {
+		RollNumber = leadingText,
+	})
 end
 
 function PlayerInspectController:_syncHeader()
@@ -488,14 +488,14 @@ function PlayerInspectController:_syncHeader()
 	end
 
 	if summary then
-		ui.headerLabel.Text = summary.displayName
+		TranslationHelper.setLiteralText(ui.headerLabel, summary.displayName)
 		if ui.usernameLabel then
-			ui.usernameLabel.Text = "@" .. summary.name
+			TranslationHelper.setLiteralText(ui.usernameLabel, "@" .. summary.name)
 		end
 	else
-		ui.headerLabel.Text = "Player Info"
+		TranslationHelper.setKeyText(ui.headerLabel, LocalizationKeys.PlayerInspect.Header.Default)
 		if ui.usernameLabel then
-			ui.usernameLabel.Text = ""
+			TranslationHelper.setLiteralText(ui.usernameLabel, "")
 		end
 	end
 end
@@ -507,9 +507,9 @@ function PlayerInspectController:_syncSummaryLabels()
 	end
 
 	local summaryTexts = BodyPartPresentation.BuildSummaryTexts(self._summary and self._summary.bonuses or {})
-	ui.incomeLabel.Text = summaryTexts.income
-	ui.luckLabel.Text = summaryTexts.luck
-	ui.rollSpeedLabel.Text = summaryTexts.rollSpeed
+	TranslationHelper.setLiteralText(ui.incomeLabel, summaryTexts.income)
+	TranslationHelper.setLiteralText(ui.luckLabel, summaryTexts.luck)
+	TranslationHelper.setLiteralText(ui.rollSpeedLabel, summaryTexts.rollSpeed)
 	if ui.totalOddsAddedLabel then
 		ui.totalOddsAddedLabel.Visible = false
 	end
@@ -796,23 +796,27 @@ function PlayerInspectController:_syncPartInfo()
 	end
 
 	self:_applyPartInfoLabelStyles(previewPresentation)
-	ui.partInfoLabels.Bundle.Text = previewPresentation.bundleText
+	TranslationHelper.setLiteralText(ui.partInfoLabels.Bundle, previewPresentation.bundleText)
 	self:_setEverRolledText(previewPresentation.inventoryEverRolledText)
-	ui.partInfoLabels.Rarity.Text = previewPresentation.rarityText
-	ui.partInfoLabels.Mutation.Text = previewPresentation.mutationText
-	ui.partInfoLabels.Content.Text = previewPresentation.sizeText
+	TranslationHelper.setLiteralText(ui.partInfoLabels.Rarity, previewPresentation.rarityText)
+	TranslationHelper.setLiteralText(ui.partInfoLabels.Mutation, previewPresentation.mutationText)
+	TranslationHelper.setLiteralText(ui.partInfoLabels.Content, previewPresentation.sizeText)
 	local cachedExistingCount = if typeof(existingLookupKey) == "string" then self._existingCounts[existingLookupKey] else nil
 	if typeof(cachedExistingCount) == "number" then
-		self:_setExistingText(
-			string.format("Existing: %s", BodyPartPresentation.FormatNumberish(cachedExistingCount))
-		)
+		self:_setExistingText(TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Existing, {
+			Count = BodyPartPresentation.FormatNumberish(cachedExistingCount),
+		}))
 	elseif typeof(existingLookupKey) == "string" and self._pendingExistingCounts[existingLookupKey] == true then
-		self:_setExistingText("Existing: Loading...")
+		self:_setExistingText(TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Existing, {
+			Count = TranslationHelper.formatByKey(LocalizationKeys.Common.Loading),
+		}))
 	else
-		self:_setExistingText("Existing: N/A")
+		self:_setExistingText(TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Existing, {
+			Count = TranslationHelper.formatByKey(LocalizationKeys.Common.NotAvailable),
+		}))
 	end
-	ui.partInfoLabels.Cash.Text = previewPresentation.cashText
-	ui.partInfoLabels.Chance.Text = previewPresentation.chanceText
+	TranslationHelper.setLiteralText(ui.partInfoLabels.Cash, previewPresentation.cashText)
+	TranslationHelper.setLiteralText(ui.partInfoLabels.Chance, previewPresentation.chanceText)
 	self:_setPartInfoVisible(true)
 end
 
@@ -824,7 +828,7 @@ function PlayerInspectController:_syncModalContents()
 
 	local equippedEntries = self:_getEquippedEntries()
 	local equippedAura = self:_getEquippedAuraEntry()
-	local baseText = DEFAULT_SELECT_TEXT
+	local baseText = TranslationHelper.formatByKey(LocalizationKeys.PlayerInspect.Select.Default)
 	if self._selectedAura then
 		if equippedAura then
 			baseText = tostring(equippedAura.label or "Aura")
@@ -868,7 +872,7 @@ function PlayerInspectController:_clearState()
 		self:_syncAuraButton()
 		self:_clearPreviewLabels()
 		self:_setPartInfoVisible(false)
-		self:_setSelectText(DEFAULT_SELECT_TEXT)
+		self:_setSelectText(TranslationHelper.formatByKey(LocalizationKeys.PlayerInspect.Select.Default))
 	end
 end
 
@@ -952,7 +956,7 @@ function PlayerInspectController:_openForPlayer(player: Player)
 	self._hoveredAura = false
 	FrameController:OpenFrame(WINDOW_NAME)
 	self:_syncModalContents()
-	self:_setSelectText("Loading...")
+	self:_setSelectText(TranslationHelper.formatByKey(LocalizationKeys.Common.Loading))
 	self:_syncCharacterViewport()
 
 	task.spawn(function()

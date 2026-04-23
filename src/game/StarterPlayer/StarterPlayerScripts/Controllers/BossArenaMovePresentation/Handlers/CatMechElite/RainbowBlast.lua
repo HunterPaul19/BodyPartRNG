@@ -28,7 +28,7 @@ local RAINBOW_BLAST_TARGET_ROOT_PART_MODEL_NAME = Constants.Vfx.RAINBOW_BLAST_TA
 local RAINBOW_BLAST_VFX_NAME = Constants.Vfx.RAINBOW_BLAST_VFX_NAME
 local TORSO_AIM_MAX_YAW_RADIANS = math.rad(70)
 local TORSO_AIM_MAX_PITCH_RADIANS = math.rad(30)
-local TORSO_AIM_RESPONSIVENESS = 12
+local TORSO_AIM_RESPONSIVENESS = 24
 local DEFAULT_BEAM_MAX_LENGTH_STUDS = 500
 
 local Handler = {}
@@ -544,8 +544,8 @@ function Handler:_beamRainbowBlast(record: ActiveRecord, event: PresentationEven
 		spring = createVectorSpring(
 			initialAimPosition,
 			math.max(0, tonumber(payload.springDampingRatio) or 0.7),
-			math.max(0.001, tonumber(payload.springFrequency) or 3),
-			math.max(0, tonumber(payload.springMaxSpeedStudsPerSecond) or 45)
+			math.max(0.001, tonumber(payload.springFrequency) or 2),
+			math.max(0, tonumber(payload.springMaxSpeedStudsPerSecond) or 90)
 		),
 	}
 

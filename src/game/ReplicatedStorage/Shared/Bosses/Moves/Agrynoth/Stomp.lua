@@ -6,12 +6,12 @@ local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
-local DAMAGE = 20
+local DAMAGE = 700
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "Agrynoth"
 local ANIMATION_NAME = "Stomp"
 local IMPACT_MARKER_NAME = "Impact"
-local HITBOX_SIZE = Vector3.new(50, 24, 50)
+local HITBOX_SIZE = Vector3.new(75, 24, 75)
 local HITBOX_VERTICAL_OFFSET = HITBOX_SIZE.Y * 0.5
 local HITBOX_DURATION_SECONDS = 0.12
 local MAX_HITBOX_PARTS = 128
@@ -126,7 +126,8 @@ local function spawnStompHitbox(context, impactCFrame: CFrame, hitTargets: { [Mo
 		MaxParts = MAX_HITBOX_PARTS,
 	}, {
 		HitTarget = function(targetModel: Model)
-			local targetInfo = CombatMoveUtil.DamageOnce(hitTargets, targetModel, DAMAGE)
+		local targetInfo =
+			CombatMoveUtil.DamageOnce(hitTargets, targetModel, CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE))
 			if targetInfo == nil then
 				return
 			end

@@ -60,6 +60,7 @@ local function notifyUnlocks(player: Player, unlockedAchievementIds: { string })
 			Notify.Send(player, string.format('Unlocked title "%s".', title.label), {
 				channel = "titles",
 				duration = 5,
+				tone = "good",
 			})
 		end
 	end

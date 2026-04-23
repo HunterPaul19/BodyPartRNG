@@ -216,13 +216,13 @@ type PlaceProfileShape = {
 	excludedServices: { [string]: boolean },
 	excludedControllers: { [string]: boolean },
 	preloadSpec: PreloadSpec,
-	routes: { [string]: { placeId: number, profileId: string } },
+	routes: { [string]: { placeId: number, devPlaceId: number, productionPlaceId: number, profileId: string } },
 }
 
 local PROFILE_DEFINITIONS = {
 	main = {
 		displayName = "Main Place",
-		placeIds = { RouteConfig.PlaceIds.main },
+		placeIds = RouteConfig.GetPlaceIdsForProfile("main"),
 		requiresMainInterface = true,
 		requiresPlayerDataReplica = true,
 		excludedFeatures = {
@@ -236,7 +236,7 @@ local PROFILE_DEFINITIONS = {
 	},
 	boss_lobby = {
 		displayName = "Boss Lobby",
-		placeIds = { RouteConfig.PlaceIds.boss_lobby },
+		placeIds = RouteConfig.GetPlaceIdsForProfile("boss_lobby"),
 		requiresMainInterface = true,
 		requiresPlayerDataReplica = true,
 		excludedFeatures = {
@@ -250,7 +250,7 @@ local PROFILE_DEFINITIONS = {
 	},
 	boss_arena = {
 		displayName = "Boss Fight Arena",
-		placeIds = { RouteConfig.PlaceIds.boss_arena },
+		placeIds = RouteConfig.GetPlaceIdsForProfile("boss_arena"),
 		requiresMainInterface = true,
 		requiresPlayerDataReplica = true,
 		excludedFeatures = {
@@ -378,9 +378,13 @@ local function buildProfile(profileId: string, definition: any): PlaceProfileSha
 	end
 
 	local placeIds = {}
-	for _, placeId in ipairs(definition.placeIds or {}) do
-		local resolvedPlaceId = math.max(0, math.floor(tonumber(placeId) or 0))
-		if resolvedPlaceId > 0 then
+	local seenPlaceIds = {}
+	local configuredPlaceIds = if typeof(definition.placeIds) == "table" then definition.placeIds else {}
+
+	for _, environment in ipairs({ "dev", "production" }) do
+		local resolvedPlaceId = math.max(0, math.floor(tonumber(configuredPlaceIds[environment]) or 0))
+		if resolvedPlaceId > 0 and seenPlaceIds[resolvedPlaceId] ~= true then
+			seenPlaceIds[resolvedPlaceId] = true
 			table.insert(placeIds, resolvedPlaceId)
 		end
 	end
@@ -400,7 +404,7 @@ local function buildProfile(profileId: string, definition: any): PlaceProfileSha
 			requiresMainInterface = definition.requiresMainInterface == true,
 			excludedFeatures = excludedFeatures,
 		}),
-		routes = table.freeze(RouteConfig.BuildRoutesForProfile(profileId)),
+		routes = RouteConfig.BuildRoutesForProfile(profileId, RouteConfig.GetRuntimeEnvironment()),
 	}
 
 	PLACE_ID_SETS[profileId] = buildPlaceIdSet(placeIds)
@@ -486,7 +490,7 @@ function PlaceProfile.GetActiveProfile(): PlaceProfileShape
 	return resolvedActiveProfile
 end
 
-function PlaceProfile.GetRoutes(): { [string]: { placeId: number, profileId: string } }
+function PlaceProfile.GetRoutes(): { [string]: { placeId: number, devPlaceId: number, productionPlaceId: number, profileId: string } }
 	return PlaceProfile.GetActiveProfile().routes
 end
 

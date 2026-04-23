@@ -6,14 +6,19 @@ local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
 local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local CombatProjectileUtil = require(ReplicatedStorage.Shared.Combat.CombatProjectileUtil)
+local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
-local DAMAGE = 22
+local IMPACT_DAMAGE = 150
+local LAVA_DAMAGE_PER_TICK = 35
+local LAVA_DURATION_SECONDS = 3
+local LAVA_TICK_INTERVAL_SECONDS = 1
+local LAVA_POOL_HEIGHT = 8
 local BASE_EXPLOSION_RADIUS = 22
 local EXPLOSION_SCALE_MULTIPLIER = 2
 local EXPLOSION_RADIUS = BASE_EXPLOSION_RADIUS * EXPLOSION_SCALE_MULTIPLIER
 local EXPLOSION_HITBOX_DURATION_SECONDS = 0.12
-local PROJECTILE_SPEED_STUDS_PER_SECOND = 100
+local BASE_PROJECTILE_SPEED_STUDS_PER_SECOND = 100
 local PROJECTILE_RADIUS = 5
 local FALLBACK_THROW_DISTANCE_STUDS = 120
 local ANIMATION_FADE_SECONDS = 0.08
@@ -22,6 +27,9 @@ local ANIMATION_NAME = "MagmaThrow"
 local THROW_MARKER_NAME = "Throw"
 local FLOOR_RAYCAST_START_HEIGHT = 20
 local FLOOR_RAYCAST_DISTANCE = 350
+local MIN_PROJECTILE_ARC_HEIGHT = 1.5
+local MAX_PROJECTILE_ARC_HEIGHT = 4
+local PROJECTILE_ARC_DISTANCE_HEIGHT_SCALE = 0.04
 
 local stub = CreateExplicitBossMoveStub({
 	bossId = "Magma Fiend",
@@ -98,9 +106,10 @@ local function buildFloorRaycastParams(bossModel: Model): RaycastParams
 	})
 end
 
-local function raycastGroundNear(position: Vector3, bossModel: Model): Vector3?
+local function raycastGroundNear(position: Vector3, bossModel: Model, targetCharacter: Model?): Vector3?
 	return CombatMoveUtil.RaycastGroundNear(position, {
 		sourceModel = bossModel,
+		targetCharacter = targetCharacter,
 		startHeight = FLOOR_RAYCAST_START_HEIGHT,
 		distance = FLOOR_RAYCAST_DISTANCE,
 	})
@@ -116,11 +125,21 @@ end
 
 local function resolveImpactPosition(bossModel: Model, bossRootPart: BasePart, targetData): Vector3
 	if targetData and targetData.rootPart and targetData.rootPart.Parent ~= nil then
-		return raycastGroundNear(targetData.rootPart.Position, bossModel) or targetData.rootPart.Position
+		return raycastGroundNear(targetData.rootPart.Position, bossModel, targetData.character) or targetData.rootPart.Position
 	end
 
 	local fallbackPosition = bossRootPart.Position + (resolvePlanarForwardDirection(bossRootPart) * FALLBACK_THROW_DISTANCE_STUDS)
-	return raycastGroundNear(fallbackPosition, bossModel) or fallbackPosition
+	return raycastGroundNear(fallbackPosition, bossModel, targetData and targetData.character) or fallbackPosition
+end
+
+local function resolveProjectileControlPosition(startPosition: Vector3, impactPosition: Vector3): Vector3
+	return CombatProjectileUtil.ResolveArcControlPosition(
+		startPosition,
+		impactPosition,
+		MIN_PROJECTILE_ARC_HEIGHT,
+		MAX_PROJECTILE_ARC_HEIGHT,
+		PROJECTILE_ARC_DISTANCE_HEIGHT_SCALE
+	)
 end
 
 local function buildKnockbackDirection(impactPosition: Vector3, targetRootPart: BasePart?): Vector3
@@ -132,7 +151,7 @@ local function buildKnockbackDirection(impactPosition: Vector3, targetRootPart: 
 	})
 end
 
-local function applyExplosionDamage(bossModel: Model, impactPosition: Vector3)
+local function applyExplosionDamage(context, bossModel: Model, impactPosition: Vector3)
 	CombatProjectileUtil.CreateRadiusDamageHitbox({
 		debugVisibilityAttribute = "BossHitboxesVisible",
 		hitboxOwner = bossModel,
@@ -140,7 +159,7 @@ local function applyExplosionDamage(bossModel: Model, impactPosition: Vector3)
 		radius = EXPLOSION_RADIUS,
 		duration = EXPLOSION_HITBOX_DURATION_SECONDS,
 		maxParts = 256,
-		damage = DAMAGE,
+		damage = CombatMoveUtil.ResolveScaledBossDamage(context, IMPACT_DAMAGE),
 		onHit = function(targetInfo)
 			Knockback(targetInfo.character, "Default", {
 				Direction = buildKnockbackDirection(impactPosition, targetInfo.rootPart),
@@ -153,6 +172,43 @@ local function applyExplosionDamage(bossModel: Model, impactPosition: Vector3)
 			})
 		end,
 	})
+end
+
+local function spawnLavaPoolHitbox(context, bossModel: Model, impactPosition: Vector3)
+	local lastDamagedAtByTarget = {}
+	local hitbox
+	hitbox = Hitbox.new({
+		DebugVisibilityAttribute = "BossHitboxesVisible",
+		Character = bossModel,
+		HitboxCFrame = CFrame.new(impactPosition + Vector3.new(0, LAVA_POOL_HEIGHT * 0.5, 0)),
+		HitboxSize = Vector3.new(EXPLOSION_RADIUS * 2, LAVA_POOL_HEIGHT, EXPLOSION_RADIUS * 2),
+		HitboxType = "SpacialQuery",
+		Time = LAVA_DURATION_SECONDS,
+		TickTime = LAVA_TICK_INTERVAL_SECONDS,
+		MaxParts = 256,
+	}, {
+		HitTarget = function(targetModel: Model)
+			local targetInfo = CombatMoveUtil.ResolveDamageTarget(targetModel)
+			if targetInfo == nil then
+				return
+			end
+
+			local now = os.clock()
+			local lastDamagedAt = lastDamagedAtByTarget[targetModel]
+			if lastDamagedAt ~= nil and (now - lastDamagedAt) < (LAVA_TICK_INTERVAL_SECONDS * 0.85) then
+				return
+			end
+
+			lastDamagedAtByTarget[targetModel] = now
+			targetInfo.humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, LAVA_DAMAGE_PER_TICK))
+		end,
+		HitboxDestroy = function()
+			hitbox = nil
+			lastDamagedAtByTarget = {}
+		end,
+	})
+
+	return hitbox
 end
 
 function MagmaThrow.GetSelectionWeight(context)
@@ -204,6 +260,7 @@ function MagmaThrow.StartCast(context)
 	local stoppedConnection = nil :: RBXScriptConnection?
 	local projectileConnection = nil :: RBXScriptConnection?
 	local activeProjectileHitbox = nil
+	local activeLavaPoolHitbox = nil
 	local completed = false
 	local cancelled = false
 	local cleanedUp = false
@@ -211,6 +268,8 @@ function MagmaThrow.StartCast(context)
 	local presentationStopped = false
 	local recoveryEndsAt = nil :: number?
 	local projectileMotion = nil
+	local projectileSpeedStudsPerSecond =
+		BASE_PROJECTILE_SPEED_STUDS_PER_SECOND * CombatProjectileUtil.ResolveBasicProjectileSpeedScalar()
 
 	local function disconnectStoppedConnection()
 		if stoppedConnection and stoppedConnection.Connected then
@@ -233,6 +292,15 @@ function MagmaThrow.StartCast(context)
 
 		activeProjectileHitbox:Destroy()
 		activeProjectileHitbox = nil
+	end
+
+	local function destroyLavaPoolHitbox()
+		if activeLavaPoolHitbox == nil then
+			return
+		end
+
+		activeLavaPoolHitbox:Destroy()
+		activeLavaPoolHitbox = nil
 	end
 
 	local function stopPresentation()
@@ -263,6 +331,7 @@ function MagmaThrow.StartCast(context)
 		disconnectStoppedConnection()
 		disconnectProjectileConnection()
 		destroyProjectileHitbox()
+		destroyLavaPoolHitbox()
 
 		if stopAnimation and track then
 			profile:StopAnimation(animationInstance, ANIMATION_FADE_SECONDS)
@@ -287,7 +356,9 @@ function MagmaThrow.StartCast(context)
 			explosionRadius = EXPLOSION_RADIUS,
 			scaleMultiplier = context.bossDefinition.scaleMultiplier * EXPLOSION_SCALE_MULTIPLIER,
 		})
-		applyExplosionDamage(bossModel, impactPosition)
+		applyExplosionDamage(context, bossModel, impactPosition)
+		destroyLavaPoolHitbox()
+		activeLavaPoolHitbox = spawnLavaPoolHitbox(context, bossModel, impactPosition)
 		stopPresentation()
 		disconnectProjectileConnection()
 		destroyProjectileHitbox()
@@ -304,17 +375,20 @@ function MagmaThrow.StartCast(context)
 		local impactPosition = resolveImpactPosition(bossModel, bossRootPart, targetData)
 		local leftHand = resolveLeftHandPart(bossModel)
 		local startPosition = if leftHand and leftHand.Parent ~= nil then leftHand.Position else bossRootPart.Position
+		local controlPosition = resolveProjectileControlPosition(startPosition, impactPosition)
 		projectileMotion = CombatProjectileUtil.CreateLinearMotion(
 			startPosition,
 			impactPosition,
-			PROJECTILE_SPEED_STUDS_PER_SECOND
+			projectileSpeedStudsPerSecond
 		)
+		projectileMotion.controlPosition = controlPosition
 
 		context.EmitPresentation("throw", {
 			startPosition = startPosition,
+			controlPosition = controlPosition,
 			impactPosition = impactPosition,
 			travelDuration = projectileMotion.travelDuration,
-			projectileSpeed = PROJECTILE_SPEED_STUDS_PER_SECOND,
+			projectileSpeed = projectileSpeedStudsPerSecond,
 			targetUserId = if targetData then targetData.player.UserId else nil,
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
 		})

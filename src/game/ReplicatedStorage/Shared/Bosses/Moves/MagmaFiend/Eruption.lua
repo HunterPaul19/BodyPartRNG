@@ -4,9 +4,10 @@ local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 
-local DAMAGE = 22
+local DAMAGE = 220
 local WARNING_SECONDS = 0.5
 local ERUPTION_DAMAGE_DELAY_SECONDS = 0.05
 local HITBOX_HEIGHT = 24
@@ -151,19 +152,17 @@ local function buildFloorRaycastParams(bossModel: Model): RaycastParams
 	return raycastParams
 end
 
-local function raycastGroundNear(position: Vector3, bossModel: Model): Vector3?
+local function raycastGroundNear(position: Vector3, bossModel: Model): RaycastResult?
 	local raycastParams = buildFloorRaycastParams(bossModel)
 	local rayOrigin = position + Vector3.new(0, FLOOR_RAYCAST_START_HEIGHT, 0)
 	local rayDirection = Vector3.new(0, -(FLOOR_RAYCAST_START_HEIGHT + FLOOR_RAYCAST_DISTANCE), 0)
-	local raycastResult = Workspace:Raycast(rayOrigin, rayDirection, raycastParams)
-	if raycastResult == nil then
-		return nil
-	end
-
-	return raycastResult.Position
+	return Workspace:Raycast(rayOrigin, rayDirection, raycastParams)
 end
 
-local function collectEruptionPoints(context, footprintSize: Vector3): { { index: number, floorCFrame: CFrame, footprintSize: Vector3 } }
+local function collectEruptionPoints(
+	context,
+	footprintSize: Vector3
+): { { index: number, floorCFrame: CFrame, floorPosition: Vector3, floorNormal: Vector3, footprintSize: Vector3 } }
 	local points = {}
 	local seenPlayers = {}
 	local bossModel = context.bossModel
@@ -185,10 +184,14 @@ local function collectEruptionPoints(context, footprintSize: Vector3): { { index
 		end
 
 		seenPlayers[player] = true
-		local groundPosition = raycastGroundNear(rootPart.Position, bossModel) or rootPart.Position
+		local groundResult = raycastGroundNear(rootPart.Position, bossModel)
+		local groundPosition = if groundResult then groundResult.Position else rootPart.Position
+		local floorNormal = if groundResult and groundResult.Normal.Magnitude > 0.001 then groundResult.Normal.Unit else Vector3.yAxis
 		table.insert(points, {
 			index = #points + 1,
 			floorCFrame = CFrame.new(groundPosition),
+			floorPosition = groundPosition,
+			floorNormal = floorNormal,
 			footprintSize = footprintSize,
 		})
 	end
@@ -230,7 +233,7 @@ local function spawnEruptionHitboxes(
 				end
 
 				hitTargets[targetModel] = true
-				humanoid:TakeDamage(DAMAGE)
+				humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE))
 			end,
 			HitboxDestroy = function()
 				for index, activeHitbox in ipairs(activeHitboxes) do
@@ -275,7 +278,8 @@ function Eruption.StartCast(context)
 	local spawnTriggered = false
 	local presentationStopped = false
 	local recoveryEndsAt = nil :: number?
-	local warningPoints = nil :: { { index: number, floorCFrame: CFrame, footprintSize: Vector3 } }?
+	local warningPoints =
+		nil :: { { index: number, floorCFrame: CFrame, floorPosition: Vector3, floorNormal: Vector3, footprintSize: Vector3 } }?
 
 	local function disconnectStoppedConnection()
 		if stoppedConnection and stoppedConnection.Connected then
@@ -366,11 +370,6 @@ function Eruption.StartCast(context)
 			markComplete()
 			return
 		end
-
-		context.EmitPresentation("warn", {
-			warningSeconds = WARNING_SECONDS,
-			points = warningPoints,
-		})
 
 		task.delay(WARNING_SECONDS, erupt)
 	end

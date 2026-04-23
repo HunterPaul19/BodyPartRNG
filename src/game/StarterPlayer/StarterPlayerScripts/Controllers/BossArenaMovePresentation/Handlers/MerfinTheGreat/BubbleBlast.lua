@@ -51,7 +51,14 @@ function Handler:_updateBubbleBlastProjectiles(record: ActiveRecord, nowServerTi
 			0,
 			1
 		)
-		local position = motion.startPosition:Lerp(motion.impactPosition, alpha)
+		local position = if typeof(motion.controlPosition) == "Vector3"
+			then self:resolveQuadraticBezierPosition(
+				motion.startPosition,
+				motion.controlPosition,
+				motion.impactPosition,
+				alpha
+			)
+			else motion.startPosition:Lerp(motion.impactPosition, alpha)
 		projectileModel:PivotTo(CFrame.new(position))
 	end
 end
@@ -147,6 +154,7 @@ function Handler:_launchBubbleBlastProjectiles(record: ActiveRecord, event: Pres
 
 		local index = math.floor(tonumber(projectileData.index) or 0)
 		local startPosition = projectileData.startPosition
+		local controlPosition = projectileData.controlPosition
 		local impactPosition = projectileData.impactPosition
 		local travelDuration = tonumber(projectileData.travelDuration)
 		if index <= 0
@@ -175,6 +183,7 @@ function Handler:_launchBubbleBlastProjectiles(record: ActiveRecord, event: Pres
 		record.bubbleBlastProjectileModels[index] = projectileModel
 		record.bubbleBlastProjectileMotions[index] = {
 			startPosition = startPosition,
+			controlPosition = controlPosition,
 			impactPosition = impactPosition,
 			travelDuration = math.max(0.001, travelDuration),
 			startedAtServerTime = startedAtServerTime,

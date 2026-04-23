@@ -3,9 +3,13 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 
-local DAMAGE = 20
+local INITIAL_DAMAGE = 780
+local LINGER_DAMAGE_PER_TICK = 150
+local LINGER_DURATION_SECONDS = 3
+local LINGER_TICK_INTERVAL_SECONDS = 1
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "MassiveGeezer"
 local ANIMATION_NAME = "AcidBreath"
@@ -15,6 +19,10 @@ local CONE_WIDTH_STUDS = 85
 local CONE_LAYERS = 16
 local CONE_DURATION_SECONDS = 0.5
 local POISON_SCREEN_DURATION_SECONDS = 2.5
+local FLOOR_CLEARANCE_STUDS = 1.5
+local FLOOR_RAYCAST_BUFFER_STUDS = 64
+local FLOOR_RAYCAST_MIN_DISTANCE = 350
+local FLOOR_RAYCAST_START_HEIGHT = 12
 
 local stub = CreateExplicitBossMoveStub({
 	bossId = "Massive Geezer RECOLORABLE",
@@ -36,6 +44,10 @@ local function resolveHumanoid(model: Model?): Humanoid?
 	end
 
 	return model:FindFirstChildOfClass("Humanoid")
+end
+
+local function resolveStandingHeight(humanoid: Humanoid?, rootPart: BasePart): number
+	return CombatMoveUtil.ResolveStandingHeight(humanoid, rootPart)
 end
 
 local function resolveHeadPart(model: Model?): BasePart?
@@ -98,6 +110,24 @@ local function faceBossTowardTarget(bossModel: Model, bossRootPart: BasePart, ta
 	bossModel:PivotTo(CFrame.lookAt(pivot.Position, pivot.Position + direction))
 end
 
+local function resolveGroundedConeOrigin(context, bossModel: Model, bossHead: BasePart, bossRootPart: BasePart): Vector3?
+	local standingHeight = resolveStandingHeight(context.bossHumanoid, bossRootPart)
+	local raycastDistance = math.max(
+		FLOOR_RAYCAST_MIN_DISTANCE,
+		(bossHead.Position.Y - bossRootPart.Position.Y) + standingHeight + FLOOR_RAYCAST_BUFFER_STUDS
+	)
+	local floorPosition = CombatMoveUtil.RaycastGroundNear(bossHead.Position, {
+		sourceModel = bossModel,
+		startHeight = FLOOR_RAYCAST_START_HEIGHT,
+		distance = raycastDistance,
+	})
+	if floorPosition == nil then
+		return nil
+	end
+
+	return Vector3.new(bossHead.Position.X, floorPosition.Y + FLOOR_CLEARANCE_STUDS, bossHead.Position.Z)
+end
+
 function AcidBreath.StartCast(context)
 	local bossModel = context.bossModel
 	local bossRootPart = context.bossRootPart
@@ -127,6 +157,7 @@ function AcidBreath.StartCast(context)
 
 	local profile = profileOrError
 	local activeHitbox = nil
+	local activeLingeringHitbox = nil
 	local shootTriggered = false
 	local warnedMissingShoot = false
 	local completed = false
@@ -150,6 +181,15 @@ function AcidBreath.StartCast(context)
 
 		activeHitbox:Destroy()
 		activeHitbox = nil
+	end
+
+	local function destroyLingeringHitbox()
+		if activeLingeringHitbox == nil then
+			return
+		end
+
+		activeLingeringHitbox:Destroy()
+		activeLingeringHitbox = nil
 	end
 
 	local function stopPresentation()
@@ -179,6 +219,7 @@ function AcidBreath.StartCast(context)
 		cleanedUp = true
 		stopPresentation()
 		destroyHitbox()
+		destroyLingeringHitbox()
 		disconnectStoppedConnection()
 
 		if stopAnimation then
@@ -205,6 +246,11 @@ function AcidBreath.StartCast(context)
 		end
 
 		local direction = resolvePlanarDirection(bossHead.Position, context.targetRootPart, bossRootPart)
+		local groundedOrigin = resolveGroundedConeOrigin(context, bossModel, bossHead, bossRootPart)
+		if groundedOrigin ~= nil then
+			return CFrame.lookAt(groundedOrigin, groundedOrigin + direction)
+		end
+
 		return CFrame.lookAt(bossHead.Position, bossHead.Position + direction)
 	end
 
@@ -218,12 +264,19 @@ function AcidBreath.StartCast(context)
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
 		})
 		destroyHitbox()
+		destroyLingeringHitbox()
+
+		local coneCFrame = getConeCFrame()
+		if coneCFrame == nil then
+			markComplete()
+			return
+		end
 
 		local hitbox
 		hitbox = Hitbox.new({
 			DebugVisibilityAttribute = "BossHitboxesVisible",
 			Character = bossModel,
-			HitboxCFrame = getConeCFrame,
+			HitboxCFrame = coneCFrame,
 			HitboxType = "SpacialQuery",
 			HitboxShape = "Pyramid",
 			PyramidDistance = CONE_DISTANCE_STUDS,
@@ -248,7 +301,7 @@ function AcidBreath.StartCast(context)
 				end
 
 				hitTargets[targetModel] = true
-				humanoid:TakeDamage(DAMAGE)
+				humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, INITIAL_DAMAGE))
 				context.EmitPresentation("poison", {
 					targetUserId = player.UserId,
 					durationSeconds = POISON_SCREEN_DURATION_SECONDS,
@@ -262,6 +315,46 @@ function AcidBreath.StartCast(context)
 		})
 
 		activeHitbox = hitbox
+
+		local lastDamagedAtByTarget = {}
+		local lingeringHitbox
+		lingeringHitbox = Hitbox.new({
+			DebugVisibilityAttribute = "BossHitboxesVisible",
+			Character = bossModel,
+			HitboxCFrame = coneCFrame,
+			HitboxType = "SpacialQuery",
+			HitboxShape = "Pyramid",
+			PyramidDistance = CONE_DISTANCE_STUDS,
+			PyramidWidth = CONE_WIDTH_STUDS,
+			PyramidLayers = CONE_LAYERS,
+			Time = LINGER_DURATION_SECONDS,
+			TickTime = LINGER_TICK_INTERVAL_SECONDS,
+			MaxParts = 128,
+		}, {
+			HitTarget = function(targetModel: Model)
+				local targetInfo = CombatMoveUtil.ResolveDamageTarget(targetModel)
+				if targetInfo == nil then
+					return
+				end
+
+				local now = os.clock()
+				local lastDamagedAt = lastDamagedAtByTarget[targetModel]
+				if lastDamagedAt ~= nil and (now - lastDamagedAt) < (LINGER_TICK_INTERVAL_SECONDS * 0.85) then
+					return
+				end
+
+				lastDamagedAtByTarget[targetModel] = now
+				targetInfo.humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, LINGER_DAMAGE_PER_TICK))
+			end,
+			HitboxDestroy = function()
+				if activeLingeringHitbox == lingeringHitbox then
+					activeLingeringHitbox = nil
+				end
+				lastDamagedAtByTarget = {}
+			end,
+		})
+
+		activeLingeringHitbox = lingeringHitbox
 	end
 
 	local track = profile:PlayAnimation(animationInstance, Enum.AnimationPriority.Action, 1, {

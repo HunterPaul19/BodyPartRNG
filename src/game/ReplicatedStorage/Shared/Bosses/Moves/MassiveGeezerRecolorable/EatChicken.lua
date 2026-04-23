@@ -5,17 +5,31 @@ local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
 local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local CombatProjectileUtil = require(ReplicatedStorage.Shared.Combat.CombatProjectileUtil)
+local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
-local DAMAGE = 15
+local DAMAGE = 420
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "MassiveGeezer"
 local ANIMATION_NAME = "EatChicken"
 local PROJECTILE_COUNT = 16
-local PROJECTILE_SPEED_STUDS_PER_SECOND = 170
+local PROJECTILES_PER_HAND = math.floor(PROJECTILE_COUNT / 2)
+local BASE_PROJECTILE_SPEED_STUDS_PER_SECOND = 170
 local PROJECTILE_DISTANCE_STUDS = 185
-local PROJECTILE_SPACING_STUDS = 9
-local PROJECTILE_RADIUS = 6
+local PROJECTILE_RADIUS = 10
 local PROJECTILE_MAX_PARTS = 64
+local THROW_YAW_STEP_DEGREES = 15
+local SHOTGUN_SCATTER_YAW_DEGREES = 10
+local SHOTGUN_MIN_DISTANCE_SCALAR = 0.72
+local SHOTGUN_MAX_DISTANCE_SCALAR = 1.0
+local SHOTGUN_MIN_SPEED_SCALAR = 0.82
+local SHOTGUN_MAX_SPEED_SCALAR = 1.18
+local KNOCKBACK_SPEED = 48
+local KNOCKBACK_UPWARD_SPEED = 18
+local KNOCKBACK_DURATION = 0.2
+local RAGDOLL_DURATION = 0.55
+local STUN_DURATION = 0.35
+local IFRAME_DURATION = 0.2
+local ANTI_STUN_DURATION = 0.45
 
 local CHICKEN_SPAWN_MARKER_NAME = "ChickenSpawn"
 local ATE_CHICKEN_MARKER_NAME = "AteChicken"
@@ -119,17 +133,13 @@ local function resolveForwardDirection(context, bossRootPart: BasePart, aimTarge
 	return Vector3.new(0, 0, -1)
 end
 
-local function resolveRightDirection(forwardDirection: Vector3): Vector3
-	return Vector3.new(forwardDirection.Z, 0, -forwardDirection.X).Unit
-end
-
 local function faceBossTowardDirection(bossRootPart: BasePart, forwardDirection: Vector3)
 	local position = bossRootPart.Position
 	bossRootPart.CFrame = CFrame.lookAt(position, position + forwardDirection)
 end
 
 local function resolveProjectileStartPosition(bossModel: Model, index: number, bossRootPart: BasePart): Vector3
-	local handName = if index <= PROJECTILE_COUNT / 2 then "LeftHand" else "RightHand"
+	local handName = if index <= PROJECTILES_PER_HAND then "LeftHand" else "RightHand"
 	local handPart = resolveHandPart(bossModel, handName)
 	if handPart and handPart.Parent ~= nil then
 		return handPart.Position
@@ -146,20 +156,46 @@ local function resolveProjectileEndHeight(bossRootPart: BasePart, aimTargetRootP
 	return bossRootPart.Position.Y
 end
 
-local function buildProjectilePlans(context, bossModel: Model, bossRootPart: BasePart): { { [string]: any } }
+local function resolveProjectileBaseYawDegrees(index: number): number
+	local localSlotIndex = if index <= PROJECTILES_PER_HAND then index else index - PROJECTILES_PER_HAND
+	return (localSlotIndex - ((PROJECTILES_PER_HAND + 1) / 2)) * THROW_YAW_STEP_DEGREES
+end
+
+local function rotatePlanarDirection(forwardDirection: Vector3, yawDegrees: number): Vector3
+	local rotatedDirection = CFrame.Angles(0, math.rad(yawDegrees), 0):VectorToWorldSpace(forwardDirection)
+	local planarDirection = Vector3.new(rotatedDirection.X, 0, rotatedDirection.Z)
+	if planarDirection.Magnitude > 0.001 then
+		return planarDirection.Unit
+	end
+
+	return forwardDirection
+end
+
+local function buildProjectilePlans(
+	context,
+	bossModel: Model,
+	bossRootPart: BasePart,
+	projectileSpeedStudsPerSecond: number,
+	randomGenerator: Random
+): { { [string]: any } }
 	local aimTargetRootPart = resolveAimTargetRootPart(context, bossRootPart)
 	local forwardDirection = resolveForwardDirection(context, bossRootPart, aimTargetRootPart)
-	local rightDirection = resolveRightDirection(forwardDirection)
 	local endHeight = resolveProjectileEndHeight(bossRootPart, aimTargetRootPart)
-	local origin = bossRootPart.Position
 	local plans = {}
 
 	for index = 1, PROJECTILE_COUNT do
-		local laneOffset = (index - ((PROJECTILE_COUNT + 1) / 2)) * PROJECTILE_SPACING_STUDS
 		local startPosition = resolveProjectileStartPosition(bossModel, index, bossRootPart)
-		local endPlanarPosition = origin
-			+ (forwardDirection * PROJECTILE_DISTANCE_STUDS)
-			+ (rightDirection * laneOffset)
+		local baseYawDegrees = resolveProjectileBaseYawDegrees(index)
+		local scatterYawDegrees = randomGenerator:NextNumber(
+			-SHOTGUN_SCATTER_YAW_DEGREES,
+			SHOTGUN_SCATTER_YAW_DEGREES
+		)
+		local projectileDirection = rotatePlanarDirection(forwardDirection, baseYawDegrees + scatterYawDegrees)
+		local projectileDistance = PROJECTILE_DISTANCE_STUDS
+			* randomGenerator:NextNumber(SHOTGUN_MIN_DISTANCE_SCALAR, SHOTGUN_MAX_DISTANCE_SCALAR)
+		local projectileSpeed = projectileSpeedStudsPerSecond
+			* randomGenerator:NextNumber(SHOTGUN_MIN_SPEED_SCALAR, SHOTGUN_MAX_SPEED_SCALAR)
+		local endPlanarPosition = startPosition + (projectileDirection * projectileDistance)
 		local endPosition = Vector3.new(endPlanarPosition.X, endHeight, endPlanarPosition.Z)
 		table.insert(plans, {
 			index = index,
@@ -168,7 +204,7 @@ local function buildProjectilePlans(context, bossModel: Model, bossRootPart: Bas
 			travelDuration = CombatProjectileUtil.ResolveTravelDuration(
 				startPosition,
 				endPosition,
-				PROJECTILE_SPEED_STUDS_PER_SECOND
+				projectileSpeed
 			),
 		})
 	end
@@ -188,6 +224,20 @@ local function getProjectilePosition(plan: { [string]: any }, startedAt: number)
 		impactPosition = endPosition,
 		startedAt = startedAt,
 		travelDuration = math.max(0.001, tonumber(plan.travelDuration) or 0),
+	})
+end
+
+local function buildKnockbackDirection(
+	impactPosition: Vector3,
+	bossRootPart: BasePart,
+	targetRootPart: BasePart?
+): Vector3
+	return CombatMoveUtil.BuildRadialKnockbackDirection({
+		impactPosition = impactPosition,
+		targetRootPart = targetRootPart,
+		fallbackPosition = bossRootPart.Position,
+		speed = KNOCKBACK_SPEED,
+		upwardSpeed = KNOCKBACK_UPWARD_SPEED,
 	})
 end
 
@@ -235,7 +285,6 @@ function EatChicken.StartCast(context)
 	local stoppedConnection = nil :: RBXScriptConnection?
 	local projectileConnection = nil :: RBXScriptConnection?
 	local activeHitboxes = {}
-	local hitPlayers = {}
 	local markersHit = {}
 	local projectilePlans = {}
 	local projectileStartedAt = 0
@@ -244,6 +293,9 @@ function EatChicken.StartCast(context)
 	local cleanedUp = false
 	local stoppedPresentation = false
 	local recoveryEndsAt = nil :: number?
+	local projectileSpeedStudsPerSecond =
+		BASE_PROJECTILE_SPEED_STUDS_PER_SECOND * CombatProjectileUtil.ResolveBasicProjectileSpeedScalar()
+	local shotgunRandom = Random.new()
 
 	local function disconnectStoppedConnection()
 		if stoppedConnection and stoppedConnection.Connected then
@@ -340,18 +392,20 @@ function EatChicken.StartCast(context)
 		end
 
 		markersHit[CHICKEN_THROW_MARKER_NAME] = true
-		projectilePlans = buildProjectilePlans(context, bossModel, bossRootPart)
+		projectilePlans =
+			buildProjectilePlans(context, bossModel, bossRootPart, projectileSpeedStudsPerSecond, shotgunRandom)
 		projectileStartedAt = os.clock()
 
 		context.EmitPresentation("throwBones", {
 			projectiles = projectilePlans,
-			projectileSpeed = PROJECTILE_SPEED_STUDS_PER_SECOND,
+			projectileSpeed = projectileSpeedStudsPerSecond,
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
 		})
 
 		local longestTravelDuration = 0
 		for _, plan in ipairs(projectilePlans) do
 			longestTravelDuration = math.max(longestTravelDuration, tonumber(plan.travelDuration) or 0)
+			local hitPlayersForProjectile = {}
 
 			local hitbox
 			hitbox = CombatProjectileUtil.CreateTrackingHitbox({
@@ -374,12 +428,26 @@ function EatChicken.StartCast(context)
 					end
 
 					local player = targetInfo.player
-					if player == nil or hitPlayers[player] == true then
+					if player == nil or hitPlayersForProjectile[player] == true then
 						return
 					end
 
-					hitPlayers[player] = true
-					targetInfo.humanoid:TakeDamage(DAMAGE)
+					hitPlayersForProjectile[player] = true
+					targetInfo.humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE))
+
+					Knockback(targetInfo.character, "Default", {
+						Direction = buildKnockbackDirection(
+							getProjectilePosition(plan, projectileStartedAt),
+							bossRootPart,
+							targetInfo.rootPart
+						),
+						Duration = KNOCKBACK_DURATION,
+						RagdollDuration = RAGDOLL_DURATION,
+						Stun = STUN_DURATION,
+						IFrames = IFRAME_DURATION,
+						AntiStun = ANTI_STUN_DURATION,
+						GroundMode = "DeterministicMap",
+					})
 				end,
 				onDestroy = function()
 					for activeIndex, activeHitbox in ipairs(activeHitboxes) do

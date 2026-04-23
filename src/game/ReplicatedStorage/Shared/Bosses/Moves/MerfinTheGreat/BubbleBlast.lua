@@ -6,9 +6,9 @@ local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local CombatProjectileUtil = require(ReplicatedStorage.Shared.Combat.CombatProjectileUtil)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
-local DAMAGE = 16
+local DAMAGE = 18
 local PROJECTILE_COUNT = 10
-local PROJECTILE_SPEED_STUDS_PER_SECOND = 100
+local BASE_PROJECTILE_SPEED_STUDS_PER_SECOND = 100
 local EXPLOSION_RADIUS = 12
 local EXPLOSION_HITBOX_DURATION_SECONDS = 0.1
 local ANIMATION_FADE_SECONDS = 0.08
@@ -20,6 +20,11 @@ local FLOOR_RAYCAST_DISTANCE = 450
 local GRID_SPACING_STUDS = 14
 local RANDOM_VARIANCE_STUDS = 5
 local START_HEIGHT_SCALE = 0.75
+local BEZIER_HEIGHT_DISTANCE_SCALE = 0.16
+local BEZIER_MIN_HEIGHT = 8
+local BEZIER_MAX_HEIGHT = 20
+local BEZIER_LATERAL_DISTANCE_SCALE = 0.08
+local BEZIER_MAX_LATERAL = 6
 
 local GRID_OFFSETS = table.freeze({
 	Vector3.new(-2, 0, -0.5),
@@ -99,9 +104,10 @@ local function buildFloorRaycastParams(bossModel: Model): RaycastParams
 	})
 end
 
-local function raycastGroundNear(position: Vector3, bossModel: Model): Vector3
+local function raycastGroundNear(position: Vector3, bossModel: Model, targetCharacter: Model?): Vector3
 	return CombatProjectileUtil.ResolveGroundImpactPosition(position, {
 		sourceModel = bossModel,
+		targetCharacter = targetCharacter,
 		startHeight = FLOOR_RAYCAST_START_HEIGHT,
 		distance = FLOOR_RAYCAST_DISTANCE,
 	})
@@ -109,6 +115,30 @@ end
 
 local function resolvePlanarBasis(bossRootPart: BasePart, targetPosition: Vector3?): (Vector3, Vector3)
 	return CombatMoveUtil.ResolvePlanarBasis(bossRootPart, targetPosition)
+end
+
+local function resolveBubbleControlPosition(startPosition: Vector3, impactPosition: Vector3, index: number): Vector3
+	local midpoint = startPosition:Lerp(impactPosition, 0.5)
+	local travelVector = impactPosition - startPosition
+	local distance = travelVector.Magnitude
+	local heightOffset = math.clamp(
+		distance * BEZIER_HEIGHT_DISTANCE_SCALE,
+		BEZIER_MIN_HEIGHT,
+		BEZIER_MAX_HEIGHT
+	)
+	local lateralOffset = math.clamp(distance * BEZIER_LATERAL_DISTANCE_SCALE, 0, BEZIER_MAX_LATERAL)
+	local planarTravel = Vector3.new(travelVector.X, 0, travelVector.Z)
+	local lateralDirection = Vector3.xAxis
+
+	if planarTravel.Magnitude > 0.001 then
+		lateralDirection = Vector3.new(-planarTravel.Z, 0, planarTravel.X).Unit
+	end
+
+	if index % 2 == 0 then
+		lateralDirection *= -1
+	end
+
+	return midpoint + Vector3.new(0, heightOffset, 0) + (lateralDirection * lateralOffset)
 end
 
 local function buildKnockbackDirection(impactPosition: Vector3, targetRootPart: BasePart?): Vector3
@@ -120,7 +150,7 @@ local function buildKnockbackDirection(impactPosition: Vector3, targetRootPart: 
 	})
 end
 
-local function applyExplosionDamage(bossModel: Model, impactPosition: Vector3)
+local function applyExplosionDamage(context, bossModel: Model, impactPosition: Vector3)
 	CombatProjectileUtil.CreateRadiusDamageHitbox({
 		debugVisibilityAttribute = "BossHitboxesVisible",
 		hitboxOwner = bossModel,
@@ -128,7 +158,7 @@ local function applyExplosionDamage(bossModel: Model, impactPosition: Vector3)
 		radius = EXPLOSION_RADIUS,
 		duration = EXPLOSION_HITBOX_DURATION_SECONDS,
 		maxParts = 128,
-		damage = DAMAGE,
+		damage = CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE),
 		onHit = function(targetInfo)
 			Knockback(targetInfo.character, "Default", {
 				Direction = buildKnockbackDirection(impactPosition, targetInfo.rootPart),
@@ -147,7 +177,13 @@ local function collectAliveTargets(context)
 	return CombatMoveUtil.CollectAliveTargets(context.aliveTargets or {})
 end
 
-local function buildProjectilePlans(context, bossModel: Model, bossHumanoid: Humanoid?, bossRootPart: BasePart)
+local function buildProjectilePlans(
+	context,
+	bossModel: Model,
+	bossHumanoid: Humanoid?,
+	bossRootPart: BasePart,
+	projectileSpeedStudsPerSecond: number
+)
 	local aliveTargets = collectAliveTargets(context)
 	if #aliveTargets <= 0 then
 		return {}
@@ -171,19 +207,21 @@ local function buildProjectilePlans(context, bossModel: Model, bossHumanoid: Hum
 			+ (right * (gridOffset.X * GRID_SPACING_STUDS))
 			+ (forward * (gridOffset.Z * GRID_SPACING_STUDS))
 			+ randomOffset
-		local impactPosition = raycastGroundNear(plannedPosition, bossModel)
+		local impactPosition = raycastGroundNear(plannedPosition, bossModel, targetContext.character)
 		local startPosition = startOrigin + Vector3.new(
 			rng:NextNumber(-5, 5),
 			rng:NextNumber(0, 8),
 			rng:NextNumber(-5, 5)
 		)
 		local travelDistance = (impactPosition - startPosition).Magnitude
+		local controlPosition = resolveBubbleControlPosition(startPosition, impactPosition, index)
 
 		table.insert(plans, {
+			controlPosition = controlPosition,
 			index = index,
 			startPosition = startPosition,
 			impactPosition = impactPosition,
-			travelDuration = travelDistance / PROJECTILE_SPEED_STUDS_PER_SECOND,
+			travelDuration = travelDistance / projectileSpeedStudsPerSecond,
 			targetUserId = targetContext.player.UserId,
 		})
 	end
@@ -245,6 +283,8 @@ function BubbleBlast.StartCast(context)
 	local cleanedUp = false
 	local stoppedPresentation = false
 	local recoveryEndsAt = nil :: number?
+	local projectileSpeedStudsPerSecond =
+		BASE_PROJECTILE_SPEED_STUDS_PER_SECOND * CombatProjectileUtil.ResolveBasicProjectileSpeedScalar()
 
 	local function disconnectStoppedConnection()
 		if stoppedConnection and stoppedConnection.Connected then
@@ -318,7 +358,7 @@ function BubbleBlast.StartCast(context)
 			impactPosition = projectilePlan.impactPosition,
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
 		})
-		applyExplosionDamage(bossModel, projectilePlan.impactPosition)
+		applyExplosionDamage(context, bossModel, projectilePlan.impactPosition)
 
 		impactTasksRemaining -= 1
 		if impactTasksRemaining <= 0 then
@@ -332,7 +372,8 @@ function BubbleBlast.StartCast(context)
 		end
 
 		bubblesTriggered = true
-		local projectilePlans = buildProjectilePlans(context, bossModel, bossHumanoid, bossRootPart)
+		local projectilePlans =
+			buildProjectilePlans(context, bossModel, bossHumanoid, bossRootPart, projectileSpeedStudsPerSecond)
 		if #projectilePlans <= 0 then
 			markComplete()
 			return
@@ -341,7 +382,7 @@ function BubbleBlast.StartCast(context)
 		impactTasksRemaining = #projectilePlans
 		context.EmitPresentation("projectiles", {
 			projectiles = projectilePlans,
-			projectileSpeed = PROJECTILE_SPEED_STUDS_PER_SECOND,
+			projectileSpeed = projectileSpeedStudsPerSecond,
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
 		})
 

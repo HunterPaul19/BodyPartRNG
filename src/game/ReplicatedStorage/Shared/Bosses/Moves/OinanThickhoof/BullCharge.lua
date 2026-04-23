@@ -4,15 +4,16 @@ local RunService = game:GetService("RunService")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
-local DAMAGE = 20
+local DAMAGE = 130
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "OinanThickhoof"
 local ANIMATION_NAME = "Charge"
 local CHARGE_MARKER_NAME = "Charge"
-local CHARGE_DISTANCE_STUDS = 200
+local CHARGE_DISTANCE_STUDS = 100
 local CHARGE_SPEED_STUDS_PER_SECOND = 100
 local CHARGE_DURATION_SECONDS = CHARGE_DISTANCE_STUDS / CHARGE_SPEED_STUDS_PER_SECOND
 local HITBOX_WIDTH_ROOT_SCALE = 2.0
@@ -336,7 +337,7 @@ function BullCharge.StartCast(context)
 				end
 
 				hitTargets[targetModel] = true
-				humanoid:TakeDamage(DAMAGE)
+				humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE))
 
 				Knockback(targetModel, "Default", {
 					Direction = buildSideKnockbackDirection(

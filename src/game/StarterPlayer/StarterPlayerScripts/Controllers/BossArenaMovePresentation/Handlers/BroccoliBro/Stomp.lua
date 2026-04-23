@@ -26,6 +26,9 @@ local BROCCOLI_BRO_VFX_FOLDER_NAME = Constants.Vfx.BROCCOLI_BRO_VFX_FOLDER_NAME
 local Handler = {}
 
 function Handler:_startBroccoliStomp(record: ActiveRecord, event: PresentationEvent)
+	local bossModel = event.bossModel
+	local bossLeftFoot = self:resolveBossLeftFootPart(bossModel)
+	local bossRootPart = self:resolveBossRootPart(bossModel)
 	local soundsSource = self:resolveBossVfxInstance(
 		BROCCOLI_BRO_VFX_FOLDER_NAME,
 		BROCCOLI_BRO_STOMP_VFX_NAME,
@@ -37,7 +40,12 @@ function Handler:_startBroccoliStomp(record: ActiveRecord, event: PresentationEv
 	end
 
 	local scaleMultiplier = math.max(0.1, tonumber(event.payload and event.payload.scaleMultiplier) or 1)
-	self:playDelayedSoundClones(soundsSource, self:_ensureCastFolder(record), scaleMultiplier)
+	self:playDelayedSoundClones(
+		soundsSource,
+		self:_ensureCastFolder(record),
+		scaleMultiplier,
+		bossLeftFoot or bossRootPart
+	)
 end
 
 function Handler:_stompBroccoliStomp(record: ActiveRecord, event: PresentationEvent)

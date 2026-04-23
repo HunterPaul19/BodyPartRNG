@@ -6,7 +6,7 @@ local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
-local DAMAGE = 25
+local DAMAGE = 180
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "MagmaFiend"
 local ANIMATION_NAME = "Stomp"
@@ -124,7 +124,8 @@ local function spawnStompHitbox(context, impactCFrame: CFrame, hitTargets: { [Mo
 		MaxParts = MAX_HITBOX_PARTS,
 	}, {
 		HitTarget = function(targetModel: Model)
-			local targetInfo = CombatMoveUtil.DamageOnce(hitTargets, targetModel, DAMAGE)
+		local targetInfo =
+			CombatMoveUtil.DamageOnce(hitTargets, targetModel, CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE))
 			if targetInfo == nil then
 				return
 			end

@@ -3,10 +3,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
-local DAMAGE = 20
+local DAMAGE = 24
 local HITBOX_DURATION_SECONDS = 0.12
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "FlameGuardGeneral"
@@ -328,7 +329,7 @@ function FlameSlash.StartCast(context)
 					targetModel.Name,
 					humanoid.Health
 				))
-				humanoid:TakeDamage(DAMAGE)
+				humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE))
 
 				local targetRootPart = resolveRootPart(targetModel)
 				Knockback(targetModel, "Default", {

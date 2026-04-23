@@ -9,6 +9,7 @@ local Workspace = game:GetService("Workspace")
 local BossArenaArrivalService = require(script.Parent.BossArenaArrivalService)
 local BossAnimationController = require(script.Parent.Common.BossAnimationController)
 local BossArenas = require(ReplicatedStorage.Shared.BossArenas)
+local BossEncounterScaling = require(ReplicatedStorage.Shared.BossArena.EncounterScaling)
 local BossQueueTeleportPayload = require(ReplicatedStorage.Shared.BossQueue.TeleportPayload)
 local BossFacing = require(ReplicatedStorage.Shared.Bosses.BossFacing)
 local BossMoveTags = require(ReplicatedStorage.Shared.Bosses.MoveTags)
@@ -30,6 +31,7 @@ local PLAYER_SPAWN_RING_RADIUS = 8
 local BOSS_ATTACK_SPAWN_DELAY_SECONDS = 5
 local BOSS_ENCOUNTER_DURATION_SECONDS = 180
 local BOSS_TIMEOUT_RETURN_ROUTE_ID = "return_to_boss_lobby"
+local BOSS_VICTORY_RETURN_DELAY_SECONDS = 10
 local CHARACTER_PLACEMENT_RETRY_COUNT = 20
 local CHARACTER_PLACEMENT_RETRY_INTERVAL_SECONDS = 0.1
 
@@ -53,6 +55,7 @@ type BossHealthState = {
 }
 
 type BossTimerState = {
+	phase: string,
 	startsAtServerTime: number,
 	endsAtServerTime: number,
 	durationSeconds: number,
@@ -63,6 +66,7 @@ type EncounterState = {
 	bossId: string,
 	arenaId: string,
 	bossDefinition: any,
+	encounterScaling: BossEncounterScaling.EncounterScaling,
 	arenaDefinition: any,
 	arenaModel: Model,
 	bossModel: Model,
@@ -90,6 +94,10 @@ type EncounterState = {
 	timerEndsAt: number,
 	timerStartedAtServerTime: number,
 	timerEndsAtServerTime: number,
+	timerPhase: string,
+	returnCountdownEndsAt: number?,
+	returnCountdownStartedAtServerTime: number?,
+	returnCountdownEndsAtServerTime: number?,
 	timedOut: boolean,
 	activeCast: CastState?,
 	bossHealthConnections: { RBXScriptConnection },
@@ -240,6 +248,46 @@ local function buildRosterUserIdSet(payload: any): { [number]: boolean }
 	end
 
 	return rosterUserIds
+end
+
+local function resolveEncounterPartySize(payload: BossQueueTeleportPayload.BossQueueTeleportPayload?): number
+	if typeof(payload) ~= "table" then
+		return 1
+	end
+
+	local queueSize = math.floor(tonumber(payload.queueSize) or 0)
+	if queueSize > 0 then
+		return queueSize
+	end
+
+	if typeof(payload.queuedUserIds) == "table" then
+		return #payload.queuedUserIds
+	end
+
+	return 1
+end
+
+local function applyBossHealthScaling(bossHumanoid: Humanoid, healthMultiplier: number)
+	local resolvedHealthMultiplier = math.max(0, tonumber(healthMultiplier) or 1)
+	local previousMaxHealth = math.max(1, tonumber(bossHumanoid.MaxHealth) or 1)
+	local previousHealth = math.max(0, tonumber(bossHumanoid.Health) or previousMaxHealth)
+	local healthRatio = math.clamp(previousHealth / previousMaxHealth, 0, 1)
+	local scaledMaxHealth = math.max(1, math.round(previousMaxHealth * resolvedHealthMultiplier))
+	local scaledHealth = math.round(scaledMaxHealth * healthRatio)
+
+	bossHumanoid.MaxHealth = scaledMaxHealth
+	bossHumanoid.Health = math.clamp(scaledHealth, 0, scaledMaxHealth)
+end
+
+local function applyBossBaseHealth(bossHumanoid: Humanoid, baseHealth: number)
+	local resolvedBaseHealth = math.max(1, math.round(tonumber(baseHealth) or 1))
+	local previousMaxHealth = math.max(1, tonumber(bossHumanoid.MaxHealth) or 1)
+	local previousHealth = math.max(0, tonumber(bossHumanoid.Health) or previousMaxHealth)
+	local healthRatio = math.clamp(previousHealth / previousMaxHealth, 0, 1)
+	local resolvedHealth = math.clamp(math.round(resolvedBaseHealth * healthRatio), 0, resolvedBaseHealth)
+
+	bossHumanoid.MaxHealth = resolvedBaseHealth
+	bossHumanoid.Health = resolvedHealth
 end
 
 local function chooseWeightedMove(validMoves: { { move: any, context: any, effectiveWeight: number } }, rng: Random)
@@ -499,6 +547,20 @@ function BossArenaRuntimeService:_buildBossTimerState(encounter: EncounterState?
 	if encounter.timedOut == true then
 		return nil
 	end
+	if encounter.timerPhase == "return" then
+		local startsAtServerTime = encounter.returnCountdownStartedAtServerTime
+		local endsAtServerTime = encounter.returnCountdownEndsAtServerTime
+		if startsAtServerTime == nil or endsAtServerTime == nil then
+			return nil
+		end
+
+		return {
+			phase = "return",
+			startsAtServerTime = startsAtServerTime,
+			endsAtServerTime = endsAtServerTime,
+			durationSeconds = BOSS_VICTORY_RETURN_DELAY_SECONDS,
+		}
+	end
 	if encounter.bossModel.Parent == nil or encounter.bossHumanoid.Parent == nil then
 		return nil
 	end
@@ -507,10 +569,30 @@ function BossArenaRuntimeService:_buildBossTimerState(encounter: EncounterState?
 	end
 
 	return {
+		phase = "fight",
 		startsAtServerTime = encounter.timerStartedAtServerTime,
 		endsAtServerTime = encounter.timerEndsAtServerTime,
 		durationSeconds = BOSS_ENCOUNTER_DURATION_SECONDS,
 	}
+end
+
+function BossArenaRuntimeService:_beginVictoryReturnCountdown(encounter: EncounterState)
+	if encounter.timedOut == true or encounter.timerPhase == "return" then
+		return
+	end
+
+	local countdownStartedAt = os.clock()
+	local countdownStartedAtServerTime = Workspace:GetServerTimeNow()
+
+	encounter.timerPhase = "return"
+	encounter.returnCountdownEndsAt = countdownStartedAt + BOSS_VICTORY_RETURN_DELAY_SECONDS
+	encounter.returnCountdownStartedAtServerTime = countdownStartedAtServerTime
+	encounter.returnCountdownEndsAtServerTime = countdownStartedAtServerTime + BOSS_VICTORY_RETURN_DELAY_SECONDS
+
+	self:_cancelActiveCast(encounter)
+	encounter.currentTargetUserId = nil
+	self:_setState(encounter, "VictoryReturn")
+	self:_notifyBossTimerStateChanged()
 end
 
 function BossArenaRuntimeService:_notifyBossHealthStateChanged()
@@ -549,6 +631,9 @@ function BossArenaRuntimeService:_bindBossHealthSignals(encounter: EncounterStat
 	disconnectConnections(encounter.bossHealthConnections)
 
 	table.insert(encounter.bossHealthConnections, encounter.bossHumanoid.HealthChanged:Connect(function()
+		if encounter.bossHumanoid.Health <= 0 then
+			self:_beginVictoryReturnCountdown(encounter)
+		end
 		self:_notifyBossHealthStateChanged()
 		self:_notifyBossTimerStateChanged()
 	end))
@@ -929,6 +1014,7 @@ function BossArenaRuntimeService:_spawnBossEncounter(payload: any)
 
 	local appliedLightingInstances = self:_cloneArenaLighting()
 	local aggroRadius, leashRadius = self:_resolveArenaRadii(bossDefinition, bossSpawn, arenaModel)
+	local encounterScaling = BossEncounterScaling.GetForPartySize(resolveEncounterPartySize(payload))
 
 	local bossModel = sourceBossModel:Clone()
 	bossModel.Name = ACTIVE_BOSS_MODEL_NAME
@@ -977,6 +1063,8 @@ function BossArenaRuntimeService:_spawnBossEncounter(payload: any)
 
 	local bossSpawnCFrame = getFeetAlignedBossSpawnCFrame(bossSpawn.CFrame, bossHumanoid, bossRootPart)
 	bossModel:PivotTo(bossSpawnCFrame)
+	applyBossBaseHealth(bossHumanoid, bossDefinition.baseHealth)
+	applyBossHealthScaling(bossHumanoid, encounterScaling.healthMultiplier)
 
 	bossHumanoid.WalkSpeed = bossDefinition.walkSpeed
 	bossHumanoid.AutoRotate = true
@@ -993,6 +1081,7 @@ function BossArenaRuntimeService:_spawnBossEncounter(payload: any)
 		bossId = bossId,
 		arenaId = arenaId,
 		bossDefinition = bossDefinition,
+		encounterScaling = encounterScaling,
 		arenaDefinition = arenaDefinition,
 		arenaModel = arenaModel,
 		bossModel = bossModel,
@@ -1020,6 +1109,10 @@ function BossArenaRuntimeService:_spawnBossEncounter(payload: any)
 		timerEndsAt = spawnedAt + BOSS_ENCOUNTER_DURATION_SECONDS,
 		timerStartedAtServerTime = timerStartedAtServerTime,
 		timerEndsAtServerTime = timerStartedAtServerTime + BOSS_ENCOUNTER_DURATION_SECONDS,
+		timerPhase = "fight",
+		returnCountdownEndsAt = nil,
+		returnCountdownStartedAtServerTime = nil,
+		returnCountdownEndsAtServerTime = nil,
 		timedOut = false,
 		activeCast = nil,
 		bossHealthConnections = {},
@@ -1226,6 +1319,7 @@ function BossArenaRuntimeService:_buildMoveContext(
 		now = os.clock(),
 		castId = castId or "",
 		bossDefinition = encounter.bossDefinition,
+		encounterScaling = encounter.encounterScaling,
 		move = moveDefinition,
 		bossModel = encounter.bossModel,
 		bossHumanoid = encounter.bossHumanoid,
@@ -1612,20 +1706,16 @@ function BossArenaRuntimeService:_getBossLobbyReturnPlaceId(): number
 	return math.max(0, math.floor(tonumber(route.placeId) or 0))
 end
 
-function BossArenaRuntimeService:_timeoutEncounter(encounter: EncounterState)
-	if encounter.timedOut == true then
-		return
-	end
-
-	encounter.timedOut = true
-	self:_cancelActiveCast(encounter)
-	self:_notifyBossTimerStateChanged()
-
+function BossArenaRuntimeService:_queueRosterReturnToBossLobby(
+	encounter: EncounterState,
+	reasonLabel: string,
+	reasonDescription: string
+): number
 	local rosterPlayers = self:_collectOnlineRosterPlayers(encounter)
 	local destinationPlaceId = self:_getBossLobbyReturnPlaceId()
 
 	if destinationPlaceId <= 0 then
-		warnWithPrefix(string.format("Boss fight timed out, but route '%s' is not configured.", BOSS_TIMEOUT_RETURN_ROUTE_ID))
+		warnWithPrefix(string.format("%s, but route '%s' is not configured.", reasonLabel, BOSS_TIMEOUT_RETURN_ROUTE_ID))
 	elseif #rosterPlayers > 0 then
 		task.spawn(function()
 			local teleportOk, teleportError = pcall(function()
@@ -1633,7 +1723,8 @@ function BossArenaRuntimeService:_timeoutEncounter(encounter: EncounterState)
 			end)
 			if not teleportOk then
 				warnWithPrefix(string.format(
-					"Boss fight timeout teleport to place %d failed for %d player(s): %s",
+					"%s teleport to place %d failed for %d player(s): %s",
+					reasonLabel,
 					destinationPlaceId,
 					#rosterPlayers,
 					tostring(teleportError)
@@ -1642,11 +1733,31 @@ function BossArenaRuntimeService:_timeoutEncounter(encounter: EncounterState)
 		end)
 	end
 
-	self:_clearEncounter(string.format(
-		"Boss fight timed out after %d second(s). Returning %d roster player(s) to boss lobby.",
-		BOSS_ENCOUNTER_DURATION_SECONDS,
-		#rosterPlayers
-	))
+	self:_clearEncounter(string.format("%s Returning %d roster player(s) to boss lobby.", reasonDescription, #rosterPlayers))
+	return #rosterPlayers
+end
+
+function BossArenaRuntimeService:_timeoutEncounter(encounter: EncounterState)
+	if encounter.timedOut == true then
+		return
+	end
+
+	encounter.timedOut = true
+	self:_cancelActiveCast(encounter)
+	self:_notifyBossTimerStateChanged()
+	self:_queueRosterReturnToBossLobby(
+		encounter,
+		"Boss fight timeout",
+		string.format("Boss fight timed out after %d second(s).", BOSS_ENCOUNTER_DURATION_SECONDS)
+	)
+end
+
+function BossArenaRuntimeService:_completeVictoryReturn(encounter: EncounterState)
+	self:_queueRosterReturnToBossLobby(
+		encounter,
+		"Boss fight victory return",
+		string.format("Boss '%s' was defeated. Countdown finished after %d second(s).", encounter.bossId, BOSS_VICTORY_RETURN_DELAY_SECONDS)
+	)
 end
 
 function BossArenaRuntimeService:_heartbeat()
@@ -1672,9 +1783,15 @@ function BossArenaRuntimeService:_heartbeat()
 		self:_clearEncounter("Active boss model was removed from Workspace.")
 		return
 	end
+	if encounter.timerPhase == "return" then
+		local returnCountdownEndsAt = encounter.returnCountdownEndsAt
+		if returnCountdownEndsAt ~= nil and os.clock() >= returnCountdownEndsAt then
+			self:_completeVictoryReturn(encounter)
+		end
+		return
+	end
 	if encounter.bossHumanoid.Health <= 0 then
-		self:_cancelActiveCast(encounter)
-		self:_setState(encounter, "Idle")
+		self:_beginVictoryReturnCountdown(encounter)
 		return
 	end
 	if os.clock() >= encounter.timerEndsAt then

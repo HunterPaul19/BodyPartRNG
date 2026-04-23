@@ -54,6 +54,8 @@ function Handler:_pivotBroccoliGrabExplosion(effectInstance: Instance, floorCFra
 end
 
 function Handler:_startBroccoliGrab(record: ActiveRecord, event: PresentationEvent)
+	local bossModel = event.bossModel
+	local bossRootPart = self:resolveBossRootPart(bossModel)
 	local soundsSource = self:resolveBossVfxInstance(
 		BROCCOLI_BRO_VFX_FOLDER_NAME,
 		BROCCOLI_GRAB_VFX_NAME,
@@ -65,7 +67,9 @@ function Handler:_startBroccoliGrab(record: ActiveRecord, event: PresentationEve
 	end
 
 	local scaleMultiplier = math.max(0.1, tonumber(event.payload and event.payload.scaleMultiplier) or 1)
-	self:playDelayedSoundClones(soundsSource, self:_ensureCastFolder(record), scaleMultiplier)
+	if bossRootPart ~= nil then
+		self:playDelayedSoundClones(soundsSource, self:_ensureCastFolder(record), scaleMultiplier, bossRootPart)
+	end
 end
 
 function Handler:_impactBroccoliGrab(record: ActiveRecord, event: PresentationEvent)
@@ -87,7 +91,7 @@ function Handler:_impactBroccoliGrab(record: ActiveRecord, event: PresentationEv
 	end
 
 	local scaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1)
-	local impactScaleMultiplier = math.max(0.1, scaleMultiplier * BROCCOLI_GRAB_IMPACT_EXPLOSION_SCALE_MULTIPLIER)
+	local impactScaleMultiplier = math.max(0.1, BROCCOLI_GRAB_IMPACT_EXPLOSION_SCALE_MULTIPLIER)
 	local rootPartSoundsSource = self:resolveBossVfxInstance(
 		BROCCOLI_BRO_VFX_FOLDER_NAME,
 		BROCCOLI_GRAB_VFX_NAME,
@@ -96,7 +100,7 @@ function Handler:_impactBroccoliGrab(record: ActiveRecord, event: PresentationEv
 	if rootPartSoundsSource == nil then
 		self:warnWithPrefix("Broccoli Grab RootPartSounds are missing from ReplicatedStorage.GameAssets.VFX.")
 	else
-		self:playDelayedSoundClones(rootPartSoundsSource, self:_ensureCastFolder(record), scaleMultiplier)
+		self:playDelayedSoundClones(rootPartSoundsSource, self:_ensureCastFolder(record), scaleMultiplier, payload.floorCFrame)
 	end
 
 	local explosionModel = explosionSource:Clone()
@@ -111,7 +115,13 @@ function Handler:_impactBroccoliGrab(record: ActiveRecord, event: PresentationEv
 
 	self:playAllSounds(explosionModel, impactScaleMultiplier)
 	self:emitEffectInstance(explosionModel, BROCCOLI_GRAB_EXPLOSION_LIFETIME_SECONDS)
-	self:_shakeImpact()
+
+	local localPlayer = self.Players.LocalPlayer
+	local targetUserId = math.floor(tonumber(payload.targetUserId) or 0)
+	if localPlayer ~= nil and targetUserId ~= 0 and targetUserId == localPlayer.UserId then
+		self:_shakeImpact()
+	end
+
 	self:_cleanupRecord(record)
 end
 

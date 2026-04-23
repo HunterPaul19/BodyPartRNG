@@ -24,6 +24,8 @@ local TweenService = game:GetService("TweenService")
 local GroupService = game:GetService("GroupService")
 
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local SoundUtil = require(ReplicatedStorage.Shared.Audio.SoundUtil)
+local ToggleSoundUtil = require(ReplicatedStorage.Shared.Audio.ToggleSoundUtil)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
@@ -100,6 +102,7 @@ local OffsetPosition = BasePosition + UDim2.fromScale(0, 0.1)
 local DropdownTweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local DropdownClosedPosition = UDim2.fromScale(0.5, 2)
 local DropdownOpenPosition = UDim2.fromScale(0.5, 0.5)
+local ROLL_TICK_SOUND_NAME = "RollTickSound"
 
 local CooldownFrameTween = TweenService:Create(
 	RollButton.CooldownFrame,
@@ -1063,6 +1066,12 @@ function GUIControls:ToggleQuickRoll()
 	end
 	if not result.ok then
 		GUIControls:SetTemporaryStatus(result.message or "Failed to update Quick Roll.")
+		return
+	end
+
+	local updatedQuickRollState = getQuickRollState(GUIControls.RollingState)
+	if updatedQuickRollState.enabled ~= quickRollState.enabled then
+		ToggleSoundUtil.PlayToggle(updatedQuickRollState.enabled == true)
 	end
 end
 
@@ -1072,7 +1081,11 @@ function GUIControls:ToggleAutoRoll()
 		return
 	end
 
+	local previousAutoRoll = GUIControls.AutoRoll == true
 	GUIControls:SetAutoRollEnabled(not GUIControls.AutoRoll)
+	if GUIControls.AutoRoll ~= previousAutoRoll then
+		ToggleSoundUtil.PlayToggle(GUIControls.AutoRoll == true)
+	end
 end
 
 function GUIControls:RebuildRollDropdown()
@@ -1159,6 +1172,7 @@ function GUIControls:RollSequence(previewSequence, previewCount)
 		)
 		DisplayFrame.Position = BasePosition
 		renderRollInfo(rollInfo, GUIControls.ActiveRollPreviewSessionId)
+		SoundUtil.Play(ROLL_TICK_SOUND_NAME)
 		tween:Play()
 		tween.Completed:Wait()
 		if index == rolls then
@@ -1451,6 +1465,9 @@ end)
 AutoRollButton.MouseButton1Down:Connect(function()
 	GUIControls:ToggleAutoRoll()
 end)
+
+ToggleSoundUtil.MarkToggleButton(QuickRollButton)
+ToggleSoundUtil.MarkToggleButton(AutoRollButton)
 
 RollingUpdatedRemote.OnClientEvent:Connect(function(state)
 	GUIControls:ApplyRollingState(state)

@@ -4,22 +4,38 @@ local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
+local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local CharacterPhysicsContext = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Utilities.CharacterPhysicsContext)
 
-local GRAB_RANGE_STUDS = 56
+local DEFAULT_GRAB_SELECTION_RANGE = 56
+local GRAB_HITBOX_DURATION_SECONDS = 0.12
+local MAX_GRAB_HITBOX_PARTS = 48
+local MIN_GRAB_HITBOX_WIDTH = 18
+local MIN_GRAB_HITBOX_HEIGHT = 20
+local MIN_GRAB_HITBOX_DEPTH = 28
+local GRAB_HITBOX_WIDTH_ROOT_SCALE = 2.4
+local GRAB_HITBOX_WIDTH_BOUNDS_SCALE = 1.0
+local GRAB_HITBOX_HEIGHT_STANDING_SCALE = 1.15
+local GRAB_HITBOX_DEPTH_ROOT_SCALE = 2.5
+local GRAB_HITBOX_DEPTH_BOUNDS_SCALE = 1.1
+local MIN_GRAB_HAND_FORWARD_OFFSET = 2
+local GRAB_HAND_FORWARD_OFFSET_DEPTH_SCALE = 0.18
+local GRAB_HAND_FORWARD_OFFSET_HAND_SCALE = 0.35
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "Agrynoth"
 local GRAB_ANIMATION_NAME = "Grab"
 local SLAM_ANIMATION_NAME = "GrabSlam"
 local GRAB_MARKER_NAME = "Grab"
 local HAND_PART_NAME = "LeftHand"
+local HAND_GRIP_ATTACHMENT_NAME = "HandGripAttachment"
 local GROUND_RAYCAST_LIFT = 10
 local GROUND_RAYCAST_DEPTH = 260
 
 local HIT_SEQUENCE = table.freeze({
-	table.freeze({ radius = 14, damage = 15 }),
-	table.freeze({ radius = 22, damage = 20 }),
-	table.freeze({ radius = 32, damage = 25 }),
+	table.freeze({ radius = 14, damage = 260 }),
+	table.freeze({ radius = 22, damage = 260 }),
+	table.freeze({ radius = 32, damage = 260 }),
 })
 
 local SLAM_HIT_TIMINGS_SECONDS = table.freeze({
@@ -121,6 +137,93 @@ local function resolveHandPart(bossModel: Model?): BasePart?
 	return nil
 end
 
+local function resolveHandGripAttachment(handPart: BasePart?): Attachment?
+	if handPart == nil then
+		return nil
+	end
+
+	local attachment = handPart:FindFirstChild(HAND_GRIP_ATTACHMENT_NAME, true)
+	if attachment and attachment:IsA("Attachment") then
+		return attachment
+	end
+
+	return nil
+end
+
+local function resolvePlanarForwardDirection(rootPart: BasePart): Vector3
+	local forward = Vector3.new(rootPart.CFrame.LookVector.X, 0, rootPart.CFrame.LookVector.Z)
+	if forward.Magnitude <= 0.001 then
+		return Vector3.new(0, 0, -1)
+	end
+
+	return forward.Unit
+end
+
+local function resolveStandingHeight(bossHumanoid: Humanoid?, bossRootPart: BasePart): number
+	if bossHumanoid == nil then
+		return bossRootPart.Size.Y
+	end
+
+	return math.max((bossRootPart.Size.Y * 0.5) + bossHumanoid.HipHeight, bossRootPart.Size.Y)
+end
+
+local function resolveGrabHitboxFootprint(bossModel: Model, bossRootPart: BasePart): (number, number)
+	local _, boundingSize = bossModel:GetBoundingBox()
+	local rootSize = bossRootPart.Size
+	local bossBoundsWidth = math.min(boundingSize.X, boundingSize.Z)
+	local bossBoundsDepth = math.max(boundingSize.X, boundingSize.Z)
+	local hitboxWidth = math.max(
+		MIN_GRAB_HITBOX_WIDTH,
+		rootSize.X * GRAB_HITBOX_WIDTH_ROOT_SCALE,
+		bossBoundsWidth * GRAB_HITBOX_WIDTH_BOUNDS_SCALE
+	)
+	local hitboxDepth = math.max(
+		MIN_GRAB_HITBOX_DEPTH,
+		rootSize.Z * GRAB_HITBOX_DEPTH_ROOT_SCALE,
+		bossBoundsDepth * GRAB_HITBOX_DEPTH_BOUNDS_SCALE
+	)
+
+	return hitboxWidth, hitboxDepth
+end
+
+local function resolveGrabHandForwardOffset(handPart: BasePart, hitboxDepth: number): number
+	return math.max(
+		MIN_GRAB_HAND_FORWARD_OFFSET,
+		hitboxDepth * GRAB_HAND_FORWARD_OFFSET_DEPTH_SCALE,
+		handPart.Size.Z * GRAB_HAND_FORWARD_OFFSET_HAND_SCALE
+	)
+end
+
+local function resolveGrabForwardDirection(handPart: BasePart, bossRootPart: BasePart): Vector3
+	local handForward = Vector3.new(handPart.CFrame.LookVector.X, 0, handPart.CFrame.LookVector.Z)
+	if handForward.Magnitude > 0.001 then
+		return handForward.Unit
+	end
+
+	return resolvePlanarForwardDirection(bossRootPart)
+end
+
+local function resolveGrabSelectionRange(context): number
+	local bossModel = context and context.bossModel
+	local bossRootPart = context and context.bossRootPart
+	local handPart = if bossModel then resolveHandPart(bossModel) else nil
+	if bossModel == nil or bossModel.Parent == nil or bossRootPart == nil or bossRootPart.Parent == nil then
+		return DEFAULT_GRAB_SELECTION_RANGE
+	end
+	if handPart == nil or handPart.Parent == nil then
+		return DEFAULT_GRAB_SELECTION_RANGE
+	end
+
+	local _, hitboxDepth = resolveGrabHitboxFootprint(bossModel, bossRootPart)
+	local handForwardOffset = resolveGrabHandForwardOffset(handPart, hitboxDepth)
+	local planarHandOffset = Vector3.new(
+		handPart.Position.X - bossRootPart.Position.X,
+		0,
+		handPart.Position.Z - bossRootPart.Position.Z
+	).Magnitude
+	return planarHandOffset + handForwardOffset + (hitboxDepth * 0.5)
+end
+
 local function setAssemblyVelocities(model: Model, linearVelocity: Vector3, angularVelocity: Vector3)
 	for _, descendant in ipairs(model:GetDescendants()) do
 		if descendant:IsA("BasePart") then
@@ -187,40 +290,6 @@ local function restoreHeldPartPhysics(character: Model?, partPhysicsStates)
 	end
 end
 
-local function resolveNearestTarget(bossRootPart: BasePart, maxDistance: number)
-	local nearestTarget = nil
-
-	for _, player in ipairs(Players:GetPlayers()) do
-		local character = player.Character
-		local humanoid = resolveHumanoid(character)
-		if character == nil or humanoid == nil or humanoid.Health <= 0 then
-			continue
-		end
-
-		local rootPart = resolveRootPart(character)
-		if rootPart == nil then
-			continue
-		end
-
-		local distance = (rootPart.Position - bossRootPart.Position).Magnitude
-		if distance > maxDistance then
-			continue
-		end
-
-		if nearestTarget == nil or distance < nearestTarget.distance then
-			nearestTarget = {
-				player = player,
-				character = character,
-				humanoid = humanoid,
-				rootPart = rootPart,
-				distance = distance,
-			}
-		end
-	end
-
-	return nearestTarget
-end
-
 local function faceTargetFlat(bossModel: Model, bossRootPart: BasePart, targetRootPart: BasePart)
 	local offset = targetRootPart.Position - bossRootPart.Position
 	local planarOffset = Vector3.new(offset.X, 0, offset.Z)
@@ -233,55 +302,121 @@ local function faceTargetFlat(bossModel: Model, bossRootPart: BasePart, targetRo
 	bossModel:PivotTo(targetCFrame)
 end
 
-local function buildGroundRaycastParams(ignoreInstances: { Instance }): RaycastParams
-	local include = {}
-
-	local activeBossArena = Workspace:FindFirstChild("ActiveBossArena")
-	if activeBossArena then
-		table.insert(include, activeBossArena)
+local function buildGroundRaycastParams(bossModel: Model?): RaycastParams
+	local exclude = {}
+	local seen = {}
+	if bossModel ~= nil then
+		seen[bossModel] = true
+		table.insert(exclude, bossModel)
 	end
 
-	local map = Workspace:FindFirstChild("Map")
-	if map then
-		table.insert(include, map)
-	end
-
-	local world = Workspace:FindFirstChild("World")
-	local worldMap = world and world:FindFirstChild("Map")
-	if worldMap then
-		for _, child in ipairs(worldMap:GetChildren()) do
-			table.insert(include, child)
+	for _, player in ipairs(Players:GetPlayers()) do
+		local character = player.Character
+		if character ~= nil and seen[character] ~= true then
+			seen[character] = true
+			table.insert(exclude, character)
 		end
-	end
-
-	if Workspace.Terrain then
-		table.insert(include, Workspace.Terrain)
 	end
 
 	local params = RaycastParams.new()
 	params.IgnoreWater = false
-	if #include > 0 then
-		params.FilterType = Enum.RaycastFilterType.Include
-		params.FilterDescendantsInstances = include
-	else
-		params.FilterType = Enum.RaycastFilterType.Exclude
-		params.FilterDescendantsInstances = ignoreInstances
-	end
-
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = exclude
 	return params
 end
 
-local function resolveGroundCFrame(character: Model?, rootPart: BasePart?): CFrame?
+local function raycastGroundPosition(position: Vector3, bossModel: Model?): Vector3
+	local rayOrigin = position + Vector3.new(0, GROUND_RAYCAST_LIFT, 0)
+	local rayDirection = Vector3.new(0, -(GROUND_RAYCAST_DEPTH + GROUND_RAYCAST_LIFT), 0)
+	local result = Workspace:Raycast(rayOrigin, rayDirection, buildGroundRaycastParams(bossModel))
+	if result then
+		return result.Position
+	end
+
+	return position
+end
+
+local function resolveGroundCFrame(rootPart: BasePart?, bossModel: Model?): CFrame?
 	if rootPart == nil or rootPart.Parent == nil then
 		return nil
 	end
 
 	local rayOrigin = rootPart.Position + Vector3.new(0, GROUND_RAYCAST_LIFT, 0)
 	local rayDirection = Vector3.new(0, -(GROUND_RAYCAST_DEPTH + GROUND_RAYCAST_LIFT), 0)
-	local result = Workspace:Raycast(rayOrigin, rayDirection, buildGroundRaycastParams({ character or rootPart }))
+	local result = Workspace:Raycast(rayOrigin, rayDirection, buildGroundRaycastParams(bossModel))
 	local floorPosition = if result then result.Position else rootPart.Position
 
 	return CFrame.new(floorPosition)
+end
+
+local function resolveGrabHitboxGeometry(
+	bossModel: Model,
+	bossHumanoid: Humanoid?,
+	bossRootPart: BasePart,
+	handPart: BasePart
+): (CFrame, Vector3)
+	local forward = resolveGrabForwardDirection(handPart, bossRootPart)
+	local right = forward:Cross(Vector3.yAxis)
+	if right.Magnitude <= 0.001 then
+		right = Vector3.xAxis
+	else
+		right = right.Unit
+	end
+
+	local hitboxWidth, hitboxDepth = resolveGrabHitboxFootprint(bossModel, bossRootPart)
+	local forwardOffset = resolveGrabHandForwardOffset(handPart, hitboxDepth)
+	local centerPosition = handPart.Position + (forward * forwardOffset)
+	local groundPosition = raycastGroundPosition(centerPosition, bossModel)
+	local standingHeight = resolveStandingHeight(bossHumanoid, bossRootPart)
+	local topY = math.max(
+		handPart.Position.Y + (handPart.Size.Y * 0.5),
+		bossRootPart.Position.Y + (standingHeight * GRAB_HITBOX_HEIGHT_STANDING_SCALE)
+	)
+	local hitboxHeight = math.max(MIN_GRAB_HITBOX_HEIGHT, topY - groundPosition.Y)
+	local hitboxCFrame = CFrame.fromMatrix(
+		Vector3.new(centerPosition.X, groundPosition.Y + (hitboxHeight * 0.5), centerPosition.Z),
+		right,
+		Vector3.yAxis,
+		-forward
+	)
+
+	return hitboxCFrame, Vector3.new(hitboxWidth, hitboxHeight, hitboxDepth)
+end
+
+local function buildTargetDataForCharacter(bossRootPart: BasePart, character: Model)
+	local player = Players:GetPlayerFromCharacter(character)
+	if player == nil then
+		return nil
+	end
+
+	local humanoid = resolveHumanoid(character)
+	local rootPart = resolveRootPart(character)
+	if humanoid == nil or humanoid.Health <= 0 or rootPart == nil then
+		return nil
+	end
+
+	return {
+		player = player,
+		character = character,
+		humanoid = humanoid,
+		rootPart = rootPart,
+		distance = (rootPart.Position - bossRootPart.Position).Magnitude,
+	}
+end
+
+local function resolveFallbackHoldCFrame(handPart: BasePart, rootPart: BasePart): CFrame
+	return handPart.CFrame
+		* CFrame.new(
+			0,
+			-(rootPart.Size.Y * 0.55),
+			-((handPart.Size.Z * 0.9) + (rootPart.Size.Z * 0.65))
+		)
+		* CFrame.Angles(0, math.rad(180), 0)
+end
+
+local function pivotCharacterRootToWorldCFrame(character: Model, rootPart: BasePart, targetRootCFrame: CFrame)
+	local rootToPivot = rootPart.CFrame:ToObjectSpace(character:GetPivot())
+	character:PivotTo(targetRootCFrame * rootToPivot)
 end
 
 local function attachTargetToHand(bossRootPart: BasePart, handPart: BasePart, targetData): { [string]: any }?
@@ -313,13 +448,15 @@ local function attachTargetToHand(bossRootPart: BasePart, handPart: BasePart, ta
 	local partPhysicsStates = applyHeldPartPhysics(character)
 	setAssemblyVelocities(character, Vector3.zero, Vector3.zero)
 
-	local holdOffset = CFrame.new(
-		0,
-		-(rootPart.Size.Y * 0.55),
-		-((handPart.Size.Z * 0.9) + (rootPart.Size.Z * 0.65))
-	) * CFrame.Angles(0, math.rad(180), 0)
+	local handGripAttachment = resolveHandGripAttachment(handPart)
+	local targetRootCFrame = if handGripAttachment
+		then handGripAttachment.WorldCFrame
+		else resolveFallbackHoldCFrame(handPart, rootPart)
+	if handGripAttachment == nil then
+		warn("[Agrynoth.BoneBreaker] Missing HandGripAttachment on LeftHand; falling back to legacy hold offset.")
+	end
 
-	character:PivotTo(handPart.CFrame * holdOffset)
+	pivotCharacterRootToWorldCFrame(character, rootPart, targetRootCFrame)
 	setAssemblyVelocities(character, Vector3.zero, Vector3.zero)
 
 	local weld = Instance.new("WeldConstraint")
@@ -432,7 +569,7 @@ local function isAlivePlayerCharacter(character: Model?): boolean
 	return character ~= nil and character.Parent ~= nil and humanoid ~= nil and humanoid.Health > 0
 end
 
-local function applyAoeDamage(origin: Vector3, radius: number, damage: number)
+local function applyAoeDamage(context, origin: Vector3, radius: number, damage: number)
 	local damagedCharacters = {}
 
 	for _, player in ipairs(Players:GetPlayers()) do
@@ -450,7 +587,7 @@ local function applyAoeDamage(origin: Vector3, radius: number, damage: number)
 		local planarDistance = Vector3.new(offset.X, 0, offset.Z).Magnitude
 		if planarDistance <= radius then
 			damagedCharacters[character] = true
-			humanoid:TakeDamage(damage)
+			humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, damage))
 		end
 	end
 end
@@ -461,7 +598,7 @@ function BoneBreaker.CanUse(context)
 	end
 
 	local distance = tonumber(context.distanceToTarget)
-	if distance ~= nil and distance > GRAB_RANGE_STUDS then
+	if distance ~= nil and distance > resolveGrabSelectionRange(context) then
 		return false, "Target outside grab range"
 	end
 
@@ -474,19 +611,26 @@ function BoneBreaker.GetSelectionWeight(context)
 		return 1
 	end
 
+	local selectionRange = resolveGrabSelectionRange(context)
 	return getWeightedValue(distance, {
 		{ distance = 0, weight = 1.4 },
 		{ distance = 12, weight = 1.65 },
 		{ distance = 24, weight = 1.25 },
 		{ distance = 42, weight = 0.55 },
-		{ distance = GRAB_RANGE_STUDS, weight = 0 },
+		{ distance = selectionRange, weight = 0 },
 	})
 end
 
 function BoneBreaker.StartCast(context)
 	local bossModel = context.bossModel
 	local bossRootPart = context.bossRootPart
-	if bossModel == nil or bossModel.Parent == nil or bossRootPart == nil or bossRootPart.Parent == nil then
+	local bossHumanoid = context.bossHumanoid
+	if bossModel == nil
+		or bossModel.Parent == nil
+		or bossRootPart == nil
+		or bossRootPart.Parent == nil
+		or bossHumanoid == nil
+		or bossHumanoid.Parent == nil then
 		return nil
 	end
 
@@ -516,6 +660,7 @@ function BoneBreaker.StartCast(context)
 	local activePhase = "Grab"
 	local stoppedConnection = nil :: RBXScriptConnection?
 	local captiveState = nil
+	local activeGrabHitbox = nil
 	local grabbed = false
 	local hitIndex = 0
 	local slamSequence = 0
@@ -527,6 +672,15 @@ function BoneBreaker.StartCast(context)
 			stoppedConnection:Disconnect()
 		end
 		stoppedConnection = nil
+	end
+
+	local function destroyGrabHitbox()
+		if activeGrabHitbox == nil then
+			return
+		end
+
+		activeGrabHitbox:Destroy()
+		activeGrabHitbox = nil
 	end
 
 	local function releaseCaptiveAndClear(restoreNetworkOwner: boolean)
@@ -542,6 +696,7 @@ function BoneBreaker.StartCast(context)
 
 		completed = true
 		context.EmitPresentation("stop")
+		destroyGrabHitbox()
 		releaseCaptiveAndClear(true)
 		recoveryEndsAt = os.clock() + (tonumber(context.move and context.move.recoverySeconds) or 0)
 	end
@@ -554,6 +709,7 @@ function BoneBreaker.StartCast(context)
 		cleanedUp = true
 		context.EmitPresentation("stop")
 		disconnectStoppedConnection()
+		destroyGrabHitbox()
 		releaseCaptiveAndClear(restoreNetworkOwner)
 
 		if stopAnimation then
@@ -573,12 +729,12 @@ function BoneBreaker.StartCast(context)
 
 		hitIndex = math.max(hitIndex, math.clamp(nextHitIndex, 1, #HIT_SEQUENCE))
 		local hitSpec = HIT_SEQUENCE[math.min(nextHitIndex, #HIT_SEQUENCE)]
-		local floorCFrame = resolveGroundCFrame(captiveState.character, captiveState.rootPart)
+		local floorCFrame = resolveGroundCFrame(captiveState.rootPart, bossModel)
 		if floorCFrame == nil then
 			return
 		end
 
-		applyAoeDamage(floorCFrame.Position, hitSpec.radius, hitSpec.damage)
+		applyAoeDamage(context, floorCFrame.Position, hitSpec.radius, hitSpec.damage)
 		context.EmitPresentation("impact", {
 			hitIndex = math.min(nextHitIndex, #HIT_SEQUENCE),
 			floorCFrame = floorCFrame,
@@ -645,13 +801,54 @@ function BoneBreaker.StartCast(context)
 		end
 
 		grabbed = true
-		local nearestTarget = resolveNearestTarget(bossRootPart, GRAB_RANGE_STUDS)
-		if nearestTarget == nil then
-			return
+		if context.targetRootPart and context.targetRootPart.Parent ~= nil then
+			faceTargetFlat(bossModel, bossRootPart, context.targetRootPart)
 		end
 
-		faceTargetFlat(bossModel, bossRootPart, nearestTarget.rootPart)
-		captiveState = attachTargetToHand(bossRootPart, handPart, nearestTarget)
+		destroyGrabHitbox()
+		local function getGrabHitboxCFrame(): CFrame?
+			if cancelled or bossModel.Parent == nil or bossRootPart.Parent == nil or handPart.Parent == nil then
+				return nil
+			end
+
+			local grabHitboxCFrame = resolveGrabHitboxGeometry(bossModel, bossHumanoid, bossRootPart, handPart)
+			return grabHitboxCFrame
+		end
+
+		local _, grabHitboxSize = resolveGrabHitboxGeometry(bossModel, bossHumanoid, bossRootPart, handPart)
+		local hitbox
+		hitbox = Hitbox.new({
+			DebugVisibilityAttribute = "BossHitboxesVisible",
+			Character = bossModel,
+			HitboxCFrame = getGrabHitboxCFrame,
+			HitboxSize = grabHitboxSize,
+			HitboxType = "SpacialQuery",
+			Time = GRAB_HITBOX_DURATION_SECONDS,
+			MaxParts = MAX_GRAB_HITBOX_PARTS,
+		}, {
+			HitTarget = function(targetModel: Model)
+				if cancelled or cleanedUp or captiveState ~= nil then
+					return
+				end
+
+				local targetData = buildTargetDataForCharacter(bossRootPart, targetModel)
+				if targetData == nil then
+					return
+				end
+
+				faceTargetFlat(bossModel, bossRootPart, targetData.rootPart)
+				captiveState = attachTargetToHand(bossRootPart, handPart, targetData)
+				if captiveState ~= nil then
+					destroyGrabHitbox()
+				end
+			end,
+			HitboxDestroy = function()
+				if activeGrabHitbox == hitbox then
+					activeGrabHitbox = nil
+				end
+			end,
+		})
+		activeGrabHitbox = hitbox
 	end
 
 	local grabTrack = profile:PlayAnimation(grabAnimation, Enum.AnimationPriority.Action, 1, {

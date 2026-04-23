@@ -26,11 +26,11 @@ local RollingConfig = {
 		"Apex",
 	},
 	DisplayRarityBandLuckMultipliers = {
-		Basic = 8.8,
-		Clean = 13.5,
-		Prime = 18.75,
-		Elite = 7.5,
-		Apex = 5.5,
+		Basic = 2.2,
+		Clean = 9.0,
+		Prime = 2.0,
+		Elite = 1.2,
+		Apex = 0.3,
 	},
 	DisplayRarityAliases = {
 		Basic = "Basic",

@@ -193,7 +193,7 @@ function Handler:_startCatSummon(record: ActiveRecord, event: PresentationEvent)
 		return
 	end
 
-	self:playDelayedSoundClones(soundsSource or rootPartSource, castFolder, scaleMultiplier)
+	self:playDelayedSoundClones(soundsSource or rootPartSource, castFolder, scaleMultiplier, rightHandModel)
 	self:emitEffectInstance(rightHandModel, CAT_SUMMON_ATTACHED_LIFETIME_SECONDS)
 end
 

@@ -1,3 +1,7 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
+
 type ActiveRecord = any
 type PresentationEvent = any
 
@@ -17,8 +21,14 @@ local Constants = {
 		WATER_BOMB_EXPLOSION_LIFETIME_SECONDS = 3,
 		WATER_BOMB_FLOOR_LIFETIME_SECONDS = 2.5,
 	},
+	Placement = {
+		FLOOR_RAYCAST_START_HEIGHT = 20,
+		FLOOR_RAYCAST_DISTANCE = 350,
+	},
 }
 
+local FLOOR_RAYCAST_DISTANCE = Constants.Placement.FLOOR_RAYCAST_DISTANCE
+local FLOOR_RAYCAST_START_HEIGHT = Constants.Placement.FLOOR_RAYCAST_START_HEIGHT
 local MERFIN_THE_GREAT_VFX_FOLDER_NAME = Constants.Vfx.MERFIN_THE_GREAT_VFX_FOLDER_NAME
 local WATER_BOMB_BALL_MODEL_NAME = Constants.Vfx.WATER_BOMB_BALL_MODEL_NAME
 local WATER_BOMB_CHARGED_EMIT_DELAY_SECONDS = Constants.Timing.WATER_BOMB_CHARGED_EMIT_DELAY_SECONDS
@@ -30,6 +40,13 @@ local WATER_BOMB_MODULE_ID = Constants.ModuleIds.WATER_BOMB_MODULE_ID
 local WATER_BOMB_VFX_NAME = Constants.Vfx.WATER_BOMB_VFX_NAME
 
 local Handler = {}
+
+local function resolveGroundedImpactPosition(impactPosition: Vector3): Vector3
+	return CombatMoveUtil.RaycastGroundNear(impactPosition, {
+		startHeight = FLOOR_RAYCAST_START_HEIGHT,
+		distance = FLOOR_RAYCAST_DISTANCE,
+	}) or impactPosition
+end
 
 local function resolveAttachment(root: Instance, attachmentName: string): Attachment?
 	local attachment = root:FindFirstChild(attachmentName, true)
@@ -134,12 +151,12 @@ function Handler:_startWaterBomb(record: ActiveRecord, event: PresentationEvent)
 
 	local chargeAttachment = resolveAttachment(ballModel, "Charge")
 	if chargeAttachment then
-		self:emitVisuals(self:collectEmittableVisuals(chargeAttachment))
+		self:emitVisuals(chargeAttachment)
 	end
 
 	local chargedAttachment = resolveAttachment(ballModel, "Charged")
 	if chargedAttachment then
-		self:emitVisualsAfter(self:collectEmittableVisuals(chargedAttachment), WATER_BOMB_CHARGED_EMIT_DELAY_SECONDS)
+		self:emitVisualsAfter(chargedAttachment, WATER_BOMB_CHARGED_EMIT_DELAY_SECONDS)
 		task.delay(WATER_BOMB_CHARGED_EMIT_DELAY_SECONDS, function()
 			if chargedAttachment.Parent == nil then
 				return
@@ -242,10 +259,14 @@ function Handler:_impactWaterBomb(record: ActiveRecord, event: PresentationEvent
 	record.projectileMotion = nil
 	record.waterBombChargeData = nil
 
+	local groundedImpactPosition = resolveGroundedImpactPosition(impactPosition)
 	local explosionModel = explosionSource:Clone()
-	explosionModel:ScaleTo(scaleMultiplier)
-	self:prepareMovingEffectModel(explosionModel)
-	explosionModel:PivotTo(CFrame.new(impactPosition))
+	if not self:pivotFloorEffectInstance(explosionModel, CFrame.new(groundedImpactPosition), scaleMultiplier) then
+		self:warnWithPrefix("Water Bomb explosion VFX model cannot be floor-pivoted.")
+		explosionModel:Destroy()
+		self:_cleanupRecord(record)
+		return
+	end
 	explosionModel.Parent = self:_ensureVisualFolder()
 	self:playTimedSounds(explosionModel, scaleMultiplier)
 	self:emitEffectInstance(explosionModel, WATER_BOMB_EXPLOSION_LIFETIME_SECONDS)

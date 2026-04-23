@@ -9,6 +9,8 @@ local Stomp = require(ReplicatedStorage.Shared.Bosses.Moves.OinanThickhoof.Stomp
 return BossConfigFactory.Create({
 	bossId = "Oinan Thickhoof",
 	arenaId = "Suburban",
+	recommendedCombatScore = 1200,
+	baseHealth = 105000,
 	walkSpeed = 14,
 	aggroRadius = 120,
 	leashRadius = 180,

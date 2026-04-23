@@ -1,4 +1,5 @@
 local AppraisalConfig = {
+	successSoundName = "AppraisalSuccess",
 	mutationWeights = table.freeze({
 		table.freeze({
 			id = "none",

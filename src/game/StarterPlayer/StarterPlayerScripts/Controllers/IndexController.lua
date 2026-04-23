@@ -85,6 +85,10 @@ local function getFontWithWeight(fontFace: Font, fontWeight: Enum.FontWeight): F
 	return Font.new(fontFace.Family, fontWeight, fontFace.Style)
 end
 
+local function shouldHideSummary(summary: SetSummary): boolean
+	return summary.setConfig.rollEnabled == false and summary.discoveredCount <= 0
+end
+
 local function setSelectionCornersVisible(instance: Instance, isVisible: boolean)
 	local selectionCorners = instance:FindFirstChild("SelectionCorners")
 	if not selectionCorners then
@@ -280,11 +284,23 @@ function IndexController:_rebuildDerivedState()
 	end)
 
 	for _, summary in ipairs(self._orderedSummaries) do
+		if shouldHideSummary(summary) then
+			continue
+		end
+
 		self._summariesBySetId[summary.setId] = summary
 		if summary.discoveredCount == #BodyPartRegions.Order then
 			self._completedSetCount += 1
 		end
 	end
+
+	local visibleSummaries = {}
+	for _, summary in ipairs(self._orderedSummaries) do
+		if not shouldHideSummary(summary) then
+			table.insert(visibleSummaries, summary)
+		end
+	end
+	self._orderedSummaries = visibleSummaries
 end
 
 function IndexController:_syncSelectionState()

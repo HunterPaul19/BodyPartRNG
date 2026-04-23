@@ -80,6 +80,7 @@ function OfflineEarningsService:_grantOfflineReward(player: Player)
 		{
 			channel = "system",
 			duration = 6,
+			tone = "good",
 		}
 	)
 end

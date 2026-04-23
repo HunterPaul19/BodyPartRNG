@@ -8,6 +8,7 @@ local BossArenaRuntimeService = require(script.Parent.BossArenaRuntimeService)
 local BossAnimationController = require(script.Parent.Common.BossAnimationController)
 local BossArenaMovePresentationRelay = require(script.Parent.Common.BossArenaMovePresentationRelay)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
+local BossEncounterScaling = require(ReplicatedStorage.Shared.BossArena.EncounterScaling)
 local Bosses = require(ReplicatedStorage.Shared.Bosses)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 
@@ -697,6 +698,8 @@ function BossArenaStudioTestSuiteService:_spawnBossGrid(rootFolder: Folder)
 		end
 		local homeCFrame = CFrame.lookAt(homePosition, lookTarget)
 
+		bossHumanoid.MaxHealth = definition.baseHealth
+		bossHumanoid.Health = definition.baseHealth
 		bossHumanoid.WalkSpeed = 0
 		bossHumanoid.AutoRotate = false
 		bossModel:PivotTo(homeCFrame)
@@ -784,6 +787,7 @@ function BossArenaStudioTestSuiteService:_buildMoveContext(record: BossRecord, m
 		now = os.clock(),
 		castId = castId,
 		bossDefinition = record.definition,
+		encounterScaling = BossEncounterScaling.GetForPartySize(1),
 		move = move,
 		bossModel = record.bossModel,
 		bossHumanoid = record.bossHumanoid,

@@ -3,6 +3,7 @@ export type RollTypeConfig = {
 	displayName: string,
 	moneyCost: number,
 	luckMultiplier: number,
+	bandLuckScalar: number,
 	uiOrder: number,
 }
 
@@ -12,6 +13,7 @@ local rawRollTypes: { RollTypeConfig } = {
 		displayName = "Free",
 		moneyCost = 0,
 		luckMultiplier = 1.0,
+		bandLuckScalar = 0.335,
 		uiOrder = 1,
 	},
 	{
@@ -19,6 +21,7 @@ local rawRollTypes: { RollTypeConfig } = {
 		displayName = "Roll 2",
 		moneyCost = 100,
 		luckMultiplier = 1.5,
+		bandLuckScalar = 0.345,
 		uiOrder = 2,
 	},
 	{
@@ -26,6 +29,7 @@ local rawRollTypes: { RollTypeConfig } = {
 		displayName = "Roll 3",
 		moneyCost = 500,
 		luckMultiplier = 2,
+		bandLuckScalar = 0.355,
 		uiOrder = 3,
 	},
 	{
@@ -33,6 +37,7 @@ local rawRollTypes: { RollTypeConfig } = {
 		displayName = "Roll 4",
 		moneyCost = 2500,
 		luckMultiplier = 3,
+		bandLuckScalar = 0.364559,
 		uiOrder = 4,
 	},
 	{
@@ -40,6 +45,7 @@ local rawRollTypes: { RollTypeConfig } = {
 		displayName = "Roll 5",
 		moneyCost = 12500,
 		luckMultiplier = 4,
+		bandLuckScalar = 0.374603,
 		uiOrder = 5,
 	},
 	{
@@ -47,6 +53,7 @@ local rawRollTypes: { RollTypeConfig } = {
 		displayName = "Roll 6",
 		moneyCost = 75000,
 		luckMultiplier = 5,
+		bandLuckScalar = 0.487161,
 		uiOrder = 6,
 	},
 	{
@@ -54,6 +61,7 @@ local rawRollTypes: { RollTypeConfig } = {
 		displayName = "Roll 7",
 		moneyCost = 500000,
 		luckMultiplier = 6,
+		bandLuckScalar = 0.579365,
 		uiOrder = 7,
 	},
 	{
@@ -61,6 +69,7 @@ local rawRollTypes: { RollTypeConfig } = {
 		displayName = "Roll 8",
 		moneyCost = 2500000,
 		luckMultiplier = 8,
+		bandLuckScalar = 1.016461,
 		uiOrder = 8,
 	},
 }

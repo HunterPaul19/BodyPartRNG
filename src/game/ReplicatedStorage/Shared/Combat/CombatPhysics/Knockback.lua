@@ -186,6 +186,13 @@ local function estimateEnvelope(knockbackType, data, startPosition)
 			maxDistance = 140
 		end
 		maxDuration += 2
+	elseif knockbackType == "LinearProxy" then
+		if typeof(data.ImpactPosition) == "Vector3" and typeof(startPosition) == "Vector3" then
+			maxDistance = (data.ImpactPosition - startPosition).Magnitude + 45
+		else
+			maxDistance = 220
+		end
+		maxDuration += 2
 	end
 
 	return math.clamp(maxDistance, 40, 650), math.clamp(maxDuration, 1.5, 12)

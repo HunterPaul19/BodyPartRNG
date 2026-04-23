@@ -6,6 +6,7 @@ local Workspace = game:GetService("Workspace")
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local MinionDisplay = require(ReplicatedStorage.Shared.Bosses.MinionDisplay)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 
 local ANIMATION_FOLDER_NAME = "Agrynoth"
@@ -24,12 +25,12 @@ local MINION_DISPLAY_NAME = "Agrynoth Minion"
 
 local HEALTH_THRESHOLD = 0.5
 local ELIGIBLE_SELECTION_WEIGHT = 1000
-local MINION_COUNT = 6
+local MINION_COUNT = 5
 local MINION_SCALE = 3
 local MINION_SPAWN_RADIUS = 42
-local MINION_MAX_HEALTH = 80
+local MINION_MAX_HEALTH = 14000
 local MINION_WALK_SPEED = 14
-local MINION_M1_DAMAGE = 8
+local MINION_M1_DAMAGE = 160
 local MINION_M1_COOLDOWN_SECONDS = 1.15
 local MINION_MOVE_REFRESH_SECONDS = 0.25
 local MINION_ATTACK_RANGE = 10
@@ -397,7 +398,13 @@ local function resolveMinionHitboxSizeAndOffset(rootPart: BasePart): (Vector3, n
 	), rootSize.Z * MINION_HITBOX_FORWARD_OFFSET_SCALE
 end
 
-local function spawnMinionAttackHitbox(minionModel: Model, minionRootPart: BasePart, damagedTargets: { [Model]: boolean }, activeHitboxes: { [any]: boolean })
+local function spawnMinionAttackHitbox(
+	context,
+	minionModel: Model,
+	minionRootPart: BasePart,
+	damagedTargets: { [Model]: boolean },
+	activeHitboxes: { [any]: boolean }
+)
 	local hitboxSize, forwardOffset = resolveMinionHitboxSizeAndOffset(minionRootPart)
 	local hitbox
 	hitbox = Hitbox.new({
@@ -432,7 +439,7 @@ local function spawnMinionAttackHitbox(minionModel: Model, minionRootPart: BaseP
 			end
 
 			damagedTargets[targetModel] = true
-			humanoid:TakeDamage(MINION_M1_DAMAGE)
+			humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, MINION_M1_DAMAGE))
 		end,
 		HitboxDestroy = function()
 			activeHitboxes[hitbox] = nil
@@ -684,7 +691,7 @@ function WarCall.StartCast(context)
 			end
 
 			nextAttackAt = now + MINION_M1_COOLDOWN_SECONDS
-			spawnMinionAttackHitbox(minionModel, rootPart, {}, activeMinionHitboxes)
+			spawnMinionAttackHitbox(context, minionModel, rootPart, {}, activeMinionHitboxes)
 		end))
 	end
 

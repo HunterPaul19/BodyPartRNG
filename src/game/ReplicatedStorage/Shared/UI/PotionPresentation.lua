@@ -2,6 +2,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
+local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
+local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 
 local PotionPresentation = {}
 
@@ -148,18 +150,34 @@ function PotionPresentation.BuildPreviewPresentation(payload: any)
 	return {
 		itemType = "potion",
 		potionId = config.id,
-		bundleText = string.format("Potion: %s", config.label),
+		bundleText = TranslationHelper.formatByKey(LocalizationKeys.Potion.Preview.Bundle, {
+			PotionName = config.label,
+		}),
 		partText = buildEffectText(config),
-		rarityText = string.format("Duration: %s", formatDuration(config.durationSeconds)),
-		mutationText = string.format("Owned: x%s", formatWholeNumber(ownedAmount)),
+		rarityText = TranslationHelper.formatByKey(LocalizationKeys.Potion.Preview.Duration, {
+			Duration = formatDuration(config.durationSeconds),
+		}),
+		mutationText = TranslationHelper.formatByKey(LocalizationKeys.Potion.Preview.Owned, {
+			OwnedAmount = formatWholeNumber(ownedAmount),
+		}),
 		sizeText = if isActive
-			then string.format("Use: Adds another %s to this timer", formatDuration(config.durationSeconds))
-			else string.format("Use: Starts a %s timer and stacks", formatDuration(config.durationSeconds)),
+			then TranslationHelper.formatByKey(LocalizationKeys.Potion.Preview.UseAddTime, {
+				Duration = formatDuration(config.durationSeconds),
+			})
+			else TranslationHelper.formatByKey(LocalizationKeys.Potion.Preview.UseStart, {
+				Duration = formatDuration(config.durationSeconds),
+			}),
 		existingText = if isActive
-			then string.format("Active: %s remaining", formatDuration(remainingSeconds))
-			else "Active: Inactive",
-		cashText = string.format("Sell: %s each", formatMoney(PotionConfig.GetSellPrice(config.id))),
-		chanceText = string.format("Buy: %s each", formatMoney(config.buyPrice)),
+			then TranslationHelper.formatByKey(LocalizationKeys.Potion.Preview.ActiveRemaining, {
+				Remaining = formatDuration(remainingSeconds),
+			})
+			else TranslationHelper.formatByKey(LocalizationKeys.Potion.Preview.ActiveInactive),
+		cashText = TranslationHelper.formatByKey(LocalizationKeys.Potion.Preview.SellEach, {
+			Price = formatMoney(PotionConfig.GetSellPrice(config.id)),
+		}),
+		chanceText = TranslationHelper.formatByKey(LocalizationKeys.Potion.Preview.BuyEach, {
+			Price = formatMoney(config.buyPrice),
+		}),
 		cardUsageText = string.format("x%s", formatWholeNumber(ownedAmount)),
 		bundleModel = PotionPresentation.GetBundleModel(config),
 	}
@@ -186,8 +204,12 @@ function PotionPresentation.BuildStatusHoverPresentation(payload: any)
 
 	local remainingSeconds = math.max(0, math.floor(tonumber(source.remainingSeconds) or 0))
 	local descriptionText = PotionPresentation.GetEffectDescription(config)
-	local durationText = string.format("Duration: %s", formatDuration(config.durationSeconds))
-	local remainingText = string.format("Remaining: %s", formatDuration(remainingSeconds))
+	local durationText = TranslationHelper.formatByKey(LocalizationKeys.Potion.Status.Duration, {
+		Duration = formatDuration(config.durationSeconds),
+	})
+	local remainingText = TranslationHelper.formatByKey(LocalizationKeys.Potion.Status.Remaining, {
+		Remaining = formatDuration(remainingSeconds),
+	})
 
 	return {
 		titleText = config.label,
