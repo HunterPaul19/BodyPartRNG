@@ -21,8 +21,8 @@ local LASER_SPIN_VFX_NAME = "LaserSpin"
 local BEAMS_MODEL_NAME = "Beams"
 local BEAM_PART_NAME = "Beam"
 local BEAM_PRIMARY_NAME = "Middle"
-local FLOOR_RAYCAST_START_HEIGHT = 40
-local FLOOR_RAYCAST_DISTANCE = 500
+local FLOOR_RAYCAST_START_HEIGHT = 200
+local FLOOR_RAYCAST_DISTANCE = 5000
 local LASER_SPIN_SCALE = 20
 local VISUAL_FLOOR_CLEARANCE_STUDS = 0.15
 local HITBOX_CENTER_HEIGHT_STUDS = 2.75
@@ -99,27 +99,55 @@ local function resolveModelPrimaryPart(model: Model): BasePart?
 	return model:FindFirstChildWhichIsA("BasePart", true)
 end
 
-local function buildFloorRaycastParams(bossModel: Model): RaycastParams
-	local includeInstances = {}
-	local activeBossArena = Workspace:FindFirstChild("ActiveBossArena")
-	if activeBossArena then
-		table.insert(includeInstances, activeBossArena)
+local function appendFloorRaycastRoot(roots: { Instance }, root: Instance?)
+	if root == nil then
+		return
 	end
 
-	local map = Workspace:FindFirstChild("Map")
-	if map then
-		table.insert(includeInstances, map)
+	for _, existingRoot in ipairs(roots) do
+		if existingRoot == root then
+			return
+		end
 	end
+
+	table.insert(roots, root)
+end
+
+local function appendContextFloorRaycastRoots(roots: { Instance }, context: any)
+	local floorRaycastRoots = context.floorRaycastRoots
+	if typeof(floorRaycastRoots) ~= "table" then
+		return
+	end
+
+	for _, root in ipairs(floorRaycastRoots) do
+		if typeof(root) == "Instance" and root.Parent ~= nil then
+			appendFloorRaycastRoot(roots, root)
+		end
+	end
+end
+
+local function appendArenaFloorRaycastRoots(roots: { Instance })
+	local activeBossArena = Workspace:FindFirstChild("ActiveBossArena")
+	if activeBossArena then
+		for _, childName in ipairs({ "Visuals", "Map", "Floor", "Floors", "Ground" }) do
+			appendFloorRaycastRoot(roots, activeBossArena:FindFirstChild(childName))
+		end
+	end
+end
+
+local function buildFloorRaycastParams(context: any, bossModel: Model): RaycastParams
+	local includeInstances = {}
+	appendContextFloorRaycastRoots(includeInstances, context)
+	appendArenaFloorRaycastRoots(includeInstances)
+
+	local map = Workspace:FindFirstChild("Map")
+	appendFloorRaycastRoot(includeInstances, map)
 
 	local world = Workspace:FindFirstChild("World")
 	local worldMap = world and world:FindFirstChild("Map")
-	if worldMap then
-		table.insert(includeInstances, worldMap)
-	end
+	appendFloorRaycastRoot(includeInstances, worldMap)
 
-	if Workspace.Terrain then
-		table.insert(includeInstances, Workspace.Terrain)
-	end
+	appendFloorRaycastRoot(includeInstances, Workspace.Terrain)
 
 	local raycastParams = RaycastParams.new()
 	if #includeInstances > 0 then
@@ -133,15 +161,26 @@ local function buildFloorRaycastParams(bossModel: Model): RaycastParams
 	return raycastParams
 end
 
-local function raycastGroundNear(position: Vector3, bossModel: Model): Vector3?
+local function raycastGroundNear(context: any, position: Vector3, bossModel: Model): Vector3?
 	local rayOrigin = position + Vector3.new(0, FLOOR_RAYCAST_START_HEIGHT, 0)
 	local rayDirection = Vector3.new(0, -(FLOOR_RAYCAST_START_HEIGHT + FLOOR_RAYCAST_DISTANCE), 0)
-	local raycastResult = Workspace:Raycast(rayOrigin, rayDirection, buildFloorRaycastParams(bossModel))
+	local raycastResult = Workspace:Raycast(rayOrigin, rayDirection, buildFloorRaycastParams(context, bossModel))
 	if raycastResult == nil then
 		return nil
 	end
 
 	return raycastResult.Position
+end
+
+local function resolveBossModelBottomY(bossModel: Model, bossRootPart: BasePart): number
+	local ok, boundingCFrame, boundingSize = pcall(function()
+		return bossModel:GetBoundingBox()
+	end)
+	if ok and typeof(boundingCFrame) == "CFrame" and typeof(boundingSize) == "Vector3" then
+		return boundingCFrame.Position.Y - (boundingSize.Y * 0.5)
+	end
+
+	return bossRootPart.Position.Y - (bossRootPart.Size.Y * 0.5)
 end
 
 local function resolveVisualScale(bossDefinition: any): number
@@ -180,8 +219,8 @@ local function resolveBaseCFrames(context, visualScale: number): (CFrame?, CFram
 		return nil, nil
 	end
 
-	local groundPosition = raycastGroundNear(bossRootPart.Position, bossModel)
-	local groundY = if groundPosition then groundPosition.Y else bossRootPart.Position.Y - (bossRootPart.Size.Y * 0.5)
+	local groundPosition = raycastGroundNear(context, bossRootPart.Position, bossModel)
+	local groundY = if groundPosition then groundPosition.Y else resolveBossModelBottomY(bossModel, bossRootPart)
 	local lookVector = bossRootPart.CFrame.LookVector
 	local planarLook = Vector3.new(lookVector.X, 0, lookVector.Z)
 	if planarLook.Magnitude <= 0.001 then

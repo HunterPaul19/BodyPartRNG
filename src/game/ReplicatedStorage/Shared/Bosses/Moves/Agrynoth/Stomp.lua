@@ -149,10 +149,6 @@ local function raycastGroundNear(position: Vector3, bossModel: Model): Vector3?
 	return raycastResult.Position
 end
 
-local function withPosition(baseCFrame: CFrame, position: Vector3): CFrame
-	return CFrame.new(position) * (baseCFrame - baseCFrame.Position)
-end
-
 local function resolveImpactCFrame(bossModel: Model, bossRootPart: BasePart): CFrame
 	local footPart = resolveLeftFootPart(bossModel)
 	local rawImpactCFrame = if footPart then footPart.CFrame else bossRootPart.CFrame
@@ -163,10 +159,10 @@ local function resolveImpactCFrame(bossModel: Model, bossRootPart: BasePart): CF
 	local groundPosition = raycastGroundNear(rawImpactCFrame.Position, bossModel)
 	if groundPosition == nil then
 		warn("[AgrynothStomp] Could not raycast stomp floor. Falling back to foot/root position.")
-		return rawImpactCFrame
+		return CFrame.new(rawImpactCFrame.Position)
 	end
 
-	return withPosition(rawImpactCFrame, groundPosition)
+	return CFrame.new(groundPosition)
 end
 
 local function resolveHitboxCFrame(impactCFrame: CFrame): CFrame

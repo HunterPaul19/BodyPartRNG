@@ -63,7 +63,7 @@ function Handler:_startCatSpin(record: ActiveRecord, event: PresentationEvent)
 		return
 	end
 
-	self:playDelayedSoundClones(rootModel, castFolder, scaleMultiplier)
+	self:playAllSoundsFromConfiguredPositions(rootModel, scaleMultiplier)
 	self:emitEffectInstance(rootModel, activeWindowSeconds)
 end
 

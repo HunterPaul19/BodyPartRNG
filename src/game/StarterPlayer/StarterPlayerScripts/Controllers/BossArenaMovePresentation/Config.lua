@@ -12,6 +12,7 @@ local Config = {
 	},
 	Cleanup = {
 		VfxCleanupDelaySeconds = 3,
+		SfxCleanupDelaySeconds = 3,
 	},
 	Shake = {
 		ImpactMagnitude = 1.15,

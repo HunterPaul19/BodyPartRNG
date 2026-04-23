@@ -8,6 +8,7 @@ local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 
 local DAMAGE = 22
 local WARNING_SECONDS = 0.5
+local ERUPTION_DAMAGE_DELAY_SECONDS = 0.05
 local HITBOX_HEIGHT = 24
 local HITBOX_DURATION_SECONDS = 0.16
 local MAX_HITBOX_PARTS = 256
@@ -102,6 +103,18 @@ local function resolveFloorFootprintSize(): Vector3
 
 	warn("[Eruption] Missing floor VFX at ReplicatedStorage.GameAssets.VFX.MagmaFiend.EruptionThrow.Floor; using fallback footprint.")
 	return FALLBACK_FOOTPRINT_SIZE
+end
+
+local function resolveBossScaleMultiplier(context): number
+	return math.max(0.1, tonumber(context.bossDefinition and context.bossDefinition.scaleMultiplier) or 1)
+end
+
+local function scaleFootprintSize(footprintSize: Vector3, scaleMultiplier: number): Vector3
+	return Vector3.new(
+		math.max(0.1, footprintSize.X * scaleMultiplier),
+		math.max(0.01, footprintSize.Y * scaleMultiplier),
+		math.max(0.1, footprintSize.Z * scaleMultiplier)
+	)
 end
 
 local function buildFloorRaycastParams(bossModel: Model): RaycastParams
@@ -324,10 +337,17 @@ function Eruption.StartCast(context)
 
 		context.EmitPresentation("erupt", {
 			points = points,
+			scaleMultiplier = resolveBossScaleMultiplier(context),
 		})
-		spawnEruptionHitboxes(bossModel, points, hitTargets, activeHitboxes)
-		stopPresentation()
-		markComplete()
+		task.delay(ERUPTION_DAMAGE_DELAY_SECONDS, function()
+			if cancelled or completed or bossModel.Parent == nil then
+				return
+			end
+
+			spawnEruptionHitboxes(bossModel, points, hitTargets, activeHitboxes)
+			stopPresentation()
+			markComplete()
+		end)
 	end
 
 	local function handleSpawn()
@@ -336,7 +356,8 @@ function Eruption.StartCast(context)
 		end
 
 		spawnTriggered = true
-		local footprintSize = resolveFloorFootprintSize()
+		local scaleMultiplier = resolveBossScaleMultiplier(context)
+		local footprintSize = scaleFootprintSize(resolveFloorFootprintSize(), scaleMultiplier)
 		warningPoints = collectEruptionPoints(context, footprintSize)
 		if #warningPoints <= 0 then
 			warn("[Eruption] Spawn marker fired with no alive targets.")

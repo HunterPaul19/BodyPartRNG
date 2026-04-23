@@ -7,21 +7,43 @@ local Constants = {
 	},
 	Vfx = {
 		MASSIVE_GEEZER_EAT_CHICKEN_LEG_VFX_NAME = "ChickenLeg",
+		MASSIVE_GEEZER_EAT_CHICKEN_SOUNDS_NAME = "Sounds",
 		MASSIVE_GEEZER_EAT_CHICKEN_VFX_NAME = "EatChicken",
 		MASSIVE_GEEZER_VFX_FOLDER_NAME = "MassiveGeezer",
 	},
 	Timing = {
+		MASSIVE_GEEZER_EAT_CHICKEN_SOUND_CLEANUP_SECONDS = 8,
 		MASSIVE_GEEZER_EAT_CHICKEN_YAW_STEP_DEGREES = 15,
 	},
 }
 
 local MASSIVE_GEEZER_EAT_CHICKEN_LEG_VFX_NAME = Constants.Vfx.MASSIVE_GEEZER_EAT_CHICKEN_LEG_VFX_NAME
 local MASSIVE_GEEZER_EAT_CHICKEN_MODULE_ID = Constants.ModuleIds.MASSIVE_GEEZER_EAT_CHICKEN_MODULE_ID
+local MASSIVE_GEEZER_EAT_CHICKEN_SOUND_CLEANUP_SECONDS = Constants.Timing.MASSIVE_GEEZER_EAT_CHICKEN_SOUND_CLEANUP_SECONDS
+local MASSIVE_GEEZER_EAT_CHICKEN_SOUNDS_NAME = Constants.Vfx.MASSIVE_GEEZER_EAT_CHICKEN_SOUNDS_NAME
 local MASSIVE_GEEZER_EAT_CHICKEN_VFX_NAME = Constants.Vfx.MASSIVE_GEEZER_EAT_CHICKEN_VFX_NAME
 local MASSIVE_GEEZER_EAT_CHICKEN_YAW_STEP_DEGREES = Constants.Timing.MASSIVE_GEEZER_EAT_CHICKEN_YAW_STEP_DEGREES
 local MASSIVE_GEEZER_VFX_FOLDER_NAME = Constants.Vfx.MASSIVE_GEEZER_VFX_FOLDER_NAME
 
 local Handler = {}
+
+function Handler:_startEatChicken(record: ActiveRecord, event: PresentationEvent)
+	local soundsSource = self:resolveBossVfxInstance(
+		MASSIVE_GEEZER_VFX_FOLDER_NAME,
+		MASSIVE_GEEZER_EAT_CHICKEN_VFX_NAME,
+		MASSIVE_GEEZER_EAT_CHICKEN_SOUNDS_NAME
+	)
+	if soundsSource == nil then
+		return
+	end
+
+	local payload = event.payload
+	local scaleMultiplier = math.max(0.1, tonumber(payload and payload.scaleMultiplier) or 1)
+	local sounds = soundsSource:Clone()
+	sounds.Parent = self:_ensureCastFolder(record)
+	self:playTimedSounds(sounds, scaleMultiplier)
+	self:destroySoundAfter(sounds, MASSIVE_GEEZER_EAT_CHICKEN_SOUND_CLEANUP_SECONDS)
+end
 
 function Handler:_updateEatChickenBones(record: ActiveRecord, nowServerTime: number)
 	local boneModels = record.eatChickenBoneModels
@@ -190,6 +212,7 @@ end
 Handler.moduleIds = {
 	MASSIVE_GEEZER_EAT_CHICKEN_MODULE_ID,
 }
+Handler.start = Handler._startEatChicken
 Handler.update = Handler._updateEatChickenBones
 Handler.actions = {
 	spawnChicken = Handler._spawnEatChickenLegs,

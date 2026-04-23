@@ -6,13 +6,14 @@ local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 
-local DAMAGE = 18
+local DAMAGE = 10
 local AOE_RADIUS = 14
 local HITBOX_DURATION_SECONDS = 0.12
 local MAX_HITBOX_PARTS = 128
 local FIRE_INTERVAL_SECONDS = 0.3
-local MAX_MISSILES = 12
+local MAX_MISSILES = 18
 local PROJECTILE_TRAVEL_SECONDS = 94 / 60
+local POST_FINAL_IMPACT_PRESENTATION_HOLD_SECONDS = 0.35
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "Destroyer3000"
 local ANIMATION_NAME = "MissileBarrage"
@@ -272,6 +273,7 @@ function MissileBarrage.StartCast(context)
 	local pendingImpactCount = 0
 	local recoveryEndsAt = nil :: number?
 	local pendingImpactTokens = {}
+	local completionHoldToken = nil :: any
 
 	local leftShoulderAttachment = resolveAttachment(bossModel, LEFT_SHOULDER_ATTACHMENT_NAME)
 	local rightShoulderAttachment = resolveAttachment(bossModel, RIGHT_SHOULDER_ATTACHMENT_NAME)
@@ -303,10 +305,27 @@ function MissileBarrage.StartCast(context)
 			return
 		end
 
+		completionHoldToken = nil
 		completed = true
 		isShooting = false
 		recoveryEndsAt = os.clock() + (tonumber(context.move and context.move.recoverySeconds) or 0)
 		stopPresentation()
+	end
+
+	local function markCompleteAfterFinalImpactHold()
+		if completed or completionHoldToken ~= nil then
+			return
+		end
+
+		local token = {}
+		completionHoldToken = token
+		task.delay(POST_FINAL_IMPACT_PRESENTATION_HOLD_SECONDS, function()
+			if completionHoldToken ~= token or cancelled then
+				return
+			end
+
+			markComplete()
+		end)
 	end
 
 	local function finishShooting()
@@ -328,6 +347,7 @@ function MissileBarrage.StartCast(context)
 
 		cleanedUp = true
 		isShooting = false
+		completionHoldToken = nil
 		for token in pairs(pendingImpactTokens) do
 			pendingImpactTokens[token] = nil
 		end
@@ -413,7 +433,7 @@ function MissileBarrage.StartCast(context)
 			})
 
 			if shootingFinished and pendingImpactCount <= 0 then
-				markComplete()
+				markCompleteAfterFinalImpactHold()
 			end
 		end)
 

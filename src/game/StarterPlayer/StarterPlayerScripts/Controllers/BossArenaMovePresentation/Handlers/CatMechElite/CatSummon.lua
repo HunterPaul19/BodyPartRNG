@@ -11,6 +11,7 @@ local Constants = {
 		CAT_SUMMON_RIGHT_HAND_MODEL_NAME = "RightHand",
 		CAT_SUMMON_ROOT_PART_MODEL_NAME = "RootPart",
 		CAT_SUMMON_IMPACT_MODEL_NAME = "Impact",
+		CAT_SUMMON_SOUNDS_FOLDER_NAME = "Sounds",
 	},
 	Timing = {
 		CAT_SUMMON_ATTACHED_LIFETIME_SECONDS = 4.25,
@@ -18,6 +19,7 @@ local Constants = {
 	},
 }
 
+local DEFAULT_CAT_SUMMON_YAW_OFFSETS_DEGREES = { 0, 15, 30, -15, -30 }
 local CAT_MECH_ELITE_CAT_SUMMON_MODULE_ID = Constants.ModuleIds.CAT_MECH_ELITE_CAT_SUMMON_MODULE_ID
 local CAT_MECH_ELITE_VFX_FOLDER_NAME = Constants.Vfx.CAT_MECH_ELITE_VFX_FOLDER_NAME
 local CAT_SUMMON_ATTACHED_LIFETIME_SECONDS = Constants.Timing.CAT_SUMMON_ATTACHED_LIFETIME_SECONDS
@@ -25,9 +27,35 @@ local CAT_SUMMON_IMPACT_LIFETIME_SECONDS = Constants.Timing.CAT_SUMMON_IMPACT_LI
 local CAT_SUMMON_IMPACT_MODEL_NAME = Constants.Vfx.CAT_SUMMON_IMPACT_MODEL_NAME
 local CAT_SUMMON_RIGHT_HAND_MODEL_NAME = Constants.Vfx.CAT_SUMMON_RIGHT_HAND_MODEL_NAME
 local CAT_SUMMON_ROOT_PART_MODEL_NAME = Constants.Vfx.CAT_SUMMON_ROOT_PART_MODEL_NAME
+local CAT_SUMMON_SOUNDS_FOLDER_NAME = Constants.Vfx.CAT_SUMMON_SOUNDS_FOLDER_NAME
 local CAT_SUMMON_VFX_NAME = Constants.Vfx.CAT_SUMMON_VFX_NAME
 
 local Handler = {}
+
+local function resolveCatSummonYawOffsetsDegrees(payload: any): { number }
+	local yawOffsets = payload and payload.yawOffsetsDegrees
+	if typeof(yawOffsets) ~= "table" then
+		return DEFAULT_CAT_SUMMON_YAW_OFFSETS_DEGREES
+	end
+
+	local resolvedOffsets = {}
+	for _, offsetDegrees in ipairs(yawOffsets) do
+		local numericOffset = tonumber(offsetDegrees)
+		if numericOffset ~= nil then
+			table.insert(resolvedOffsets, numericOffset)
+		end
+	end
+
+	if #resolvedOffsets <= 0 then
+		return DEFAULT_CAT_SUMMON_YAW_OFFSETS_DEGREES
+	end
+
+	return resolvedOffsets
+end
+
+local function getYawOffsetRootCFrame(bossRootPart: BasePart, offsetDegrees: number): CFrame
+	return bossRootPart.CFrame * CFrame.Angles(0, math.rad(offsetDegrees), 0)
+end
 
 function Handler:_resolveCatSummonBossModel(record: ActiveRecord?, event: PresentationEvent): Model?
 	local eventBossModel = event.bossModel
@@ -88,6 +116,17 @@ function Handler:_resolveCatSummonCastFolder(record: ActiveRecord?): Folder
 	return self:_ensureVisualFolder()
 end
 
+function Handler:_attachCatSummonRootModel(rootModel: Model, bossRootPart: BasePart, rootCFrame: CFrame): boolean
+	local primaryPart = self:resolveEffectModelPrimaryPart(rootModel)
+	if primaryPart == nil then
+		return false
+	end
+
+	rootModel:PivotTo(rootCFrame)
+	self:createWeld(primaryPart, bossRootPart)
+	return true
+end
+
 function Handler:_startCatSummon(record: ActiveRecord, event: PresentationEvent)
 	local bossModel = self:_resolveCatSummonBossModel(record, event)
 	if bossModel == nil then
@@ -110,6 +149,11 @@ function Handler:_startCatSummon(record: ActiveRecord, event: PresentationEvent)
 		CAT_MECH_ELITE_VFX_FOLDER_NAME,
 		CAT_SUMMON_VFX_NAME,
 		CAT_SUMMON_ROOT_PART_MODEL_NAME
+	)
+	local soundsSource = self:resolveBossVfxInstance(
+		CAT_MECH_ELITE_VFX_FOLDER_NAME,
+		CAT_SUMMON_VFX_NAME,
+		CAT_SUMMON_SOUNDS_FOLDER_NAME
 	)
 	if rightHandSource == nil or rootPartSource == nil then
 		self:warnWithPrefix("Cat Summon RightHand/RootPart VFX models are missing from ReplicatedStorage.GameAssets.VFX.")
@@ -149,7 +193,7 @@ function Handler:_startCatSummon(record: ActiveRecord, event: PresentationEvent)
 		return
 	end
 
-	self:playDelayedSoundClones(rootPartSource, castFolder, scaleMultiplier)
+	self:playDelayedSoundClones(soundsSource or rootPartSource, castFolder, scaleMultiplier)
 	self:emitEffectInstance(rightHandModel, CAT_SUMMON_ATTACHED_LIFETIME_SECONDS)
 end
 
@@ -178,29 +222,39 @@ function Handler:_rootPartCatSummon(record: ActiveRecord?, event: PresentationEv
 
 	local payload = event.payload
 	local scaleMultiplier = math.max(0.1, tonumber(payload and payload.scaleMultiplier) or 1)
+	local yawOffsetsDegrees = resolveCatSummonYawOffsetsDegrees(payload)
 	local castFolder = self:_resolveCatSummonCastFolder(record)
-	local rootModel = rootPartSource:Clone()
-	rootModel:ScaleTo(scaleMultiplier)
-	self:prepareAttachedEffectModel(rootModel)
-	self:enableVfxDescendants(rootModel)
-	self:scaleAttachedSounds(rootModel, scaleMultiplier)
-	rootModel.Parent = castFolder
+	local rootModels = {}
 	if record ~= nil then
-		record.rootModel = rootModel
+		record.rootModels = rootModels
+		record.rootModel = nil
 	end
 
-	if not self:attachEffectModel(rootModel, bossRootPart) then
-		self:warnWithPrefix("Cat Summon RootPart VFX model is missing BasePart configuration.")
-		rootModel:Destroy()
-		if record ~= nil then
-			record.rootModel = nil
+	local missingConfiguration = false
+	for _, offsetDegrees in ipairs(yawOffsetsDegrees) do
+		local rootModel = rootPartSource:Clone()
+		rootModel:ScaleTo(scaleMultiplier)
+		self:prepareAttachedEffectModel(rootModel)
+		self:enableVfxDescendants(rootModel)
+		self:scaleAttachedSounds(rootModel, scaleMultiplier)
+		rootModel.Parent = castFolder
+
+		if not self:_attachCatSummonRootModel(rootModel, bossRootPart, getYawOffsetRootCFrame(bossRootPart, offsetDegrees)) then
+			missingConfiguration = true
+			rootModel:Destroy()
+			continue
 		end
-		return
+
+		table.insert(rootModels, rootModel)
+		if record ~= nil and record.rootModel == nil then
+			record.rootModel = rootModel
+		end
+
+		self:emitEffectInstance(rootModel, CAT_SUMMON_ATTACHED_LIFETIME_SECONDS)
 	end
 
-	self:emitEffectInstance(rootModel, CAT_SUMMON_ATTACHED_LIFETIME_SECONDS)
-	if record == nil then
-		self:destroyVfxAfter(rootModel, CAT_SUMMON_ATTACHED_LIFETIME_SECONDS)
+	if missingConfiguration then
+		self:warnWithPrefix("Cat Summon RootPart VFX model is missing BasePart configuration.")
 	end
 end
 
@@ -229,17 +283,21 @@ function Handler:_impactCatSummon(record: ActiveRecord?, event: PresentationEven
 
 	local payload = event.payload
 	local scaleMultiplier = math.max(0.1, tonumber(payload and payload.scaleMultiplier) or 1)
-	local impactModel = impactSource:Clone()
-	impactModel:ScaleTo(scaleMultiplier)
-	self:prepareMovingEffectModel(impactModel)
-	self:enableVfxDescendants(impactModel)
-	self:scaleAttachedSounds(impactModel, scaleMultiplier)
-	impactModel.Parent = self:_ensureVisualFolder()
-	impactModel:PivotTo(bossRootPart.CFrame)
+	local yawOffsetsDegrees = resolveCatSummonYawOffsetsDegrees(payload)
+	local visualFolder = self:_ensureVisualFolder()
+	for _, offsetDegrees in ipairs(yawOffsetsDegrees) do
+		local impactModel = impactSource:Clone()
+		impactModel:ScaleTo(scaleMultiplier)
+		self:prepareMovingEffectModel(impactModel)
+		self:enableVfxDescendants(impactModel)
+		self:scaleAttachedSounds(impactModel, scaleMultiplier)
+		impactModel.Parent = visualFolder
+		impactModel:PivotTo(getYawOffsetRootCFrame(bossRootPart, offsetDegrees))
+
+		self:emitEffectInstance(impactModel, CAT_SUMMON_IMPACT_LIFETIME_SECONDS)
+	end
 
 	self:_shakeImpact()
-	self:emitEffectInstance(impactModel, CAT_SUMMON_IMPACT_LIFETIME_SECONDS)
-	self:destroyVfxAfter(impactModel, CAT_SUMMON_IMPACT_LIFETIME_SECONDS)
 end
 
 function Handler:_rootPartCatSummonWithoutRecord(event: PresentationEvent)

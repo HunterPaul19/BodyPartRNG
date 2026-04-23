@@ -92,14 +92,15 @@ function Handler:_impactMechaKick(record: ActiveRecord, event: PresentationEvent
 
 	local scaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1)
 	local explosionModel = explosionSource:Clone()
-	explosionModel:ScaleTo(scaleMultiplier)
-	self:prepareMovingEffectModel(explosionModel)
-	explosionModel:PivotTo(payload.impactCFrame)
+	if not self:pivotFloorEffectInstance(explosionModel, payload.impactCFrame, scaleMultiplier) then
+		self:warnWithPrefix("Mecha Kick Explosion VFX model cannot be floor-pivoted.")
+		explosionModel:Destroy()
+		return
+	end
 	explosionModel.Parent = self:_ensureVisualFolder()
 
 	self:playAllSounds(explosionModel, scaleMultiplier)
 	self:emitEffectInstance(explosionModel, MECHA_KICK_EXPLOSION_VFX_LIFETIME_SECONDS)
-	self:destroyVfxAfter(explosionModel, MECHA_KICK_EXPLOSION_VFX_LIFETIME_SECONDS)
 	self:_shakeImpact()
 end
 

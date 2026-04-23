@@ -12,8 +12,12 @@ local FINAL_DAMAGE = 10
 local TICK_INTERVAL_SECONDS = 1
 local HAZARD_DURATION_SECONDS = 3
 local FINAL_HITBOX_DURATION_SECONDS = 0.12
-local HITBOX_WIDTH = 30
-local HITBOX_DEPTH = 30
+local MIN_HITBOX_WIDTH = 48
+local MIN_HITBOX_DEPTH = 52
+local ROOT_WIDTH_SCALE = 3.2
+local ROOT_DEPTH_SCALE = 4.2
+local BOUNDS_WIDTH_SCALE = 1.35
+local BOUNDS_DEPTH_SCALE = 1.1
 local MIN_HITBOX_HEIGHT = 12
 local MAX_HITBOX_PARTS = 192
 local ANIMATION_FADE_SECONDS = 0.08
@@ -151,6 +155,24 @@ local function resolveStandingHeight(bossHumanoid: Humanoid?, bossRootPart: Base
 	return math.max((bossRootPart.Size.Y * 0.5) + bossHumanoid.HipHeight, bossRootPart.Size.Y)
 end
 
+local function resolveHazardFootprint(bossModel: Model, bossRootPart: BasePart): (number, number)
+	local _, boundingSize = bossModel:GetBoundingBox()
+	local bossBoundsWidth = math.min(boundingSize.X, boundingSize.Z)
+	local bossBoundsDepth = math.max(boundingSize.X, boundingSize.Z)
+	local width = math.max(
+		MIN_HITBOX_WIDTH,
+		bossRootPart.Size.X * ROOT_WIDTH_SCALE,
+		bossBoundsWidth * BOUNDS_WIDTH_SCALE
+	)
+	local depth = math.max(
+		MIN_HITBOX_DEPTH,
+		bossRootPart.Size.Z * ROOT_DEPTH_SCALE,
+		bossBoundsDepth * BOUNDS_DEPTH_SCALE
+	)
+
+	return width, depth
+end
+
 local function resolveHazardGeometry(context): (CFrame, Vector3)
 	local bossModel = context.bossModel
 	local bossHumanoid = context.bossHumanoid
@@ -163,7 +185,8 @@ local function resolveHazardGeometry(context): (CFrame, Vector3)
 		right = right.Unit
 	end
 
-	local centerPosition = bossRootPart.Position + (forward * ((bossRootPart.Size.Z * 0.5) + (HITBOX_DEPTH * 0.5)))
+	local hitboxWidth, hitboxDepth = resolveHazardFootprint(bossModel, bossRootPart)
+	local centerPosition = bossRootPart.Position + (forward * ((bossRootPart.Size.Z * 0.5) + (hitboxDepth * 0.5)))
 	local groundPosition = raycastGroundNear(centerPosition, bossModel) or centerPosition
 	local standingHeight = resolveStandingHeight(bossHumanoid, bossRootPart)
 	local topY = math.max(bossRootPart.Position.Y + (bossRootPart.Size.Y * 0.5), bossRootPart.Position.Y + standingHeight)
@@ -175,7 +198,7 @@ local function resolveHazardGeometry(context): (CFrame, Vector3)
 		-forward
 	)
 
-	return cframe, Vector3.new(HITBOX_WIDTH, height, HITBOX_DEPTH)
+	return cframe, Vector3.new(hitboxWidth, height, hitboxDepth)
 end
 
 local function resolveLaunchDirection(hazardCFrame: CFrame): Vector3

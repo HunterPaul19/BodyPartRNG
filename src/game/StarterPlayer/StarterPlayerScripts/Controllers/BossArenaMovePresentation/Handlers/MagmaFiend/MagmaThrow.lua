@@ -14,17 +14,23 @@ local Constants = {
 		MAGMA_THROW_VFX_NAME = "MagmaThrow",
 	},
 	Timing = {
-		MAGMA_THROW_VFX_LIFETIME_SECONDS = 2,
+		MAGMA_THROW_EXPLOSION_VFX_LIFETIME_SECONDS = 4,
+		MAGMA_THROW_LEFT_HAND_VFX_LIFETIME_SECONDS = 2,
+		MAGMA_THROW_ROOT_PART_EMIT_DELAY_SECONDS = 92 / 60,
+		MAGMA_THROW_ROOT_PART_VFX_LIFETIME_SECONDS = 5,
 	},
 }
 
 local MAGMA_FIEND_VFX_FOLDER_NAME = Constants.Vfx.MAGMA_FIEND_VFX_FOLDER_NAME
 local MAGMA_THROW_EXPLOSION_MODEL_NAME = Constants.Vfx.MAGMA_THROW_EXPLOSION_MODEL_NAME
+local MAGMA_THROW_EXPLOSION_VFX_LIFETIME_SECONDS = Constants.Timing.MAGMA_THROW_EXPLOSION_VFX_LIFETIME_SECONDS
 local MAGMA_THROW_LEFT_HAND_MODEL_NAME = Constants.Vfx.MAGMA_THROW_LEFT_HAND_MODEL_NAME
+local MAGMA_THROW_LEFT_HAND_VFX_LIFETIME_SECONDS = Constants.Timing.MAGMA_THROW_LEFT_HAND_VFX_LIFETIME_SECONDS
 local MAGMA_THROW_MODULE_ID = Constants.ModuleIds.MAGMA_THROW_MODULE_ID
 local MAGMA_THROW_PROJECTILE_MODEL_NAME = Constants.Vfx.MAGMA_THROW_PROJECTILE_MODEL_NAME
+local MAGMA_THROW_ROOT_PART_EMIT_DELAY_SECONDS = Constants.Timing.MAGMA_THROW_ROOT_PART_EMIT_DELAY_SECONDS
 local MAGMA_THROW_ROOT_PART_MODEL_NAME = Constants.Vfx.MAGMA_THROW_ROOT_PART_MODEL_NAME
-local MAGMA_THROW_VFX_LIFETIME_SECONDS = Constants.Timing.MAGMA_THROW_VFX_LIFETIME_SECONDS
+local MAGMA_THROW_ROOT_PART_VFX_LIFETIME_SECONDS = Constants.Timing.MAGMA_THROW_ROOT_PART_VFX_LIFETIME_SECONDS
 local MAGMA_THROW_VFX_NAME = Constants.Vfx.MAGMA_THROW_VFX_NAME
 
 local Handler = {}
@@ -58,8 +64,9 @@ function Handler:_startMagmaThrow(record: ActiveRecord, event: PresentationEvent
 	end
 
 	local bossLeftHand = self:resolveBossLeftHandPart(bossModel)
-	if bossLeftHand == nil then
-		self:warnWithPrefix("Magma Throw presentation could not resolve the live boss LeftHand.")
+	local bossRootPart = self:resolveBossRootPart(bossModel)
+	if bossLeftHand == nil or bossRootPart == nil then
+		self:warnWithPrefix("Magma Throw presentation could not resolve the live boss LeftHand/RootPart.")
 		self:_cleanupRecord(record)
 		return
 	end
@@ -69,8 +76,13 @@ function Handler:_startMagmaThrow(record: ActiveRecord, event: PresentationEvent
 		MAGMA_THROW_VFX_NAME,
 		MAGMA_THROW_LEFT_HAND_MODEL_NAME
 	)
-	if leftHandSource == nil then
-		self:warnWithPrefix("Magma Throw left-hand VFX model is missing from ReplicatedStorage.GameAssets.VFX.")
+	local rootSource = self:resolveBossVfxModel(
+		MAGMA_FIEND_VFX_FOLDER_NAME,
+		MAGMA_THROW_VFX_NAME,
+		MAGMA_THROW_ROOT_PART_MODEL_NAME
+	)
+	if leftHandSource == nil or rootSource == nil then
+		self:warnWithPrefix("Magma Throw left-hand/root VFX models are missing from ReplicatedStorage.GameAssets.VFX.")
 		self:_cleanupRecord(record)
 		return
 	end
@@ -78,50 +90,32 @@ function Handler:_startMagmaThrow(record: ActiveRecord, event: PresentationEvent
 	local castFolder = self:_ensureCastFolder(record)
 	local scaleMultiplier = math.max(0.1, tonumber(event.payload and event.payload.scaleMultiplier) or 1)
 	local leftHandModel = leftHandSource:Clone()
+	local rootModel = rootSource:Clone()
 	leftHandModel:ScaleTo(scaleMultiplier)
+	rootModel:ScaleTo(scaleMultiplier)
 	self:prepareAttachedEffectModel(leftHandModel)
+	self:prepareAttachedEffectModel(rootModel)
 	self:scaleAttachedSounds(leftHandModel, scaleMultiplier)
+	self:scaleAttachedSounds(rootModel, scaleMultiplier)
 	leftHandModel.Parent = castFolder
+	rootModel.Parent = castFolder
 	record.leftHandModel = leftHandModel
+	record.rootModel = rootModel
 
-	if not self:attachEffectModel(leftHandModel, bossLeftHand) then
-		self:warnWithPrefix("Magma Throw left-hand VFX model is missing BasePart configuration.")
+	if not self:attachEffectModel(leftHandModel, bossLeftHand) or not self:attachEffectModel(rootModel, bossRootPart) then
+		self:warnWithPrefix("Magma Throw left-hand/root VFX models are missing BasePart configuration.")
 		self:_cleanupRecord(record)
 		return
 	end
 
 	self:playAllSoundsFromConfiguredPositions(leftHandModel, scaleMultiplier)
 	self:emitEffectInstance(leftHandModel)
-end
-
-function Handler:_emitMagmaThrowRoot(record: ActiveRecord, event: PresentationEvent)
-	local bossRootPart = self:resolveBossRootPart(event.bossModel)
-	if bossRootPart == nil then
-		return
-	end
-
-	local rootSource = self:resolveBossVfxModel(
-		MAGMA_FIEND_VFX_FOLDER_NAME,
-		MAGMA_THROW_VFX_NAME,
-		MAGMA_THROW_ROOT_PART_MODEL_NAME
+	self:playTimedSounds(rootModel, scaleMultiplier)
+	self:emitEffectInstanceAfter(
+		rootModel,
+		MAGMA_THROW_ROOT_PART_VFX_LIFETIME_SECONDS,
+		MAGMA_THROW_ROOT_PART_EMIT_DELAY_SECONDS
 	)
-	if rootSource == nil then
-		self:warnWithPrefix("Magma Throw RootPart VFX model is missing from ReplicatedStorage.GameAssets.VFX.")
-		return
-	end
-
-	local payload = event.payload
-	local scaleMultiplier = math.max(0.1, tonumber(payload and payload.scaleMultiplier) or 1)
-	local rootModel = rootSource:Clone()
-	rootModel:ScaleTo(scaleMultiplier)
-	self:prepareMovingEffectModel(rootModel)
-	rootModel:PivotTo(bossRootPart.CFrame)
-	rootModel.Parent = self:_ensureCastFolder(record)
-	record.rootModel = rootModel
-
-	self:playAllSoundsFromConfiguredPositions(rootModel, scaleMultiplier)
-	self:emitEffectInstance(rootModel, MAGMA_THROW_VFX_LIFETIME_SECONDS)
-	self:destroyVfxAfter(rootModel, MAGMA_THROW_VFX_LIFETIME_SECONDS)
 end
 
 function Handler:_throwMagmaThrow(record: ActiveRecord, event: PresentationEvent)
@@ -155,10 +149,8 @@ function Handler:_throwMagmaThrow(record: ActiveRecord, event: PresentationEvent
 	if leftHandModel and leftHandModel.Parent then
 		visualStartPosition = leftHandModel:GetPivot().Position
 		self:setBasePartTransparency(leftHandModel, 1)
-		self:destroyVfxAfter(leftHandModel, MAGMA_THROW_VFX_LIFETIME_SECONDS)
+		self:destroyVfxAfter(leftHandModel, MAGMA_THROW_LEFT_HAND_VFX_LIFETIME_SECONDS)
 	end
-
-	self:_emitMagmaThrowRoot(record, event)
 
 	local projectileModel = projectileSource:Clone()
 	projectileModel:ScaleTo(scaleMultiplier)
@@ -226,8 +218,7 @@ function Handler:_impactMagmaThrow(record: ActiveRecord, event: PresentationEven
 	explosionModel.Parent = self:_ensureVisualFolder()
 
 	self:playAllSounds(explosionModel, scaleMultiplier)
-	self:emitEffectInstance(explosionModel, MAGMA_THROW_VFX_LIFETIME_SECONDS)
-	self:destroyVfxAfter(explosionModel, MAGMA_THROW_VFX_LIFETIME_SECONDS)
+	self:emitEffectInstance(explosionModel, MAGMA_THROW_EXPLOSION_VFX_LIFETIME_SECONDS)
 	self:_cleanupRecord(record)
 end
 

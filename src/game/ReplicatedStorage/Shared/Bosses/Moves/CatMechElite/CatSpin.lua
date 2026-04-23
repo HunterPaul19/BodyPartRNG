@@ -20,7 +20,8 @@ local MAX_HITBOX_PARTS = 192
 local MIN_HITBOX_RADIUS = 14
 local MAX_HITBOX_RADIUS = 48
 local ROOT_RADIUS_MULTIPLIER = 1.75
-local MIN_HITBOX_HEIGHT = 8
+local GROUNDED_HITBOX_HEIGHT = 12
+local HITBOX_GROUND_INSET = 2
 local FLOOR_RAYCAST_START_HEIGHT = 40
 local FLOOR_RAYCAST_DISTANCE = 500
 
@@ -115,14 +116,6 @@ local function raycastGroundNear(position: Vector3, bossModel: Model): Vector3?
 	return raycastResult.Position
 end
 
-local function resolveStandingHeight(bossHumanoid: Humanoid?, bossRootPart: BasePart): number
-	if bossHumanoid == nil then
-		return bossRootPart.Size.Y
-	end
-
-	return math.max((bossRootPart.Size.Y * 0.5) + bossHumanoid.HipHeight, bossRootPart.Size.Y)
-end
-
 local function resolveHitboxRadius(bossDefinition: any, bossRootPart: BasePart): number
 	local scaleMultiplier = math.max(0.1, tonumber(bossDefinition and bossDefinition.scaleMultiplier) or 1)
 	local scaleFloor = MIN_HITBOX_RADIUS * math.clamp(math.sqrt(scaleMultiplier) / math.sqrt(12.5), 0.75, 1.35)
@@ -140,13 +133,14 @@ local function resolveHitboxGeometry(context): (CFrame?, Vector3?)
 
 	local groundPosition = raycastGroundNear(bossRootPart.Position, bossModel)
 	local groundY = if groundPosition then groundPosition.Y else bossRootPart.Position.Y - (bossRootPart.Size.Y * 0.5)
-	local standingHeight = resolveStandingHeight(context.bossHumanoid, bossRootPart)
-	local topY = math.max(bossRootPart.Position.Y + (bossRootPart.Size.Y * 0.5), bossRootPart.Position.Y + standingHeight)
-	local height = math.max(MIN_HITBOX_HEIGHT, topY - groundY)
 	local radius = resolveHitboxRadius(context.bossDefinition, bossRootPart)
-	local centerPosition = Vector3.new(bossRootPart.Position.X, groundY + (height * 0.5), bossRootPart.Position.Z)
+	local centerPosition = Vector3.new(
+		bossRootPart.Position.X,
+		groundY + (GROUNDED_HITBOX_HEIGHT * 0.5) - HITBOX_GROUND_INSET,
+		bossRootPart.Position.Z
+	)
 
-	return CFrame.new(centerPosition), Vector3.new(radius * 2, height, radius * 2)
+	return CFrame.new(centerPosition), Vector3.new(radius * 2, GROUNDED_HITBOX_HEIGHT, radius * 2)
 end
 
 local function applyDamage(targetModel: Model)

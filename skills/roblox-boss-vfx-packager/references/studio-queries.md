@@ -470,6 +470,7 @@ local PROPERTY_NAMES = {
 		"Texture", "Transparency", "ZOffset", "EmissionDirection", "Enabled", "Lifetime",
 		"Rate", "Rotation", "RotSpeed", "Speed", "SpreadAngle", "Shape", "ShapeInOut",
 		"ShapeStyle", "Acceleration", "Drag", "LockedToPart", "TimeScale", "VelocityInheritance",
+		"FlipbookFramerate", "FlipbookLayout", "FlipbookMode", "FlipbookStartRandom",
 	},
 	Trail = {
 		"Color", "Texture", "TextureLength", "TextureMode", "Transparency", "WidthScale",

@@ -7,16 +7,16 @@ local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 
 local DAMAGE = 22
-local WARNING_SECONDS = 107 / 60
-local RISE_DURATION_SECONDS = 0.45
-local TREE_HOLD_SECONDS = 0.75
+local FLOOR_CUE_DELAY_SECONDS = 107 / 60
+local TREE_RISE_START_DELAY_SECONDS = 163 / 60
+local RISE_DURATION_SECONDS = (183 - 163) / 60
+local CAST_END_DELAY_SECONDS = 467 / 60
 local TREE_SCALE_MULTIPLIER = 4.5
 local HITBOX_DURATION_SECONDS = RISE_DURATION_SECONDS
 local MAX_HITBOX_PARTS = 256
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "BroccoliBro"
 local ANIMATION_NAME = "BroccoliSprout"
-local SPAWN_MARKER_NAME = "Spawn"
 local VFX_FOLDER_NAME = "BroccoliBro"
 local SPROUT_VFX_FOLDER_NAME = "BroccoliSprout"
 local FLOOR_VFX_MODEL_NAME = "Floor"
@@ -403,7 +403,7 @@ function BroccoliSprout.StartCast(context)
 	local completed = false
 	local cancelled = false
 	local cleanedUp = false
-	local spawnTriggered = false
+	local sproutTriggered = false
 	local presentationStopped = false
 	local recoveryEndsAt = nil :: number?
 	local sproutPoints = collectSproutPoints(context, geometry)
@@ -455,14 +455,29 @@ function BroccoliSprout.StartCast(context)
 		end
 	end
 
+	local function emitFloor()
+		if cancelled or completed or bossModel.Parent == nil then
+			return
+		end
+
+		if #sproutPoints <= 0 then
+			return
+		end
+
+		context.EmitPresentation("floor", {
+			points = sproutPoints,
+			scaleMultiplier = TREE_SCALE_MULTIPLIER,
+		})
+	end
+
 	local function sprout()
 		if cancelled or completed or bossModel.Parent == nil then
 			return
 		end
 
-		spawnTriggered = true
+		sproutTriggered = true
 		if #sproutPoints <= 0 then
-			warn("[BroccoliSprout] Spawn marker fired with no alive targets.")
+			warn("[BroccoliSprout] Rise timing reached with no alive targets.")
 			stopPresentation()
 			markComplete()
 			return
@@ -476,19 +491,18 @@ function BroccoliSprout.StartCast(context)
 			treeUprightAxis = geometry.treeUprightAxis,
 		})
 		spawnSproutHitboxes(bossModel, sproutPoints, hitTargets, activeHitboxes)
-
-		task.delay(RISE_DURATION_SECONDS + TREE_HOLD_SECONDS, function()
-			if cancelled then
-				return
-			end
-			stopPresentation()
-			markComplete()
-		end)
 	end
 
-	track = profile:PlayAnimation(animationInstance, Enum.AnimationPriority.Action, 1, {
-		[SPAWN_MARKER_NAME] = sprout,
-	}, ANIMATION_FADE_SECONDS)
+	local function completeCast()
+		if cancelled then
+			return
+		end
+
+		stopPresentation()
+		markComplete()
+	end
+
+	track = profile:PlayAnimation(animationInstance, Enum.AnimationPriority.Action, 1, {}, ANIMATION_FADE_SECONDS)
 	if track == nil then
 		warn("[BroccoliSprout] Failed to play BroccoliSprout animation.")
 		return nil
@@ -501,33 +515,22 @@ function BroccoliSprout.StartCast(context)
 	})
 
 	if #sproutPoints > 0 then
-		context.EmitPresentation("warn", {
-			warningSeconds = WARNING_SECONDS,
-			points = sproutPoints,
-			riseDurationSeconds = RISE_DURATION_SECONDS,
-			scaleMultiplier = TREE_SCALE_MULTIPLIER,
-			treeRotationCorrection = geometry.treeRotationCorrection,
-			treeUprightAxis = geometry.treeUprightAxis,
-		})
+		task.delay(FLOOR_CUE_DELAY_SECONDS, emitFloor)
+		task.delay(TREE_RISE_START_DELAY_SECONDS, sprout)
+		task.delay(CAST_END_DELAY_SECONDS, completeCast)
 	else
 		warn("[BroccoliSprout] Cast started with no alive targets.")
+		stopPresentation()
+		markComplete()
 	end
 
 	track.Looped = false
 	stoppedConnection = track.Stopped:Connect(function()
 		disconnectStoppedConnection()
-		if cancelled then
+		if cancelled or completed or sproutTriggered then
 			return
 		end
-		if not spawnTriggered then
-			warn(string.format(
-				"[BroccoliSprout] Animation '%s' completed without firing the '%s' marker.",
-				animationInstance.Name,
-				SPAWN_MARKER_NAME
-			))
-			stopPresentation()
-			markComplete()
-		end
+		warn(string.format("[BroccoliSprout] Animation '%s' stopped before the Moon rise timing.", animationInstance.Name))
 	end)
 
 	return {

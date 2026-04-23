@@ -151,19 +151,18 @@ function Handler:_eruptMagmaEruption(record: ActiveRecord, event: PresentationEv
 		return
 	end
 
+	local scaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1)
 	for _, pointData in ipairs(payload.points) do
 		if typeof(pointData) ~= "table" or typeof(pointData.floorCFrame) ~= "CFrame" then
 			continue
 		end
 
 		local floorModel = floorSource:Clone()
-		self:prepareMovingEffectModel(floorModel)
-		floorModel:PivotTo(pointData.floorCFrame)
+		self:pivotFloorEffectInstance(floorModel, pointData.floorCFrame, scaleMultiplier)
 		floorModel.Parent = self:_ensureVisualFolder()
 
-		self:playTimedSounds(floorModel, math.max(0.1, tonumber(payload.scaleMultiplier) or 1))
+		self:playTimedSounds(floorModel, scaleMultiplier)
 		self:emitEffectInstance(floorModel, MAGMA_ERUPTION_VFX_LIFETIME_SECONDS)
-		self:destroyVfxAfter(floorModel, MAGMA_ERUPTION_VFX_LIFETIME_SECONDS)
 	end
 
 	self:_cleanupRecord(record)

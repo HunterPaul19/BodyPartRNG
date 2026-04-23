@@ -29,6 +29,57 @@ local MECHA_PUNCH_VFX_NAME = Constants.Vfx.MECHA_PUNCH_VFX_NAME
 
 local Handler = {}
 
+local IMPACT_SOUND_NAMES = {
+	Explosion = true,
+	Explosion2 = true,
+	Explosion3 = true,
+}
+
+local function isImpactSound(sound: Sound): boolean
+	return IMPACT_SOUND_NAMES[sound.Name] == true
+end
+
+local function playTimedNonImpactSounds(context, root: Instance, scaleMultiplier: number)
+	if root:IsA("Sound") and not isImpactSound(root) then
+		context:playTimedSound(root, scaleMultiplier)
+	end
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("Sound") and not isImpactSound(descendant) then
+			context:playTimedSound(descendant, scaleMultiplier)
+		end
+	end
+end
+
+local function resolveImpactSoundParent(context, impactInstance: Instance): Instance
+	if impactInstance:IsA("Model") then
+		return context:resolveEffectModelPrimaryPart(impactInstance) or impactInstance
+	end
+	if impactInstance:IsA("BasePart") then
+		return impactInstance
+	end
+
+	return impactInstance
+end
+
+local function playImpactSoundClones(context, sourceRoot: Instance?, impactInstance: Instance, scaleMultiplier: number)
+	if sourceRoot == nil then
+		return
+	end
+
+	local parent = resolveImpactSoundParent(context, impactInstance)
+	for _, descendant in ipairs(sourceRoot:GetDescendants()) do
+		if not descendant:IsA("Sound") or not isImpactSound(descendant) then
+			continue
+		end
+
+		local soundClone = descendant:Clone()
+		soundClone:SetAttribute("Delay", nil)
+		soundClone:SetAttribute("Start", nil)
+		soundClone.Parent = parent
+		context:playSound(soundClone, scaleMultiplier)
+	end
+end
+
 function Handler:_startMechaPunch(record: ActiveRecord, event: PresentationEvent)
 	local bossModel = event.bossModel
 	if bossModel == nil or bossModel.Parent == nil then
@@ -83,7 +134,7 @@ function Handler:_startMechaPunch(record: ActiveRecord, event: PresentationEvent
 		return
 	end
 
-	self:playTimedSounds(rootPartModel, scaleMultiplier)
+	playTimedNonImpactSounds(self, rootPartModel, scaleMultiplier)
 	self:playTimedSounds(rightHandModel, scaleMultiplier)
 	self:emitVisuals(self:collectEmittableVisuals(rootPartModel))
 	self:emitVisuals(self:collectEmittableVisuals(rightHandModel))
@@ -125,8 +176,8 @@ function Handler:_impactMechaPunch(record: ActiveRecord, event: PresentationEven
 
 	explosionInstance.Parent = self:_ensureVisualFolder()
 	self:playAllSounds(explosionInstance, scaleMultiplier)
+	playImpactSoundClones(self, record.rootModel, explosionInstance, scaleMultiplier)
 	self:emitEffectInstance(explosionInstance, MECHA_PUNCH_EXPLOSION_VFX_LIFETIME_SECONDS)
-	self:destroyVfxAfter(explosionInstance, MECHA_PUNCH_EXPLOSION_VFX_LIFETIME_SECONDS)
 	self:_shakeImpact()
 end
 

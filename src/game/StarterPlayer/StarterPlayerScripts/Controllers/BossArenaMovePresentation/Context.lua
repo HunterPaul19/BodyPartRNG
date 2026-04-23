@@ -77,16 +77,15 @@ function Context:initializeEmitModule()
 end
 
 function Context:emitEffectInstance(instance: Instance, duration: number?)
-	local emitDuration = duration
-	if emitDuration ~= nil then
-		emitDuration = math.max(0, emitDuration) + Config.Cleanup.VfxCleanupDelaySeconds
-	end
-
 	local ok, err = pcall(function()
-		EmitModule.emit(instance, emitDuration)
+		EmitModule.emit(instance)
 	end)
 	if not ok then
 		self:warnWithPrefix(string.format("Failed to emit boss move effect instance: %s", tostring(err)))
+	end
+
+	if duration ~= nil then
+		self:destroyVfxAfter(instance, duration)
 	end
 end
 
@@ -331,20 +330,96 @@ function Context:setBasePartTransparency(root: Instance, transparency: number)
 	end
 end
 
+local function getNumberAttribute(instance: Instance, primaryName: string, fallbackName: string?): number?
+	local primaryValue = tonumber(instance:GetAttribute(primaryName))
+	if primaryValue ~= nil then
+		return primaryValue
+	end
+
+	if fallbackName == nil then
+		return nil
+	end
+
+	return tonumber(instance:GetAttribute(fallbackName))
+end
+
+local UNLOADED_SOUND_PLAYBACK_WINDOW_SECONDS = 8
+
+local function resolveSoundPlaybackWindow(sound: Sound, includeConfiguredDelay: boolean): number
+	local delaySeconds = if includeConfiguredDelay then math.max(0, getNumberAttribute(sound, "Delay", "Start") or 0) else 0
+	if sound.Looped then
+		return delaySeconds
+	end
+
+	local sourceStart = getNumberAttribute(sound, "SourceStart", "Offset")
+	if sourceStart == nil and sound.TimePosition > 0 then
+		sourceStart = sound.TimePosition
+	end
+
+	local startPosition = math.max(0, sourceStart or 0)
+	local sourceEnd = getNumberAttribute(sound, "SourceEnd", "End")
+	local timeLength = math.max(0, tonumber(sound.TimeLength) or 0)
+	local endPosition = if sourceEnd ~= nil and sourceEnd > 0 then sourceEnd else timeLength
+	local playbackSpeed = math.max(0.001, tonumber(sound.PlaybackSpeed) or 1)
+	local remainingSeconds = if endPosition > startPosition then (endPosition - startPosition) / playbackSpeed else 0
+
+	if remainingSeconds <= 0 and timeLength <= 0 then
+		remainingSeconds = UNLOADED_SOUND_PLAYBACK_WINDOW_SECONDS
+	end
+
+	return delaySeconds + remainingSeconds
+end
+
+function Context:resolveSoundPlaybackWindow(root: Instance?, includeConfiguredDelay: boolean?): number
+	if root == nil then
+		return 0
+	end
+
+	local includeDelay = includeConfiguredDelay ~= false
+	local longestWindow = 0
+	if root:IsA("Sound") then
+		longestWindow = math.max(longestWindow, resolveSoundPlaybackWindow(root, includeDelay))
+	end
+
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("Sound") then
+			longestWindow = math.max(longestWindow, resolveSoundPlaybackWindow(descendant, includeDelay))
+		end
+	end
+
+	return longestWindow
+end
+
 function Context:destroyAfter(instance: Instance?, delaySeconds: number)
 	if instance == nil then
 		return
 	end
 
-	task.delay(delaySeconds, function()
+	task.delay(math.max(0, tonumber(delaySeconds) or 0), function()
 		if instance.Parent ~= nil then
 			instance:Destroy()
 		end
 	end)
 end
 
+function Context:destroySoundAfter(instance: Instance?, activeSeconds: number?, includeConfiguredDelay: boolean?)
+	if instance == nil then
+		return
+	end
+
+	local activeDelay = math.max(0, tonumber(activeSeconds) or 0)
+	local soundDelay = self:resolveSoundPlaybackWindow(instance, includeConfiguredDelay)
+	self:destroyAfter(instance, math.max(activeDelay, soundDelay) + Config.Cleanup.SfxCleanupDelaySeconds)
+end
+
 function Context:destroyVfxAfter(instance: Instance?, activeSeconds: number?)
-	local delaySeconds = math.max(0, tonumber(activeSeconds) or 0) + Config.Cleanup.VfxCleanupDelaySeconds
+	if instance == nil then
+		return
+	end
+
+	local visualDelay = math.max(0, tonumber(activeSeconds) or 0) + Config.Cleanup.VfxCleanupDelaySeconds
+	local soundDelay = self:resolveSoundPlaybackWindow(instance, true) + Config.Cleanup.SfxCleanupDelaySeconds
+	local delaySeconds = math.max(visualDelay, soundDelay)
 	self:destroyAfter(instance, delaySeconds)
 end
 
@@ -546,19 +621,6 @@ function Context:playSound(sound: Sound?, scaleMultiplier: number?)
 	sound:Play()
 end
 
-local function getNumberAttribute(instance: Instance, primaryName: string, fallbackName: string?): number?
-	local primaryValue = tonumber(instance:GetAttribute(primaryName))
-	if primaryValue ~= nil then
-		return primaryValue
-	end
-
-	if fallbackName == nil then
-		return nil
-	end
-
-	return tonumber(instance:GetAttribute(fallbackName))
-end
-
 function Context:playSoundFromConfiguredPosition(sound: Sound?, scaleMultiplier: number?)
 	if sound == nil then
 		return
@@ -659,8 +721,7 @@ function Context:playDelayedSoundClones(sourceRoot: Instance, parent: Instance, 
 			end
 
 			self:playSound(soundClone, resolvedScale)
-			local cleanupDelay = math.max(1, tonumber(soundClone.TimeLength) or 0) + 1
-			self:destroyAfter(soundClone, cleanupDelay)
+			self:destroySoundAfter(soundClone, 0, false)
 		end)
 	end
 	for _, descendant in ipairs(sourceRoot:GetDescendants()) do
@@ -678,8 +739,7 @@ function Context:playDelayedSoundClones(sourceRoot: Instance, parent: Instance, 
 			end
 
 			self:playSound(soundClone, resolvedScale)
-			local cleanupDelay = math.max(1, tonumber(soundClone.TimeLength) or 0) + 1
-			self:destroyAfter(soundClone, cleanupDelay)
+			self:destroySoundAfter(soundClone, 0, false)
 		end)
 	end
 end
@@ -786,6 +846,10 @@ function Context:resolveProjectileCFrame(startPosition: Vector3, endPosition: Ve
 end
 
 function Context:pivotBroccoliSproutEffectInstance(effectInstance: Instance, cframe: CFrame, scaleMultiplier: number): boolean
+	return self:pivotFloorEffectInstance(effectInstance, cframe, scaleMultiplier)
+end
+
+function Context:pivotFloorEffectInstance(effectInstance: Instance, cframe: CFrame, scaleMultiplier: number): boolean
 	if effectInstance:IsA("Model") then
 		effectInstance:ScaleTo(scaleMultiplier)
 		self:prepareMovingEffectModel(effectInstance)

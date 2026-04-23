@@ -18,6 +18,7 @@ local CAPTAIN_SQUID_VFX_FOLDER_NAME = Constants.Vfx.CAPTAIN_SQUID_VFX_FOLDER_NAM
 local SHIP_CALL_LEFT_HAND_MODEL_NAME = Constants.Vfx.SHIP_CALL_LEFT_HAND_MODEL_NAME
 local SHIP_CALL_MODULE_ID = Constants.ModuleIds.SHIP_CALL_MODULE_ID
 local SHIP_CALL_SHIP_MODEL_NAME = Constants.Vfx.SHIP_CALL_SHIP_MODEL_NAME
+local DEFAULT_SHIP_FADE_SECONDS = 1.0
 
 local Handler = {}
 
@@ -39,6 +40,42 @@ function Handler:_updateShipCallMotion(record: ActiveRecord, nowServerTime: numb
 	local elapsed = math.max(0, nowServerTime - shipMotion.startedAtServerTime)
 	local currentPosition = shipMotion.startCFrame.Position + (shipMotion.direction * (shipMotion.speed * elapsed))
 	shipModel:PivotTo(CFrame.new(currentPosition) * (shipMotion.startCFrame - shipMotion.startCFrame.Position))
+end
+
+function Handler:_fadeShipCallPart(part: BasePart, fadeSeconds: number)
+	local tween = self.TweenService:Create(
+		part,
+		TweenInfo.new(fadeSeconds, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ Transparency = 1 }
+	)
+	tween:Play()
+end
+
+function Handler:_stopShipCall(record: ActiveRecord, event: PresentationEvent)
+	local payload = event.payload
+	local fadeSeconds = if typeof(payload) == "table" then tonumber(payload.fadeSeconds) else nil
+	fadeSeconds = math.max(0, fadeSeconds or DEFAULT_SHIP_FADE_SECONDS)
+
+	local shipModel = record.shipModel
+	if shipModel == nil or shipModel.Parent == nil then
+		self:_cleanupRecord(record)
+		return
+	end
+
+	setVisualsEnabled(shipModel, false)
+	if record.leftHandModel then
+		setVisualsEnabled(record.leftHandModel, false)
+	end
+
+	for _, descendant in ipairs(shipModel:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			self:_fadeShipCallPart(descendant, fadeSeconds)
+		end
+	end
+
+	task.delay(fadeSeconds, function()
+		self:_cleanupRecord(record)
+	end)
 end
 
 function Handler:_startShipCall(record: ActiveRecord, event: PresentationEvent)
@@ -131,12 +168,13 @@ function Handler:_shipShipCall(record: ActiveRecord, event: PresentationEvent)
 	end
 
 	shipModel.Parent = castFolder
+	local startedAtServerTime = if typeof(event.serverTime) == "number" then event.serverTime else self.Workspace:GetServerTimeNow()
 	record.shipModel = shipModel
 	record.shipMotion = {
 		startCFrame = startCFrame,
 		direction = direction.Unit,
 		speed = speed,
-		startedAtServerTime = if typeof(event.serverTime) == "number" then event.serverTime else self.Workspace:GetServerTimeNow(),
+		startedAtServerTime = startedAtServerTime,
 	}
 
 	shipModel:PivotTo(startCFrame)
@@ -145,16 +183,6 @@ function Handler:_shipShipCall(record: ActiveRecord, event: PresentationEvent)
 	self:emitVisuals(self:collectEmittableVisuals(shipModel))
 	self:_updateShipCallMotion(record, self.Workspace:GetServerTimeNow())
 
-	local disableVisualsAfterSeconds = tonumber(payload.disableVisualsAfterSeconds)
-	if disableVisualsAfterSeconds ~= nil and disableVisualsAfterSeconds >= 0 then
-		task.delay(disableVisualsAfterSeconds, function()
-			if shipModel.Parent == nil then
-				return
-			end
-
-			setVisualsEnabled(shipModel, false)
-		end)
-	end
 end
 
 Handler.moduleIds = {
@@ -164,6 +192,7 @@ Handler.start = Handler._startShipCall
 Handler.update = Handler._updateShipCallMotion
 Handler.actions = {
 	ship = Handler._shipShipCall,
+	stop = Handler._stopShipCall,
 }
 Handler.requiredParentFields = {
 	"leftHandModel",

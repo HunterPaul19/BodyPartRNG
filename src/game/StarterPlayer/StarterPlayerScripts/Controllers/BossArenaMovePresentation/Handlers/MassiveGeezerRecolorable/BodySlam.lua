@@ -8,12 +8,14 @@ local Constants = {
 	Vfx = {
 		MASSIVE_GEEZER_BODY_SLAM_GROUND_SLAM_VFX_NAME = "GroundSlam",
 		MASSIVE_GEEZER_BODY_SLAM_JUMP_VFX_NAME = "Jump",
+		MASSIVE_GEEZER_BODY_SLAM_SOUNDS_NAME = "Sounds",
 		MASSIVE_GEEZER_BODY_SLAM_VFX_NAME = "BodySlam",
 		MASSIVE_GEEZER_VFX_FOLDER_NAME = "MassiveGeezer",
 	},
 	Timing = {
 		MASSIVE_GEEZER_BODY_SLAM_IMPACT_VFX_LIFETIME_SECONDS = 4,
 		MASSIVE_GEEZER_BODY_SLAM_JUMP_VFX_LIFETIME_SECONDS = 2.5,
+		MASSIVE_GEEZER_BODY_SLAM_SOUND_CLEANUP_SECONDS = 8,
 	},
 	Shake = {
 		MASSIVE_GEEZER_BODY_SLAM_SHAKE_FADE_IN = 0.04,
@@ -29,6 +31,8 @@ local MASSIVE_GEEZER_BODY_SLAM_IMPACT_VFX_LIFETIME_SECONDS = Constants.Timing.MA
 local MASSIVE_GEEZER_BODY_SLAM_JUMP_VFX_LIFETIME_SECONDS = Constants.Timing.MASSIVE_GEEZER_BODY_SLAM_JUMP_VFX_LIFETIME_SECONDS
 local MASSIVE_GEEZER_BODY_SLAM_JUMP_VFX_NAME = Constants.Vfx.MASSIVE_GEEZER_BODY_SLAM_JUMP_VFX_NAME
 local MASSIVE_GEEZER_BODY_SLAM_MODULE_ID = Constants.ModuleIds.MASSIVE_GEEZER_BODY_SLAM_MODULE_ID
+local MASSIVE_GEEZER_BODY_SLAM_SOUND_CLEANUP_SECONDS = Constants.Timing.MASSIVE_GEEZER_BODY_SLAM_SOUND_CLEANUP_SECONDS
+local MASSIVE_GEEZER_BODY_SLAM_SOUNDS_NAME = Constants.Vfx.MASSIVE_GEEZER_BODY_SLAM_SOUNDS_NAME
 local MASSIVE_GEEZER_BODY_SLAM_SHAKE_FADE_IN = Constants.Shake.MASSIVE_GEEZER_BODY_SLAM_SHAKE_FADE_IN
 local MASSIVE_GEEZER_BODY_SLAM_SHAKE_FADE_OUT = Constants.Shake.MASSIVE_GEEZER_BODY_SLAM_SHAKE_FADE_OUT
 local MASSIVE_GEEZER_BODY_SLAM_SHAKE_MAGNITUDE = Constants.Shake.MASSIVE_GEEZER_BODY_SLAM_SHAKE_MAGNITUDE
@@ -38,6 +42,22 @@ local MASSIVE_GEEZER_BODY_SLAM_VFX_NAME = Constants.Vfx.MASSIVE_GEEZER_BODY_SLAM
 local MASSIVE_GEEZER_VFX_FOLDER_NAME = Constants.Vfx.MASSIVE_GEEZER_VFX_FOLDER_NAME
 
 local Handler = {}
+
+function Handler:_playBodySlamSounds(record: ActiveRecord, scaleMultiplier: number)
+	local soundsSource = self:resolveBossVfxInstance(
+		MASSIVE_GEEZER_VFX_FOLDER_NAME,
+		MASSIVE_GEEZER_BODY_SLAM_VFX_NAME,
+		MASSIVE_GEEZER_BODY_SLAM_SOUNDS_NAME
+	)
+	if soundsSource == nil then
+		return
+	end
+
+	local sounds = soundsSource:Clone()
+	sounds.Parent = self:_ensureCastFolder(record)
+	self:playTimedSounds(sounds, scaleMultiplier)
+	self:destroySoundAfter(sounds, MASSIVE_GEEZER_BODY_SLAM_SOUND_CLEANUP_SECONDS)
+end
 
 function Handler:_shakeBodySlamImpact(impactPosition: Vector3)
 	local localPlayer = self.Players.LocalPlayer
@@ -63,6 +83,17 @@ end
 
 function Handler:_startMassiveGeezerBodySlam(record: ActiveRecord, event: PresentationEvent)
 	local payload = event.payload
+	if typeof(payload) ~= "table" then
+		return
+	end
+
+	local scaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1)
+	self:_playBodySlamSounds(record, scaleMultiplier)
+	self:_jumpMassiveGeezerBodySlam(record, event)
+end
+
+function Handler:_jumpMassiveGeezerBodySlam(record: ActiveRecord, event: PresentationEvent)
+	local payload = event.payload
 	if typeof(payload) ~= "table" or typeof(payload.floorCFrame) ~= "CFrame" then
 		return
 	end
@@ -86,7 +117,6 @@ function Handler:_startMassiveGeezerBodySlam(record: ActiveRecord, event: Presen
 
 	self:playAllSounds(jumpModel, scaleMultiplier)
 	self:emitEffectInstance(jumpModel, MASSIVE_GEEZER_BODY_SLAM_JUMP_VFX_LIFETIME_SECONDS)
-	self:destroyVfxAfter(jumpModel, MASSIVE_GEEZER_BODY_SLAM_JUMP_VFX_LIFETIME_SECONDS)
 end
 
 function Handler:_spawnBodySlamRockDebris(impactCFrame: CFrame, radius: number)
@@ -178,7 +208,6 @@ function Handler:_impactMassiveGeezerBodySlam(record: ActiveRecord, event: Prese
 
 		self:playAllSounds(groundSlamModel, scaleMultiplier)
 		self:emitEffectInstance(groundSlamModel, MASSIVE_GEEZER_BODY_SLAM_IMPACT_VFX_LIFETIME_SECONDS)
-		self:destroyVfxAfter(groundSlamModel, MASSIVE_GEEZER_BODY_SLAM_IMPACT_VFX_LIFETIME_SECONDS)
 	end
 
 	local radius = math.max(1, tonumber(payload.radius) or 55)
@@ -191,6 +220,7 @@ Handler.moduleIds = {
 }
 Handler.start = Handler._startMassiveGeezerBodySlam
 Handler.actions = {
+	jump = Handler._jumpMassiveGeezerBodySlam,
 	impact = Handler._impactMassiveGeezerBodySlam,
 }
 Handler.requiresHandle = false

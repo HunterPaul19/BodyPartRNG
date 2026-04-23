@@ -24,6 +24,7 @@ local LEASH_RADIUS_ATTRIBUTE_NAME = "BossLeashRadius"
 local PLAYER_SPAWN_VERTICAL_OFFSET = 4
 local PLAYER_SPAWN_RING_SIZE = 6
 local PLAYER_SPAWN_RING_RADIUS = 8
+local BOSS_ATTACK_SPAWN_DELAY_SECONDS = 5
 
 type CastState = {
 	castId: string,
@@ -369,6 +370,22 @@ end
 local function getFeetAlignedBossSpawnCFrame(spawnCFrame: CFrame, humanoid: Humanoid, rootPart: BasePart): CFrame
 	local standingHeight = getBossStandingHeight(humanoid, rootPart)
 	return withPosition(spawnCFrame, spawnCFrame.Position + Vector3.new(0, standingHeight, 0))
+end
+
+local function collectArenaFloorRaycastRoots(arenaModel: Model): { Instance }
+	local roots = {}
+	for _, childName in ipairs({ "Visuals", "Map", "Floor", "Floors", "Ground" }) do
+		local child = arenaModel:FindFirstChild(childName)
+		if child then
+			table.insert(roots, child)
+		end
+	end
+
+	if #roots <= 0 then
+		table.insert(roots, arenaModel)
+	end
+
+	return roots
 end
 
 function BossArenaRuntimeService:_setState(encounter: EncounterState, nextState: string)
@@ -798,6 +815,7 @@ function BossArenaRuntimeService:_spawnBossEncounter(payload: any)
 		scaleMultiplier = bossDefinition.scaleMultiplier,
 	})
 
+	local spawnedAt = os.clock()
 	self._encounter = {
 		payload = payload,
 		bossId = bossId,
@@ -822,10 +840,10 @@ function BossArenaRuntimeService:_spawnBossEncounter(payload: any)
 		currentTargetUserId = nil,
 		lastRetargetAt = 0,
 		lastMoveCommandAt = 0,
-		nextAbilityAvailableAt = 0,
+		nextAbilityAvailableAt = spawnedAt + BOSS_ATTACK_SPAWN_DELAY_SECONDS,
 		cooldowns = {},
 		rng = Random.new(),
-		spawnedAt = os.clock(),
+		spawnedAt = spawnedAt,
 		activeCast = nil,
 		bossHealthConnections = {},
 	}
@@ -1036,6 +1054,8 @@ function BossArenaRuntimeService:_buildMoveContext(
 		bossRootPart = encounter.bossRootPart,
 		bossState = encounter.state,
 		homePosition = encounter.homePosition,
+		arenaModel = encounter.arenaModel,
+		floorRaycastRoots = collectArenaFloorRaycastRoots(encounter.arenaModel),
 		targetPlayer = targetPlayer,
 		targetCharacter = targetCharacter,
 		targetHumanoid = targetHumanoid,
@@ -1343,7 +1363,11 @@ function BossArenaRuntimeService:_tryStartAbility(
 	if encounter.activeCast ~= nil then
 		return
 	end
-	if os.clock() < encounter.nextAbilityAvailableAt then
+	local now = os.clock()
+	if now - encounter.spawnedAt < BOSS_ATTACK_SPAWN_DELAY_SECONDS then
+		return
+	end
+	if now < encounter.nextAbilityAvailableAt then
 		return
 	end
 
@@ -1351,7 +1375,7 @@ function BossArenaRuntimeService:_tryStartAbility(
 
 	for _, moveDefinition in ipairs(encounter.bossDefinition.moves) do
 		local cooldownEndsAt = encounter.cooldowns[moveDefinition.id] or 0
-		if cooldownEndsAt > os.clock() then
+		if cooldownEndsAt > now then
 			continue
 		end
 

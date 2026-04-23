@@ -1,6 +1,5 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
@@ -9,9 +8,14 @@ local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
 local DAMAGE = 20
+local AUTHORED_FPS = 60
+local SHIP_RELEASE_FRAME = 91
+local SHIP_END_FRAME = 162
+local SHIP_RELEASE_SECONDS = SHIP_RELEASE_FRAME / AUTHORED_FPS
+local SHIP_END_SECONDS = SHIP_END_FRAME / AUTHORED_FPS
+local SHIP_ACTIVE_SECONDS = SHIP_END_SECONDS - SHIP_RELEASE_SECONDS
 local SHIP_SPEED_STUDS_PER_SECOND = 150
-local SHIP_SPAWN_DELAY_SECONDS = 1.5
-local SHIP_VFX_DISABLE_DELAY_SECONDS = 2.7 - SHIP_SPAWN_DELAY_SECONDS
+local SHIP_FADE_SECONDS = 1.0
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "CaptainSquid"
 local ANIMATION_NAME = "ShipCall"
@@ -19,7 +23,6 @@ local VFX_FOLDER_NAME = "VFX"
 local CAPTAIN_SQUID_VFX_FOLDER_NAME = "CaptainSquid"
 local SHIP_CALL_VFX_FOLDER_NAME = "ShipCall"
 local SHIP_MODEL_NAME = "Ship"
-local FALLBACK_TRAVEL_DISTANCE_STUDS = 220
 local KNOCKBACK_FORWARD_SPEED = 44
 local KNOCKBACK_UPWARD_SPEED = 10
 local FLOOR_RAYCAST_START_HEIGHT = 5
@@ -171,30 +174,6 @@ local function buildKnockbackDirection(travelDirection: Vector3): Vector3
 	return (travelDirection * KNOCKBACK_FORWARD_SPEED) + Vector3.new(0, KNOCKBACK_UPWARD_SPEED, 0)
 end
 
-local function doesShipOverlapArena(shipCFrame: CFrame, shipSize: Vector3): boolean
-	local activeBossArena = Workspace:FindFirstChild("ActiveBossArena")
-	if not (activeBossArena and activeBossArena:IsA("Model")) then
-		return true
-	end
-
-	local arenaCFrame, arenaSize = activeBossArena:GetBoundingBox()
-	local relativeShipCFrame = arenaCFrame:ToObjectSpace(shipCFrame)
-	local shipHalfExtents = shipSize * 0.5
-	local arenaHalfExtents = arenaSize * 0.5
-	local rightVector = relativeShipCFrame.RightVector
-	local upVector = relativeShipCFrame.UpVector
-	local lookVector = relativeShipCFrame.LookVector
-	local projectedHalfX = (math.abs(rightVector.X) * shipHalfExtents.X)
-		+ (math.abs(upVector.X) * shipHalfExtents.Y)
-		+ (math.abs(lookVector.X) * shipHalfExtents.Z)
-	local projectedHalfZ = (math.abs(rightVector.Z) * shipHalfExtents.X)
-		+ (math.abs(upVector.Z) * shipHalfExtents.Y)
-		+ (math.abs(lookVector.Z) * shipHalfExtents.Z)
-
-	return math.abs(relativeShipCFrame.Position.X) <= (arenaHalfExtents.X + projectedHalfX)
-		and math.abs(relativeShipCFrame.Position.Z) <= (arenaHalfExtents.Z + projectedHalfZ)
-end
-
 function ShipCall.GetSelectionWeight(context)
 	local distance = tonumber(context.distanceToTarget)
 	if distance == nil then
@@ -242,7 +221,6 @@ function ShipCall.StartCast(context)
 	local profile = profileOrError
 	local track = nil :: AnimationTrack?
 	local stoppedConnection = nil :: RBXScriptConnection?
-	local shipHeartbeat = nil :: RBXScriptConnection?
 	local activeShipHitbox = nil
 	local completed = false
 	local cancelled = false
@@ -255,13 +233,13 @@ function ShipCall.StartCast(context)
 	local shipStartTime = 0
 	local hitTargets = {}
 
-	local function stopPresentation()
+	local function stopPresentation(payload: { [string]: any }?)
 		if presentationStopped then
 			return
 		end
 
 		presentationStopped = true
-		context.EmitPresentation("stop")
+		context.EmitPresentation("stop", payload)
 	end
 
 	local function disconnectStoppedConnection()
@@ -269,13 +247,6 @@ function ShipCall.StartCast(context)
 			stoppedConnection:Disconnect()
 		end
 		stoppedConnection = nil
-	end
-
-	local function disconnectShipHeartbeat()
-		if shipHeartbeat and shipHeartbeat.Connected then
-			shipHeartbeat:Disconnect()
-		end
-		shipHeartbeat = nil
 	end
 
 	local function destroyShipHitbox()
@@ -294,9 +265,15 @@ function ShipCall.StartCast(context)
 
 		completed = true
 		recoveryEndsAt = os.clock() + (tonumber(context.move and context.move.recoverySeconds) or 0)
-		stopPresentation()
-		disconnectShipHeartbeat()
+		stopPresentation({
+			fadeSeconds = SHIP_FADE_SECONDS,
+		})
+		disconnectStoppedConnection()
 		destroyShipHitbox()
+
+		if track then
+			profile:StopAnimation(animationInstance, ANIMATION_FADE_SECONDS)
+		end
 	end
 
 	local function cleanup(stopAnimation: boolean)
@@ -307,7 +284,6 @@ function ShipCall.StartCast(context)
 		cleanedUp = true
 		stopPresentation()
 		disconnectStoppedConnection()
-		disconnectShipHeartbeat()
 		destroyShipHitbox()
 
 		if stopAnimation and track then
@@ -350,7 +326,7 @@ function ShipCall.StartCast(context)
 			speed = SHIP_SPEED_STUDS_PER_SECOND,
 			shipSize = shipHitboxSize,
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
-			disableVisualsAfterSeconds = SHIP_VFX_DISABLE_DELAY_SECONDS,
+			activeSeconds = SHIP_ACTIVE_SECONDS,
 		})
 
 		local shipHitbox
@@ -407,34 +383,6 @@ function ShipCall.StartCast(context)
 		})
 
 		activeShipHitbox = shipHitbox
-		shipHeartbeat = RunService.Heartbeat:Connect(function()
-			if cancelled then
-				return
-			end
-
-			local currentShipCFrame = getCurrentShipCFrame()
-			if currentShipCFrame == nil then
-				finishAttack()
-				return
-			end
-
-			if doesShipOverlapArena(currentShipCFrame, shipHitboxSize) then
-				return
-			end
-
-			finishAttack()
-		end)
-
-		task.delay(FALLBACK_TRAVEL_DISTANCE_STUDS / SHIP_SPEED_STUDS_PER_SECOND, function()
-			if cancelled or completed or shipSpawned ~= true then
-				return
-			end
-			if Workspace:FindFirstChild("ActiveBossArena") ~= nil then
-				return
-			end
-
-			finishAttack()
-		end)
 	end
 
 	track = profile:PlayAnimation(animationInstance, Enum.AnimationPriority.Action, 1, nil, ANIMATION_FADE_SECONDS)
@@ -446,7 +394,14 @@ function ShipCall.StartCast(context)
 	context.EmitPresentation("start", {
 		scaleMultiplier = context.bossDefinition.scaleMultiplier,
 	})
-	task.delay(SHIP_SPAWN_DELAY_SECONDS, spawnShip)
+	task.delay(SHIP_RELEASE_SECONDS, spawnShip)
+	task.delay(SHIP_END_SECONDS, function()
+		if cancelled or completed then
+			return
+		end
+
+		finishAttack()
+	end)
 	track.Looped = false
 	stoppedConnection = track.Stopped:Connect(function()
 		disconnectStoppedConnection()

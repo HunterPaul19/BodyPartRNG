@@ -16,7 +16,6 @@ local PROJECTILE_DISTANCE_STUDS = 185
 local PROJECTILE_SPACING_STUDS = 9
 local PROJECTILE_RADIUS = 6
 local PROJECTILE_MAX_PARTS = 64
-local TARGET_HEIGHT_OFFSET = 2
 
 local CHICKEN_SPAWN_MARKER_NAME = "ChickenSpawn"
 local ATE_CHICKEN_MARKER_NAME = "AteChicken"
@@ -105,7 +104,45 @@ local function resolvePlanarDirection(vector: Vector3): Vector3?
 	return planar.Unit
 end
 
-local function resolveForwardDirection(context, bossRootPart: BasePart): Vector3
+local function resolveNearestAliveTargetRootPart(context, bossRootPart: BasePart): BasePart?
+	local nearestRootPart = nil
+	local nearestDistance = math.huge
+
+	for _, targetContext in ipairs(context.aliveTargets or {}) do
+		local player = targetContext.player
+		local character = player and (player.Character or targetContext.character)
+		local humanoid = resolveHumanoid(character)
+		local rootPart = resolveRootPart(character)
+		if player ~= nil and humanoid ~= nil and humanoid.Health > 0 and rootPart ~= nil then
+			local distance = (rootPart.Position - bossRootPart.Position).Magnitude
+			if distance < nearestDistance then
+				nearestDistance = distance
+				nearestRootPart = rootPart
+			end
+		end
+	end
+
+	return nearestRootPart
+end
+
+local function resolveAimTargetRootPart(context, bossRootPart: BasePart): BasePart?
+	local targetRootPart = context.targetRootPart
+	local targetHumanoid = context.targetHumanoid
+	if targetRootPart and targetRootPart.Parent ~= nil and targetHumanoid and targetHumanoid.Health > 0 then
+		return targetRootPart
+	end
+
+	return resolveNearestAliveTargetRootPart(context, bossRootPart)
+end
+
+local function resolveForwardDirection(context, bossRootPart: BasePart, aimTargetRootPart: BasePart?): Vector3
+	if aimTargetRootPart and aimTargetRootPart.Parent ~= nil then
+		local targetDirection = resolvePlanarDirection(aimTargetRootPart.Position - bossRootPart.Position)
+		if targetDirection then
+			return targetDirection
+		end
+	end
+
 	local targetRootPart = context.targetRootPart
 	if targetRootPart and targetRootPart.Parent ~= nil then
 		local targetDirection = resolvePlanarDirection(targetRootPart.Position - bossRootPart.Position)
@@ -141,19 +178,19 @@ local function resolveProjectileStartPosition(bossModel: Model, index: number, b
 	return bossRootPart.Position
 end
 
-local function resolveProjectileEndHeight(context, bossRootPart: BasePart): number
-	local targetRootPart = context.targetRootPart
-	if targetRootPart and targetRootPart.Parent ~= nil then
-		return targetRootPart.Position.Y + TARGET_HEIGHT_OFFSET
+local function resolveProjectileEndHeight(bossRootPart: BasePart, aimTargetRootPart: BasePart?): number
+	if aimTargetRootPart and aimTargetRootPart.Parent ~= nil then
+		return aimTargetRootPart.Position.Y
 	end
 
 	return bossRootPart.Position.Y
 end
 
 local function buildProjectilePlans(context, bossModel: Model, bossRootPart: BasePart): { { [string]: any } }
-	local forwardDirection = resolveForwardDirection(context, bossRootPart)
+	local aimTargetRootPart = resolveAimTargetRootPart(context, bossRootPart)
+	local forwardDirection = resolveForwardDirection(context, bossRootPart, aimTargetRootPart)
 	local rightDirection = resolveRightDirection(forwardDirection)
-	local endHeight = resolveProjectileEndHeight(context, bossRootPart)
+	local endHeight = resolveProjectileEndHeight(bossRootPart, aimTargetRootPart)
 	local origin = bossRootPart.Position
 	local plans = {}
 
@@ -328,7 +365,8 @@ function EatChicken.StartCast(context)
 		end
 
 		markersHit[TURN_TO_PLAYER_MARKER_NAME] = true
-		faceBossTowardDirection(bossRootPart, resolveForwardDirection(context, bossRootPart))
+		local aimTargetRootPart = resolveAimTargetRootPart(context, bossRootPart)
+		faceBossTowardDirection(bossRootPart, resolveForwardDirection(context, bossRootPart, aimTargetRootPart))
 	end
 
 	local function handleChickenThrow()

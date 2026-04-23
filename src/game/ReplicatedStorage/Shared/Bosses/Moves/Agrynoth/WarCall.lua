@@ -4,6 +4,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
+local MinionDisplay = require(ReplicatedStorage.Shared.Bosses.MinionDisplay)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 
@@ -19,6 +20,7 @@ local VFX_FOLDER_NAME = "VFX"
 local AGRYNOTH_VFX_FOLDER_NAME = "Agrynoth"
 local WAR_CALL_VFX_FOLDER_NAME = "WarCall"
 local MINION_MODEL_NAME = "Minion"
+local MINION_DISPLAY_NAME = "Agrynoth Minion"
 
 local HEALTH_THRESHOLD = 0.5
 local ELIGIBLE_SELECTION_WEIGHT = 1000
@@ -730,6 +732,7 @@ function WarCall.StartCast(context)
 			humanoid.Health = MINION_MAX_HEALTH
 			humanoid.WalkSpeed = MINION_WALK_SPEED
 			humanoid.AutoRotate = true
+			MinionDisplay.ConfigureHumanoid(humanoid, MINION_DISPLAY_NAME)
 			minionModel:PivotTo(CFrame.lookAt(spawnPosition, lookTarget))
 			minionModel.Parent = minionsFolder
 			setServerNetworkOwnership(minionModel)

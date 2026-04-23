@@ -76,6 +76,7 @@ type BossRecord = {
 	bossHumanoid: Humanoid,
 	bossRootPart: BasePart,
 	homeCFrame: CFrame,
+	floorRaycastRoots: { Instance },
 	animationController: any?,
 	activeCast: ActiveCast?,
 }
@@ -715,6 +716,7 @@ function BossArenaStudioTestSuiteService:_spawnBossGrid(rootFolder: Folder)
 			bossHumanoid = bossHumanoid,
 			bossRootPart = bossRootPart,
 			homeCFrame = homeCFrame,
+			floorRaycastRoots = { rootFolder:WaitForChild(BASEPLATE_NAME) },
 			animationController = animationController,
 			activeCast = nil,
 		}
@@ -788,6 +790,7 @@ function BossArenaStudioTestSuiteService:_buildMoveContext(record: BossRecord, m
 		bossRootPart = record.bossRootPart,
 		bossState = "StudioTestSuite",
 		homePosition = record.homeCFrame.Position,
+		floorRaycastRoots = record.floorRaycastRoots,
 		targetPlayer = if target then target.player else nil,
 		targetCharacter = if target then target.character else nil,
 		targetHumanoid = if target then target.humanoid else nil,

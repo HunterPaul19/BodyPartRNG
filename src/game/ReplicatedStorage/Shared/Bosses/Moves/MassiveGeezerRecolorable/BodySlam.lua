@@ -16,6 +16,7 @@ local MAX_HITBOX_PARTS = 256
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "MassiveGeezer"
 local JUMP_ANIMATION_NAME = "Jump"
+local JUMP_MARKER_NAME = "Jump"
 local FALLING_ANIMATION_NAME = "Falling"
 local LAND_ANIMATION_NAME = "Land"
 local MIN_JUMP_DURATION_SECONDS = 0.45
@@ -232,6 +233,27 @@ local function buildKnockbackDirection(impactPosition: Vector3, targetRootPart: 
 	return (direction * KNOCKBACK_SPEED) + Vector3.new(0, KNOCKBACK_UPWARD_SPEED, 0)
 end
 
+local function forceHumanoidRecovery(humanoid: Humanoid)
+	if humanoid.Health <= 0 then
+		return
+	end
+
+	humanoid.Sit = false
+	humanoid.PlatformStand = false
+	humanoid:SetStateEnabled(Enum.HumanoidStateType.GettingUp, true)
+	humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+	humanoid:SetStateEnabled(Enum.HumanoidStateType.Physics, false)
+	humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+
+	task.defer(function()
+		if humanoid.Parent ~= nil and humanoid.Health > 0 then
+			humanoid.PlatformStand = false
+			humanoid.Sit = false
+			humanoid:ChangeState(Enum.HumanoidStateType.Running)
+		end
+	end)
+end
+
 local function spawnImpactHitbox(context, impactPosition: Vector3)
 	local bossModel = context.bossModel
 	if bossModel == nil or bossModel.Parent == nil then
@@ -331,6 +353,7 @@ function BodySlam.StartCast(context)
 	local cancelled = false
 	local cleanedUp = false
 	local didImpact = false
+	local jumpVfxTriggered = false
 	local presentationStopped = false
 	local phase = "Jump"
 	local heartbeatConnection = nil :: RBXScriptConnection?
@@ -348,6 +371,7 @@ function BodySlam.StartCast(context)
 	local originalWalkSpeed = bossHumanoid.WalkSpeed
 	local originalAutoRotate = bossHumanoid.AutoRotate
 	local originalPlatformStand = bossHumanoid.PlatformStand
+	local originalSit = bossHumanoid.Sit
 	local startRootCFrame = bossRootPart.CFrame
 	local startRootPosition = startRootCFrame.Position
 	local startGroundPosition = resolveGroundPosition(startRootPosition, bossModel)
@@ -390,6 +414,8 @@ function BodySlam.StartCast(context)
 			bossHumanoid.WalkSpeed = originalWalkSpeed
 			bossHumanoid.AutoRotate = originalAutoRotate
 			bossHumanoid.PlatformStand = originalPlatformStand
+			bossHumanoid.Sit = originalSit
+			forceHumanoidRecovery(bossHumanoid)
 		end
 	end
 
@@ -420,6 +446,7 @@ function BodySlam.StartCast(context)
 			return
 		end
 
+		profile:StopAnimation(fallingAnimation, ANIMATION_FADE_SECONDS)
 		restoreBossState()
 		stopPresentation()
 		markComplete()
@@ -546,6 +573,18 @@ function BodySlam.StartCast(context)
 		end
 	end
 
+	local function handleJumpVfx()
+		if cancelled or jumpVfxTriggered then
+			return
+		end
+
+		jumpVfxTriggered = true
+		context.EmitPresentation("jump", {
+			floorCFrame = CFrame.new(startGroundPosition),
+			scaleMultiplier = context.bossDefinition.scaleMultiplier,
+		})
+	end
+
 	bossHumanoid.WalkSpeed = 0
 	bossHumanoid.AutoRotate = false
 	bossHumanoid.PlatformStand = false
@@ -553,7 +592,9 @@ function BodySlam.StartCast(context)
 	bossRootPart.AssemblyLinearVelocity = Vector3.zero
 	bossRootPart.AssemblyAngularVelocity = Vector3.zero
 
-	jumpTrack = profile:PlayAnimation(jumpAnimation, Enum.AnimationPriority.Action, 1, nil, ANIMATION_FADE_SECONDS)
+	jumpTrack = profile:PlayAnimation(jumpAnimation, Enum.AnimationPriority.Action, 1, {
+		[JUMP_MARKER_NAME] = handleJumpVfx,
+	}, ANIMATION_FADE_SECONDS)
 	if jumpTrack == nil then
 		cleanup(false)
 		return nil

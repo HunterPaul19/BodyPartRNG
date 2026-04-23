@@ -70,9 +70,8 @@ function Handler:_attachBroccoliSproutHandEffect(
 	end
 
 	record[recordFieldName] = effectModel
-	self:playAllSounds(effectModel, scaleMultiplier)
+	self:playTimedSounds(effectModel, scaleMultiplier)
 	self:emitEffectInstance(effectModel, BROCCOLI_SPROUT_HAND_VFX_LIFETIME_SECONDS)
-	self:destroyVfxAfter(effectModel, BROCCOLI_SPROUT_HAND_VFX_LIFETIME_SECONDS)
 end
 
 function Handler:_startBroccoliSprout(record: ActiveRecord, event: PresentationEvent)
@@ -134,7 +133,7 @@ function Handler:_tweenBroccoliSproutTree(
 	end)
 	local tween = self.TweenService:Create(
 		cframeValue,
-		TweenInfo.new(riseDurationSeconds, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		TweenInfo.new(riseDurationSeconds, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
 		{
 			Value = endCFrame,
 		}
@@ -155,9 +154,8 @@ function Handler:_tweenBroccoliSproutTree(
 	tween:Play()
 end
 
-function Handler:_sproutBroccoliSprout(record: ActiveRecord, event: PresentationEvent)
+function Handler:_floorBroccoliSprout(record: ActiveRecord, event: PresentationEvent)
 	self:_clearBroccoliSproutWarnings(record)
-	self:_shakeImpact()
 
 	local payload = event.payload
 	if typeof(payload) ~= "table" or typeof(payload.points) ~= "table" then
@@ -172,6 +170,36 @@ function Handler:_sproutBroccoliSprout(record: ActiveRecord, event: Presentation
 	)
 	if floorSource == nil then
 		self:warnWithPrefix("Broccoli Sprout floor VFX instance is missing from ReplicatedStorage.GameAssets.VFX.")
+		self:_cleanupRecord(record)
+		return
+	end
+
+	local scaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1)
+	local visualFolder = self:_ensureVisualFolder()
+
+	for _, pointData in ipairs(payload.points) do
+		if typeof(pointData) ~= "table" or typeof(pointData.floorCFrame) ~= "CFrame" then
+			continue
+		end
+
+		local floorInstance = floorSource:Clone()
+		if not self:pivotBroccoliSproutEffectInstance(floorInstance, pointData.floorCFrame, scaleMultiplier) then
+			self:warnWithPrefix("Broccoli Sprout floor VFX instance cannot be pivoted.")
+			floorInstance:Destroy()
+			continue
+		end
+		floorInstance.Parent = visualFolder
+		self:playTimedSounds(floorInstance, scaleMultiplier)
+		self:emitEffectInstance(floorInstance, BROCCOLI_SPROUT_VFX_LIFETIME_SECONDS)
+	end
+end
+
+function Handler:_sproutBroccoliSprout(record: ActiveRecord, event: PresentationEvent)
+	self:_clearBroccoliSproutWarnings(record)
+	self:_shakeImpact()
+
+	local payload = event.payload
+	if typeof(payload) ~= "table" or typeof(payload.points) ~= "table" then
 		self:_cleanupRecord(record)
 		return
 	end
@@ -192,20 +220,9 @@ function Handler:_sproutBroccoliSprout(record: ActiveRecord, event: Presentation
 	local riseDurationSeconds = math.max(0.05, tonumber(payload.riseDurationSeconds) or 0.45)
 
 	for _, pointData in ipairs(payload.points) do
-		if typeof(pointData) ~= "table" or typeof(pointData.floorCFrame) ~= "CFrame" then
+		if typeof(pointData) ~= "table" then
 			continue
 		end
-
-		local floorInstance = floorSource:Clone()
-		if not self:pivotBroccoliSproutEffectInstance(floorInstance, pointData.floorCFrame, scaleMultiplier) then
-			self:warnWithPrefix("Broccoli Sprout floor VFX instance cannot be pivoted.")
-			floorInstance:Destroy()
-			continue
-		end
-		floorInstance.Parent = self:_ensureVisualFolder()
-		self:playTimedSounds(floorInstance, scaleMultiplier)
-		self:emitEffectInstance(floorInstance, BROCCOLI_SPROUT_VFX_LIFETIME_SECONDS)
-		self:destroyVfxAfter(floorInstance, BROCCOLI_SPROUT_VFX_LIFETIME_SECONDS)
 
 		local treeStartCFrame = pointData.treeStartCFrame
 		local treeEndCFrame = pointData.treeEndCFrame
@@ -230,44 +247,12 @@ function Handler:_sproutBroccoliSprout(record: ActiveRecord, event: Presentation
 	end
 end
 
-function Handler:_warnBroccoliSprout(record: ActiveRecord, event: PresentationEvent)
-	local payload = event.payload
-	if typeof(payload) ~= "table" or typeof(payload.points) ~= "table" then
-		return
-	end
-
-	self:_clearBroccoliSproutWarnings(record)
-	local castFolder = self:_ensureCastFolder(record)
-	local warningSeconds = math.max(0.05, tonumber(payload.warningSeconds) or 1)
-	record.broccoliSproutWarningHandles = {}
-
-	for _, pointData in ipairs(payload.points) do
-		if typeof(pointData) ~= "table" then
-			continue
-		end
-
-		local floorCFrame = pointData.floorCFrame
-		local footprintSize = pointData.footprintSize
-		if typeof(floorCFrame) ~= "CFrame" or typeof(footprintSize) ~= "Vector3" then
-			continue
-		end
-
-		local index = math.max(1, math.floor(tonumber(pointData.index) or (#record.broccoliSproutWarningHandles + 1)))
-		record.broccoliSproutWarningHandles[index] = self.Indication.CreateCircle({
-			parent = castFolder,
-			cframe = floorCFrame,
-			diameter = math.max(footprintSize.X, footprintSize.Z),
-			duration = warningSeconds,
-		})
-	end
-end
-
 Handler.moduleIds = {
 	BROCCOLI_SPROUT_MODULE_ID,
 }
 Handler.start = Handler._startBroccoliSprout
 Handler.actions = {
-	warn = Handler._warnBroccoliSprout,
+	floor = Handler._floorBroccoliSprout,
 	sprout = Handler._sproutBroccoliSprout,
 }
 Handler.requiresHandle = false

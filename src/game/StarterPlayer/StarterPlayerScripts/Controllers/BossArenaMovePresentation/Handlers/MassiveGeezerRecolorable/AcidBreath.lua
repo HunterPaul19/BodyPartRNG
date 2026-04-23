@@ -171,7 +171,7 @@ function Handler:_applyAcidBreathPoisonScreen(durationSeconds: number)
 	end)
 end
 
-function Handler:_shootAcidBreath(record: ActiveRecord, event: PresentationEvent)
+function Handler:_startAcidBreath(record: ActiveRecord, event: PresentationEvent)
 	local bossModel = event.bossModel
 	if bossModel == nil or bossModel.Parent == nil then
 		self:_cleanupRecord(record)
@@ -212,7 +212,15 @@ function Handler:_shootAcidBreath(record: ActiveRecord, event: PresentationEvent
 		return
 	end
 
-	self:playAllSounds(headModel, scaleMultiplier)
+	self:playTimedSounds(headModel, scaleMultiplier)
+end
+
+function Handler:_shootAcidBreath(record: ActiveRecord)
+	local headModel = record.acidBreathHeadModel
+	if headModel == nil or headModel.Parent == nil then
+		return
+	end
+
 	self:emitEffectInstance(headModel, MASSIVE_GEEZER_ACID_BREATH_HEAD_LIFETIME_SECONDS)
 end
 
@@ -232,6 +240,7 @@ end
 Handler.moduleIds = {
 	MASSIVE_GEEZER_ACID_BREATH_MODULE_ID,
 }
+Handler.start = Handler._startAcidBreath
 Handler.actions = {
 	shoot = Handler._shootAcidBreath,
 	poison = function(self, _record, event)

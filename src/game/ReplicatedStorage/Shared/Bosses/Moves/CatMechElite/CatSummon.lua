@@ -5,6 +5,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
+local MinionDisplay = require(ReplicatedStorage.Shared.Bosses.MinionDisplay)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 
@@ -21,7 +22,9 @@ local VFX_FOLDER_NAME = "VFX"
 local CAT_MECH_ELITE_VFX_FOLDER_NAME = "CatMechElite"
 local CAT_SUMMON_VFX_FOLDER_NAME = "CatSummon"
 local MINION_MODEL_NAME = "Cat Mech"
+local MINION_DISPLAY_NAME = "Cat Mech"
 
+local CAT_SUMMON_YAW_OFFSETS_DEGREES = { 0, 15, 30, -15, -30 }
 local MINION_SCALE = 3
 local MINION_MAX_HEALTH = 70
 local MINION_WALK_SPEED = 14
@@ -115,26 +118,35 @@ local function resolveMinionSourceModel(): Model?
 	return nil
 end
 
-local function resolveRuntimeImpactVfxPartCFrame(bossRootPart: BasePart, scaleMultiplier: number): CFrame
+local function resolveRuntimeImpactVfxPartCFrame(rootCFrame: CFrame, scaleMultiplier: number): CFrame
 	local catSummonFolder = resolveCatSummonVfxFolder()
 	local impactSource = catSummonFolder and catSummonFolder:FindFirstChild("Impact")
 	if not (impactSource and impactSource:IsA("Model")) then
-		return bossRootPart.CFrame
+		return rootCFrame
 	end
 
 	local impactModel = impactSource:Clone()
 	impactModel:ScaleTo(math.max(0.1, scaleMultiplier))
-	impactModel:PivotTo(bossRootPart.CFrame)
+	impactModel:PivotTo(rootCFrame)
 
 	local impactPart = impactModel:FindFirstChild("Impact", true)
 	if not (impactPart and impactPart:IsA("BasePart")) then
 		impactModel:Destroy()
-		return bossRootPart.CFrame
+		return rootCFrame
 	end
 
 	local impactCFrame = impactPart.CFrame
 	impactModel:Destroy()
 	return impactCFrame
+end
+
+local function resolveRuntimeImpactVfxPartCFrames(bossRootPart: BasePart, scaleMultiplier: number): { CFrame }
+	local impactCFrames = {}
+	for _, offsetDegrees in ipairs(CAT_SUMMON_YAW_OFFSETS_DEGREES) do
+		local rootCFrame = bossRootPart.CFrame * CFrame.Angles(0, math.rad(offsetDegrees), 0)
+		table.insert(impactCFrames, resolveRuntimeImpactVfxPartCFrame(rootCFrame, scaleMultiplier))
+	end
+	return impactCFrames
 end
 
 local function ensureActiveMinionsFolder(): Folder
@@ -479,10 +491,8 @@ function CatSummon.StartCast(context)
 	local impactTriggered = false
 	local presentationStopped = false
 	local recoveryEndsAt = nil :: number?
-	local minionModel = nil :: Model?
-	local minionConnections = {}
+	local minionRecords = {}
 	local activeMinionHitboxes = {}
-	local minionLocomotionController = nil
 
 	local function disconnectStoppedConnection()
 		if stoppedConnection and stoppedConnection.Connected then
@@ -491,13 +501,20 @@ function CatSummon.StartCast(context)
 		stoppedConnection = nil
 	end
 
-	local function disconnectMinionConnections()
-		for _, connection in ipairs(minionConnections) do
+	local function cleanupActiveMinionsFolderIfEmpty()
+		local minionsFolder = Workspace:FindFirstChild(ACTIVE_MINIONS_FOLDER_NAME)
+		if minionsFolder and minionsFolder:IsA("Folder") and #minionsFolder:GetChildren() <= 0 then
+			minionsFolder:Destroy()
+		end
+	end
+
+	local function disconnectMinionConnections(record)
+		for _, connection in ipairs(record.connections) do
 			if connection.Connected then
 				connection:Disconnect()
 			end
 		end
-		table.clear(minionConnections)
+		table.clear(record.connections)
 	end
 
 	local function destroyActiveMinionHitboxes()
@@ -507,16 +524,16 @@ function CatSummon.StartCast(context)
 		table.clear(activeMinionHitboxes)
 	end
 
-	local function destroyMinionLocomotionController()
-		if minionLocomotionController == nil then
+	local function destroyMinionLocomotionController(record)
+		if record.locomotionController == nil then
 			return
 		end
 
-		local ok, err = pcall(minionLocomotionController.Destroy)
+		local ok, err = pcall(record.locomotionController.Destroy)
 		if not ok then
 			warn("[CatSummon] Failed to destroy minion locomotion controller:", err)
 		end
-		minionLocomotionController = nil
+		record.locomotionController = nil
 	end
 
 	local function stopPresentation()
@@ -542,11 +559,32 @@ function CatSummon.StartCast(context)
 		end)
 	end
 
-	local function destroyMinion()
-		if minionModel and minionModel.Parent ~= nil then
-			minionModel:Destroy()
+	local function removeMinionRecord(record, destroyModel: boolean)
+		if record.removed then
+			return
 		end
-		minionModel = nil
+
+		record.removed = true
+		minionRecords[record] = nil
+		destroyMinionLocomotionController(record)
+		disconnectMinionConnections(record)
+
+		local model = record.model
+		if destroyModel and model and model.Parent ~= nil then
+			model:Destroy()
+		end
+
+		cleanupActiveMinionsFolderIfEmpty()
+	end
+
+	local function destroyAllMinions()
+		local recordsToDestroy = {}
+		for record in pairs(minionRecords) do
+			table.insert(recordsToDestroy, record)
+		end
+		for _, record in ipairs(recordsToDestroy) do
+			removeMinionRecord(record, true)
+		end
 	end
 
 	local function cleanup(stopAnimation: boolean)
@@ -557,10 +595,8 @@ function CatSummon.StartCast(context)
 		cleanedUp = true
 		stopPresentation()
 		disconnectStoppedConnection()
-		disconnectMinionConnections()
 		destroyActiveMinionHitboxes()
-		destroyMinionLocomotionController()
-		destroyMinion()
+		destroyAllMinions()
 
 		if impactThread ~= nil then
 			task.cancel(impactThread)
@@ -575,59 +611,54 @@ function CatSummon.StartCast(context)
 			profile:StopAnimation(animationInstance, ANIMATION_FADE_SECONDS)
 		end
 
-		local minionsFolder = Workspace:FindFirstChild(ACTIVE_MINIONS_FOLDER_NAME)
-		if minionsFolder and minionsFolder:IsA("Folder") and #minionsFolder:GetChildren() <= 0 then
-			minionsFolder:Destroy()
-		end
-	end
-
-	local function removeMinion()
-		destroyMinionLocomotionController()
-		disconnectMinionConnections()
-		minionModel = nil
-
-		local minionsFolder = Workspace:FindFirstChild(ACTIVE_MINIONS_FOLDER_NAME)
-		if minionsFolder and minionsFolder:IsA("Folder") and #minionsFolder:GetChildren() <= 0 then
-			minionsFolder:Destroy()
-		end
+		cleanupActiveMinionsFolderIfEmpty()
 	end
 
 	local function bindMinionAi(spawnedMinion: Model, humanoid: Humanoid, rootPart: BasePart)
+		local record = {
+			model = spawnedMinion,
+			connections = {},
+			locomotionController = createMinionLocomotionController(spawnedMinion, humanoid, rootPart),
+			removed = false,
+		}
 		local nextAttackAt = 0
 		local lastMoveAt = 0
-		minionLocomotionController = createMinionLocomotionController(spawnedMinion, humanoid, rootPart)
+		minionRecords[record] = true
 
-		table.insert(minionConnections, humanoid.Died:Connect(function()
+		table.insert(record.connections, humanoid.Died:Connect(function()
 			task.defer(function()
-				if spawnedMinion.Parent ~= nil then
-					spawnedMinion:Destroy()
-				end
-				removeMinion()
+				removeMinionRecord(record, true)
 			end)
 		end))
-		table.insert(minionConnections, spawnedMinion.AncestryChanged:Connect(function(_, parent)
+		table.insert(record.connections, spawnedMinion.AncestryChanged:Connect(function(_, parent)
 			if parent == nil then
-				removeMinion()
+				removeMinionRecord(record, false)
 			end
 		end))
-		table.insert(minionConnections, bossModel.AncestryChanged:Connect(function(_, parent)
+		table.insert(record.connections, bossModel.AncestryChanged:Connect(function(_, parent)
 			if parent == nil then
-				destroyMinion()
+				removeMinionRecord(record, true)
 			end
 		end))
-		table.insert(minionConnections, bossHumanoid.Died:Connect(function()
-			destroyMinion()
+		table.insert(record.connections, bossHumanoid.Died:Connect(function()
+			removeMinionRecord(record, true)
 		end))
 
-		table.insert(minionConnections, RunService.Heartbeat:Connect(function()
-			if cancelled or spawnedMinion.Parent == nil or humanoid.Health <= 0 or rootPart.Parent == nil then
+		table.insert(record.connections, RunService.Heartbeat:Connect(function()
+			local locomotionController = record.locomotionController
+			if record.removed
+				or cancelled
+				or spawnedMinion.Parent == nil
+				or humanoid.Health <= 0
+				or rootPart.Parent == nil
+				or locomotionController == nil then
 				return
 			end
 
 			local targets = getAlivePlayerTargets(rootPart.Position)
 			local target = targets[1]
 			if target == nil then
-				minionLocomotionController.Update(false)
+				locomotionController.Update(false)
 				return
 			end
 
@@ -636,7 +667,7 @@ function CatSummon.StartCast(context)
 				lastMoveAt = now
 				humanoid:MoveTo(target.rootPart.Position)
 			end
-			minionLocomotionController.Update(true)
+			locomotionController.Update(true)
 
 			if target.distance > MINION_ATTACK_RANGE or now < nextAttackAt then
 				return
@@ -675,9 +706,9 @@ function CatSummon.StartCast(context)
 		humanoid.Health = MINION_MAX_HEALTH
 		humanoid.WalkSpeed = MINION_WALK_SPEED
 		humanoid.AutoRotate = true
+		MinionDisplay.ConfigureHumanoid(humanoid, MINION_DISPLAY_NAME)
 		spawnedMinion:PivotTo(CFrame.lookAt(spawnPosition, lookTarget))
 		setServerNetworkOwnership(spawnedMinion)
-		minionModel = spawnedMinion
 		bindMinionAi(spawnedMinion, humanoid, rootPart)
 	end
 
@@ -701,6 +732,7 @@ function CatSummon.StartCast(context)
 		rootPartFallbackThread = nil
 		context.EmitPresentation("rootPart", {
 			scaleMultiplier = tonumber(context.bossDefinition and context.bossDefinition.scaleMultiplier) or 1,
+			yawOffsetsDegrees = CAT_SUMMON_YAW_OFFSETS_DEGREES,
 		})
 	end
 
@@ -712,11 +744,14 @@ function CatSummon.StartCast(context)
 		impactTriggered = true
 		impactThread = nil
 		local scaleMultiplier = tonumber(context.bossDefinition and context.bossDefinition.scaleMultiplier) or 1
-		local impactVfxPartCFrame = resolveRuntimeImpactVfxPartCFrame(bossRootPart, scaleMultiplier)
+		local impactVfxPartCFrames = resolveRuntimeImpactVfxPartCFrames(bossRootPart, scaleMultiplier)
 		context.EmitPresentation("impact", {
 			scaleMultiplier = scaleMultiplier,
+			yawOffsetsDegrees = CAT_SUMMON_YAW_OFFSETS_DEGREES,
 		})
-		spawnMinionAtImpact(impactVfxPartCFrame)
+		for _, impactVfxPartCFrame in ipairs(impactVfxPartCFrames) do
+			spawnMinionAtImpact(impactVfxPartCFrame)
+		end
 		markComplete()
 	end
 

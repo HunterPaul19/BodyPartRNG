@@ -16,11 +16,14 @@ local Constants = {
 		DESTROYER_MISSILE_BARRAGE_VFX_NAME = "MissileBarrage",
 	},
 	Timing = {
-		DESTROYER_MISSILE_BARRAGE_EXPLOSION_LIFETIME_SECONDS = 2.5,
+		DESTROYER_MISSILE_BARRAGE_EXPLOSION_LIFETIME_SECONDS = 4.5,
+		DESTROYER_MISSILE_BARRAGE_GLINT_EMIT_DELAY_SECONDS = 0.15,
 	},
 }
 
 local DESTROYER_3000_VFX_FOLDER_NAME = Constants.Vfx.DESTROYER_3000_VFX_FOLDER_NAME
+local DESTROYER_MISSILE_BARRAGE_GLINT_EMIT_DELAY_SECONDS =
+	Constants.Timing.DESTROYER_MISSILE_BARRAGE_GLINT_EMIT_DELAY_SECONDS
 local DESTROYER_MISSILE_BARRAGE_EXPLODE_VFX_NAME = Constants.Vfx.DESTROYER_MISSILE_BARRAGE_EXPLODE_VFX_NAME
 local DESTROYER_MISSILE_BARRAGE_EXPLOSION_LIFETIME_SECONDS = Constants.Timing.DESTROYER_MISSILE_BARRAGE_EXPLOSION_LIFETIME_SECONDS
 local DESTROYER_MISSILE_BARRAGE_MODULE_ID = Constants.ModuleIds.DESTROYER_MISSILE_BARRAGE_MODULE_ID
@@ -41,6 +44,19 @@ local function findFirstDescendantNamed(root: Instance, name: string): Instance?
 	end
 
 	return nil
+end
+
+local function setGlintEmitDelay(root: Instance, delaySeconds: number)
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if not descendant:IsA("ParticleEmitter") then
+			continue
+		end
+
+		local parent = descendant.Parent
+		if parent and string.lower(parent.Name) == "glint" then
+			descendant:SetAttribute("EmitDelay", delaySeconds)
+		end
+	end
 end
 
 function Handler:_updateMissileBarrageProjectiles(record: ActiveRecord, nowServerTime: number)
@@ -125,6 +141,7 @@ function Handler:_startDestroyerMissileBarrage(record: ActiveRecord, event: Pres
 	self:prepareAttachedEffectModel(rootPartModel)
 	self:enableVfxDescendants(upperTorsoModel)
 	self:enableVfxDescendants(rootPartModel)
+	setGlintEmitDelay(upperTorsoModel, DESTROYER_MISSILE_BARRAGE_GLINT_EMIT_DELAY_SECONDS)
 	self:scaleAttachedSounds(upperTorsoModel, scaleMultiplier)
 	self:scaleAttachedSounds(rootPartModel, scaleMultiplier)
 
@@ -245,6 +262,7 @@ function Handler:_impactDestroyerMissile(record: ActiveRecord, event: Presentati
 	end
 
 	projectileModel:PivotTo(CFrame.new(impactPosition))
+	projectileModel.Parent = self:_ensureVisualFolder()
 	local scaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1)
 	local explodeEffect = findFirstDescendantNamed(projectileModel, DESTROYER_MISSILE_BARRAGE_EXPLODE_VFX_NAME)
 	if explodeEffect == nil then

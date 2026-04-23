@@ -6,13 +6,12 @@ local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
 local CharacterPhysicsContext = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Utilities.CharacterPhysicsContext)
 
-local GRAB_RANGE_STUDS = 100
+local GRAB_RANGE_STUDS = 56
 local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "Agrynoth"
 local GRAB_ANIMATION_NAME = "Grab"
 local SLAM_ANIMATION_NAME = "GrabSlam"
 local GRAB_MARKER_NAME = "Grab"
-local HIT_MARKER_NAME = "Hit"
 local HAND_PART_NAME = "LeftHand"
 local GROUND_RAYCAST_LIFT = 10
 local GROUND_RAYCAST_DEPTH = 260
@@ -21,6 +20,12 @@ local HIT_SEQUENCE = table.freeze({
 	table.freeze({ radius = 14, damage = 15 }),
 	table.freeze({ radius = 22, damage = 20 }),
 	table.freeze({ radius = 32, damage = 25 }),
+})
+
+local SLAM_HIT_TIMINGS_SECONDS = table.freeze({
+	115 / 60,
+	144 / 60,
+	180 / 60,
 })
 
 local stub = CreateExplicitBossMoveStub({
@@ -455,6 +460,11 @@ function BoneBreaker.CanUse(context)
 		return false, "No focus target"
 	end
 
+	local distance = tonumber(context.distanceToTarget)
+	if distance ~= nil and distance > GRAB_RANGE_STUDS then
+		return false, "Target outside grab range"
+	end
+
 	return true
 end
 
@@ -469,8 +479,7 @@ function BoneBreaker.GetSelectionWeight(context)
 		{ distance = 12, weight = 1.65 },
 		{ distance = 24, weight = 1.25 },
 		{ distance = 42, weight = 0.55 },
-		{ distance = 70, weight = 0.18 },
-		{ distance = 100, weight = 0.08 },
+		{ distance = GRAB_RANGE_STUDS, weight = 0 },
 	})
 end
 
@@ -509,7 +518,9 @@ function BoneBreaker.StartCast(context)
 	local captiveState = nil
 	local grabbed = false
 	local hitIndex = 0
+	local slamSequence = 0
 	local recoveryEndsAt = nil :: number?
+	local presentationScaleMultiplier = math.max(0.1, tonumber(context.bossDefinition and context.bossDefinition.scaleMultiplier) or 1)
 
 	local function disconnectStoppedConnection()
 		if stoppedConnection and stoppedConnection.Connected then
@@ -551,7 +562,7 @@ function BoneBreaker.StartCast(context)
 		end
 	end
 
-	local function handleHit()
+	local function handleHit(nextHitIndex: number)
 		if cancelled or completed or captiveState == nil then
 			return
 		end
@@ -560,8 +571,8 @@ function BoneBreaker.StartCast(context)
 			return
 		end
 
-		hitIndex += 1
-		local hitSpec = HIT_SEQUENCE[math.min(hitIndex, #HIT_SEQUENCE)]
+		hitIndex = math.max(hitIndex, math.clamp(nextHitIndex, 1, #HIT_SEQUENCE))
+		local hitSpec = HIT_SEQUENCE[math.min(nextHitIndex, #HIT_SEQUENCE)]
 		local floorCFrame = resolveGroundCFrame(captiveState.character, captiveState.rootPart)
 		if floorCFrame == nil then
 			return
@@ -569,10 +580,23 @@ function BoneBreaker.StartCast(context)
 
 		applyAoeDamage(floorCFrame.Position, hitSpec.radius, hitSpec.damage)
 		context.EmitPresentation("impact", {
-			hitIndex = math.min(hitIndex, #HIT_SEQUENCE),
+			hitIndex = math.min(nextHitIndex, #HIT_SEQUENCE),
 			floorCFrame = floorCFrame,
 			radius = hitSpec.radius,
+			scaleMultiplier = presentationScaleMultiplier,
 		})
+	end
+
+	local function scheduleAuthoredSlamHits(activeSlamSequence: number)
+		for scheduledHitIndex, delaySeconds in ipairs(SLAM_HIT_TIMINGS_SECONDS) do
+			task.delay(delaySeconds, function()
+				if activeSlamSequence ~= slamSequence then
+					return
+				end
+
+				handleHit(scheduledHitIndex)
+			end)
+		end
 	end
 
 	local function playSlamAnimation()
@@ -581,14 +605,19 @@ function BoneBreaker.StartCast(context)
 		end
 
 		activePhase = "GrabSlam"
-		local track = profile:PlayAnimation(slamAnimation, Enum.AnimationPriority.Action, 1, {
-			[HIT_MARKER_NAME] = handleHit,
-		}, ANIMATION_FADE_SECONDS)
+		local track = profile:PlayAnimation(slamAnimation, Enum.AnimationPriority.Action, 1, nil, ANIMATION_FADE_SECONDS)
 		if track == nil then
 			warn("[BoneBreaker] Failed to play GrabSlam animation.")
 			markComplete()
 			return
 		end
+
+		slamSequence += 1
+		local activeSlamSequence = slamSequence
+		context.EmitPresentation("slamStart", {
+			scaleMultiplier = presentationScaleMultiplier,
+		})
+		scheduleAuthoredSlamHits(activeSlamSequence)
 
 		track.Looped = false
 		disconnectStoppedConnection()
@@ -599,9 +628,9 @@ function BoneBreaker.StartCast(context)
 			end
 			if hitIndex < #HIT_SEQUENCE then
 				warn(string.format(
-					"[BoneBreaker] GrabSlam animation completed after %d '%s' markers; expected %d.",
+					"[BoneBreaker] GrabSlam animation completed after %d %s; expected %d.",
 					hitIndex,
-					HIT_MARKER_NAME,
+					"authored timed hit",
 					#HIT_SEQUENCE
 				))
 			end
@@ -633,7 +662,9 @@ function BoneBreaker.StartCast(context)
 		return nil
 	end
 
-	context.EmitPresentation("start")
+	context.EmitPresentation("start", {
+		scaleMultiplier = presentationScaleMultiplier,
+	})
 	grabTrack.Looped = false
 	stoppedConnection = grabTrack.Stopped:Connect(function()
 		disconnectStoppedConnection()
