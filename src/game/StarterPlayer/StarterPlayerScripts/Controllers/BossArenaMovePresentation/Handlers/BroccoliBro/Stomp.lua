@@ -60,17 +60,7 @@ function Handler:_stompBroccoliStomp(record: ActiveRecord, event: PresentationEv
 
 	local scaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1)
 	local effectInstance = effectSource:Clone()
-	if effectInstance:IsA("Model") then
-		effectInstance:ScaleTo(scaleMultiplier)
-		self:prepareMovingEffectModel(effectInstance)
-		effectInstance:PivotTo(payload.impactCFrame)
-	elseif effectInstance:IsA("BasePart") then
-		effectInstance.Size *= scaleMultiplier
-		self:prepareMovingEffectPart(effectInstance)
-		effectInstance.CFrame = payload.impactCFrame
-	elseif effectInstance:IsA("PVInstance") then
-		effectInstance:PivotTo(payload.impactCFrame)
-	else
+	if not self:pivotEffectInstanceAtAuthoredPivot(effectInstance, payload.impactCFrame, scaleMultiplier) then
 		self:warnWithPrefix("Broccoli Bro Stomp FloorFx VFX instance cannot be pivoted.")
 		effectInstance:Destroy()
 		self:_cleanupRecord(record)

@@ -165,6 +165,7 @@ local function spawnSpinHitbox(context, onDestroy: (() -> ())?)
 
 	local hitbox
 	hitbox = Hitbox.new({
+		DebugVisibilityAttribute = "BossHitboxesVisible",
 		Character = bossModel,
 		HitboxCFrame = function()
 			local hitboxCFrame = resolveHitboxGeometry(context)
@@ -187,7 +188,6 @@ local function spawnSpinHitbox(context, onDestroy: (() -> ())?)
 			end
 		end,
 	})
-	hitbox:Visible(true)
 	return hitbox
 end
 

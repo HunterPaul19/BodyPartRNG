@@ -256,6 +256,7 @@ local function spawnKickHitbox(context, impactCFrame: CFrame, hitTargets: { [Mod
 	local impactPosition = impactCFrame.Position
 	local hitbox
 	hitbox = Hitbox.new({
+		DebugVisibilityAttribute = "BossHitboxesVisible",
 		Character = bossModel,
 		HitboxCFrame = hitboxCFrame,
 		HitboxSize = hitboxSize,
@@ -297,7 +298,6 @@ local function spawnKickHitbox(context, impactCFrame: CFrame, hitTargets: { [Mod
 		end,
 	})
 
-	hitbox:Visible(true)
 	return hitbox
 end
 

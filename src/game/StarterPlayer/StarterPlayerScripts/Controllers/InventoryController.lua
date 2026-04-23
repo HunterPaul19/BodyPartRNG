@@ -86,6 +86,11 @@ local PREVIEW_LABEL_ORDER = table.freeze({
 	"Chance",
 	"EverRolled",
 })
+local PREVIEW_STAT_NAMES = table.freeze({
+	"Strength",
+	"Speed",
+	"Health",
+})
 local POTION_PREVIEW_VISIBLE_LABEL_ORDER = table.freeze({
 	"Bundle",
 	"Part",
@@ -129,6 +134,12 @@ type BodyPartClientState = {
 		passiveIncomePerSecond: number?,
 		luckBonus: number?,
 		rollSpeedBonus: number?,
+		speed: number?,
+		damage: number?,
+		health: number?,
+		speedBonus: number?,
+		damageBonus: number?,
+		healthBonus: number?,
 		activeSetId: string?,
 	}?,
 	autoSizeEnabled: boolean?,
@@ -267,6 +278,34 @@ local function extractTrailingLabelText(templateText: any, fallback: string): st
 		return normalized
 	end
 	return fallback
+end
+
+local function stripRichText(text: string): string
+	return text:gsub("<[^>]->", "")
+end
+
+local function collectPreviewStatLabels(statsFrame: Instance?): { [string]: TextLabel }
+	local labels = {}
+	if statsFrame == nil then
+		return labels
+	end
+
+	for _, descendant in ipairs(statsFrame:GetDescendants()) do
+		if not descendant:IsA("TextLabel") then
+			continue
+		end
+
+		local plainText = string.lower(stripRichText(descendant.Text or ""))
+		if string.find(plainText, "strength", 1, true) then
+			labels.Strength = descendant
+		elseif string.find(plainText, "speed", 1, true) then
+			labels.Speed = descendant
+		elseif string.find(plainText, "health", 1, true) then
+			labels.Health = descendant
+		end
+	end
+
+	return labels
 end
 
 local function setGuiTreeZIndex(root: Instance, zIndex: number)
@@ -474,6 +513,7 @@ function InventoryController:_ensureState()
 	self._warnedExistingCountFailure = false
 	self._previewLabelFontFaces = nil
 	self._previewLabelLayouts = nil :: PreviewLabelLayouts?
+	self._previewStatNativeTexts = {}
 	self._autoSizeDescriptionText = AUTO_SIZE_DESCRIPTION_TEXT
 	self._autoSizeButtonVisualEntries = {}
 	self._autoSizeButtonTweens = {}
@@ -2208,6 +2248,27 @@ function InventoryController:_syncSummaryLabels()
 	self._ui.incomeLabel.Text = summaryTexts.income
 	self._ui.luckLabel.Text = summaryTexts.luck
 	self._ui.rollSpeedLabel.Text = summaryTexts.rollSpeed
+	self:_syncPreviewStatLabels()
+end
+
+function InventoryController:_syncPreviewStatLabels()
+	local previewStatLabels = self._ui.previewStatLabels
+	if typeof(previewStatLabels) ~= "table" then
+		return
+	end
+
+	local statTexts = BodyPartPresentation.BuildPreviewStatTexts(
+		self._loadoutState and self._loadoutState.bonuses or nil,
+		self._previewStatNativeTexts
+	)
+
+	for _, statName in ipairs(PREVIEW_STAT_NAMES) do
+		local label = previewStatLabels[statName]
+		local text = statTexts[statName]
+		if label and label:IsA("TextLabel") and typeof(text) == "string" then
+			label.Text = text
+		end
+	end
 end
 
 function InventoryController:_syncPreview()
@@ -2241,6 +2302,7 @@ function InventoryController:_syncPreview()
 		self:_applyPreviewLabelStyles(nil)
 		self:_syncPreviewLabelLayout(nil)
 		self:_setEverRolledPreviewText(nil)
+		self:_syncPreviewStatLabels()
 		self:_setPreviewTab("info")
 		self:_syncInventoryAnchor(false)
 		return
@@ -2294,6 +2356,7 @@ function InventoryController:_syncPreview()
 	self:_setEverRolledPreviewText(previewModel.inventoryEverRolledText)
 	self._ui.previewLabels.Cash.Text = previewModel.cashText
 	self._ui.previewLabels.Chance.Text = previewModel.chanceText
+	self:_syncPreviewStatLabels()
 	self:_syncInventoryAnchor(true)
 
 	if previewModel.itemType == "potion" then
@@ -3503,6 +3566,7 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 			Chance = previewInfoFrame:WaitForChild("Chance", 30),
 			EverRolled = previewInfoFrame:WaitForChild("EverRolled", 30),
 		},
+		previewStatLabels = collectPreviewStatLabels(previewStatsFrame),
 		filterButtons = filterButtons,
 		auraButtons = auraButtons,
 		potionButtons = potionButtons,
@@ -3544,6 +3608,13 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		auraFavorite = buildHorizontalSpanLayout(favoriteButtonLayout, sellButtonLayout),
 	}
 	self._previewLabelLayouts = capturePreviewLabelLayouts(self._ui.previewLabels)
+	self._previewStatNativeTexts = {}
+	for _, statName in ipairs(PREVIEW_STAT_NAMES) do
+		local label = self._ui.previewStatLabels[statName]
+		if label and label:IsA("TextLabel") then
+			self._previewStatNativeTexts[statName] = label.Text
+		end
+	end
 	self._previewEverRolledNativeText = self._ui.previewLabels.EverRolled.Text
 	self._previewEverRolledSuffixText = extractTrailingLabelText(self._previewEverRolledNativeText, "Ever Rolled")
 

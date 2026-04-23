@@ -10,8 +10,9 @@ local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "OinanThickhoof"
 local ANIMATION_NAME = "Roar"
 local ROAR_MARKER_NAME = "Roar"
-local HITBOX_RADIUS = 50
-local HITBOX_HEIGHT = 100
+local HITBOX_SCALE = 1.5
+local HITBOX_RADIUS = 50 * HITBOX_SCALE
+local HITBOX_HEIGHT = 100 * HITBOX_SCALE
 local HITBOX_DURATION_SECONDS = 0.12
 local STUN_DURATION_SECONDS = 3
 
@@ -101,6 +102,12 @@ local function stopCharacterMovement(character: Model, humanoid: Humanoid, rootP
 	end
 end
 
+local function getRoarPresentationScale(context): number
+	local bossDefinition = context.bossDefinition
+	local bossScale = if bossDefinition == nil then 1 else tonumber(bossDefinition.scaleMultiplier) or 1
+	return bossScale * HITBOX_SCALE
+end
+
 local function spawnRoarHitbox(context, hitTargets: { [Model]: boolean })
 	local bossModel = context.bossModel
 	local bossRootPart = context.bossRootPart
@@ -109,6 +116,7 @@ local function spawnRoarHitbox(context, hitTargets: { [Model]: boolean })
 	end
 
 	local hitbox = Hitbox.new({
+		DebugVisibilityAttribute = "BossHitboxesVisible",
 		Character = bossModel,
 		HitboxCFrame = function()
 			if bossRootPart.Parent == nil then
@@ -145,7 +153,6 @@ local function spawnRoarHitbox(context, hitTargets: { [Model]: boolean })
 		end,
 	})
 
-	hitbox:Visible(true)
 	return hitbox
 end
 
@@ -264,7 +271,7 @@ function BullRoar.StartCast(context)
 
 		roarTriggered = true
 		context.EmitPresentation("roar", {
-			scaleMultiplier = context.bossDefinition.scaleMultiplier,
+			scaleMultiplier = getRoarPresentationScale(context),
 		})
 		destroyHitbox()
 		activeHitbox = spawnRoarHitbox(context, hitTargets)
@@ -280,7 +287,7 @@ function BullRoar.StartCast(context)
 	end
 
 	context.EmitPresentation("start", {
-		scaleMultiplier = context.bossDefinition.scaleMultiplier,
+		scaleMultiplier = getRoarPresentationScale(context),
 	})
 	track.Looped = false
 	stoppedConnection = track.Stopped:Connect(function()

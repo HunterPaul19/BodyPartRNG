@@ -1,11 +1,11 @@
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
-local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
+local CombatProjectileUtil = require(ReplicatedStorage.Shared.Combat.CombatProjectileUtil)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
 local DAMAGE = 22
@@ -83,37 +83,15 @@ local function resolveAnimationInstance(): Animation?
 end
 
 local function resolveHumanoid(model: Model?): Humanoid?
-	if model == nil then
-		return nil
-	end
-
-	return model:FindFirstChildOfClass("Humanoid")
+	return CombatMoveUtil.ResolveHumanoid(model)
 end
 
 local function resolveRootPart(model: Model?): BasePart?
-	if model == nil then
-		return nil
-	end
-
-	local rootPart = model:FindFirstChild("HumanoidRootPart")
-	if rootPart and rootPart:IsA("BasePart") then
-		return rootPart
-	end
-
-	local primaryPart = model.PrimaryPart
-	if primaryPart then
-		return primaryPart
-	end
-
-	return model:FindFirstChildWhichIsA("BasePart", true)
+	return CombatMoveUtil.ResolveRootPart(model)
 end
 
 local function resolveStandingHeight(bossHumanoid: Humanoid?, bossRootPart: BasePart): number
-	if bossHumanoid == nil then
-		return bossRootPart.Size.Y
-	end
-
-	return math.max((bossRootPart.Size.Y * 0.5) + bossHumanoid.HipHeight, bossRootPart.Size.Y)
+	return CombatMoveUtil.ResolveStandingHeight(bossHumanoid, bossRootPart)
 end
 
 local function resolveBossHeadPosition(bossModel: Model, bossHumanoid: Humanoid?, bossRootPart: BasePart): Vector3
@@ -127,83 +105,25 @@ local function resolveBossHeadPosition(bossModel: Model, bossHumanoid: Humanoid?
 end
 
 local function buildFloorRaycastParams(bossModel: Model): RaycastParams
-	local includeInstances = {}
-	local activeBossArena = Workspace:FindFirstChild("ActiveBossArena")
-	if activeBossArena then
-		table.insert(includeInstances, activeBossArena)
-	end
-
-	local map = Workspace:FindFirstChild("Map")
-	if map then
-		table.insert(includeInstances, map)
-	end
-
-	local world = Workspace:FindFirstChild("World")
-	local worldMap = world and world:FindFirstChild("Map")
-	if worldMap then
-		table.insert(includeInstances, worldMap)
-	end
-
-	if Workspace.Terrain then
-		table.insert(includeInstances, Workspace.Terrain)
-	end
-
-	local raycastParams = RaycastParams.new()
-	if #includeInstances > 0 then
-		raycastParams.FilterType = Enum.RaycastFilterType.Include
-		raycastParams.FilterDescendantsInstances = includeInstances
-	else
-		raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-		raycastParams.FilterDescendantsInstances = { bossModel }
-	end
-	return raycastParams
+	return CombatMoveUtil.BuildFloorRaycastParams({
+		sourceModel = bossModel,
+	})
 end
 
 local function raycastGroundNear(position: Vector3, bossModel: Model): Vector3?
-	local raycastParams = buildFloorRaycastParams(bossModel)
-	local rayOrigin = position + Vector3.new(0, FLOOR_RAYCAST_START_HEIGHT, 0)
-	local rayDirection = Vector3.new(0, -(FLOOR_RAYCAST_START_HEIGHT + FLOOR_RAYCAST_DISTANCE), 0)
-	local raycastResult = Workspace:Raycast(rayOrigin, rayDirection, raycastParams)
-	if raycastResult == nil then
-		return nil
-	end
-
-	return raycastResult.Position
+	return CombatMoveUtil.RaycastGroundNear(position, {
+		sourceModel = bossModel,
+		startHeight = FLOOR_RAYCAST_START_HEIGHT,
+		distance = FLOOR_RAYCAST_DISTANCE,
+	})
 end
 
-local function resolveNearestAliveTarget(bossRootPart: BasePart)
-	local nearestTarget = nil
-
-	for _, player in ipairs(Players:GetPlayers()) do
-		local character = player.Character
-		local humanoid = resolveHumanoid(character)
-		local rootPart = resolveRootPart(character)
-		if character == nil or humanoid == nil or humanoid.Health <= 0 or rootPart == nil then
-			continue
-		end
-
-		local distance = (rootPart.Position - bossRootPart.Position).Magnitude
-		if nearestTarget == nil or distance < nearestTarget.distance then
-			nearestTarget = {
-				player = player,
-				character = character,
-				humanoid = humanoid,
-				rootPart = rootPart,
-				distance = distance,
-			}
-		end
-	end
-
-	return nearestTarget
+local function resolveNearestAliveTarget(context, bossRootPart: BasePart)
+	return CombatMoveUtil.ResolveNearestAliveTarget(bossRootPart.Position, context.aliveTargets or {})
 end
 
 local function resolvePlanarForwardDirection(bossRootPart: BasePart): Vector3
-	local direction = Vector3.new(bossRootPart.CFrame.LookVector.X, 0, bossRootPart.CFrame.LookVector.Z)
-	if direction.Magnitude <= 0.001 then
-		return Vector3.new(0, 0, -1)
-	end
-
-	return direction.Unit
+	return CombatMoveUtil.ResolvePlanarForward(bossRootPart, nil)
 end
 
 local function resolveImpactPosition(bossModel: Model, bossRootPart: BasePart, targetData): Vector3
@@ -216,49 +136,26 @@ local function resolveImpactPosition(bossModel: Model, bossRootPart: BasePart, t
 end
 
 local function buildKnockbackDirection(impactPosition: Vector3, targetRootPart: BasePart?): Vector3
-	local direction = Vector3.new(0, 0, -1)
-	if targetRootPart and targetRootPart.Parent ~= nil then
-		local offset = targetRootPart.Position - impactPosition
-		local planarOffset = Vector3.new(offset.X, 0, offset.Z)
-		if planarOffset.Magnitude > 0.001 then
-			direction = planarOffset.Unit
-		end
-	end
-
-	return (direction * 48) + Vector3.new(0, 18, 0)
+	return CombatMoveUtil.BuildRadialKnockbackDirection({
+		impactPosition = impactPosition,
+		targetRootPart = targetRootPart,
+		speed = 48,
+		upwardSpeed = 18,
+	})
 end
 
 local function applyExplosionDamage(bossModel: Model, impactPosition: Vector3)
-	local hitTargets = {}
-	local explosionHitbox
-	explosionHitbox = Hitbox.new({
-		Character = bossModel,
-		HitboxCFrame = CFrame.new(impactPosition),
-		HitboxRadius = EXPLOSION_RADIUS,
-		HitboxType = "SpacialQuery",
-		Time = EXPLOSION_HITBOX_DURATION_SECONDS,
-		MaxParts = 256,
-	}, {
-		HitTarget = function(targetModel: Model)
-			if hitTargets[targetModel] == true then
-				return
-			end
-
-			local player = Players:GetPlayerFromCharacter(targetModel)
-			if player == nil then
-				return
-			end
-
-			local humanoid = resolveHumanoid(targetModel)
-			if humanoid == nil or humanoid.Health <= 0 then
-				return
-			end
-
-			hitTargets[targetModel] = true
-			humanoid:TakeDamage(DAMAGE)
-
-			Knockback(targetModel, "Default", {
-				Direction = buildKnockbackDirection(impactPosition, resolveRootPart(targetModel)),
+	CombatProjectileUtil.CreateRadiusDamageHitbox({
+		debugVisibilityAttribute = "BossHitboxesVisible",
+		hitboxOwner = bossModel,
+		impactPosition = impactPosition,
+		radius = EXPLOSION_RADIUS,
+		duration = EXPLOSION_HITBOX_DURATION_SECONDS,
+		maxParts = 256,
+		damage = DAMAGE,
+		onHit = function(targetInfo)
+			Knockback(targetInfo.character, "Default", {
+				Direction = buildKnockbackDirection(impactPosition, targetInfo.rootPart),
 				Duration = 0.2,
 				RagdollDuration = 0.55,
 				Stun = 0.35,
@@ -266,11 +163,6 @@ local function applyExplosionDamage(bossModel: Model, impactPosition: Vector3)
 				AntiStun = 0.45,
 				GroundMode = "DeterministicMap",
 			})
-		end,
-		HitboxDestroy = function()
-			if explosionHitbox then
-				explosionHitbox = nil
-			end
 		end,
 	})
 end
@@ -331,10 +223,7 @@ function WaterBomb.StartCast(context)
 	local throwTriggered = false
 	local presentationStopped = false
 	local recoveryEndsAt = nil :: number?
-	local projectileStartPosition = nil :: Vector3?
-	local projectileImpactPosition = nil :: Vector3?
-	local projectileStartTime = 0
-	local projectileTravelDuration = 0
+	local projectileMotion = nil
 
 	local function disconnectStoppedConnection()
 		if stoppedConnection and stoppedConnection.Connected then
@@ -394,12 +283,11 @@ function WaterBomb.StartCast(context)
 	end
 
 	local function getCurrentProjectilePosition(): Vector3?
-		if projectileStartPosition == nil or projectileImpactPosition == nil then
+		if projectileMotion == nil then
 			return nil
 		end
 
-		local alpha = math.clamp((os.clock() - projectileStartTime) / math.max(0.001, projectileTravelDuration), 0, 1)
-		return projectileStartPosition:Lerp(projectileImpactPosition, alpha)
+		return CombatProjectileUtil.ResolveMotionPosition(projectileMotion)
 	end
 
 	local function explodeAt(impactPosition: Vector3)
@@ -425,46 +313,38 @@ function WaterBomb.StartCast(context)
 		end
 
 		throwTriggered = true
-		local targetData = resolveNearestAliveTarget(bossRootPart)
+		local targetData = resolveNearestAliveTarget(context, bossRootPart)
 		local impactPosition = resolveImpactPosition(bossModel, bossRootPart, targetData)
 		local startPosition = resolveBossHeadPosition(bossModel, bossHumanoid, bossRootPart)
 			+ Vector3.new(0, BALL_RISE_HEIGHT_STUDS, 0)
-		local travelDistance = (impactPosition - startPosition).Magnitude
-		projectileTravelDuration = travelDistance / PROJECTILE_SPEED_STUDS_PER_SECOND
-		projectileStartPosition = startPosition
-		projectileImpactPosition = impactPosition
-		projectileStartTime = os.clock()
+		projectileMotion = CombatProjectileUtil.CreateLinearMotion(
+			startPosition,
+			impactPosition,
+			PROJECTILE_SPEED_STUDS_PER_SECOND
+		)
 
 		context.EmitPresentation("throw", {
 			startPosition = startPosition,
 			impactPosition = impactPosition,
-			travelDuration = projectileTravelDuration,
+			travelDuration = projectileMotion.travelDuration,
 			projectileSpeed = PROJECTILE_SPEED_STUDS_PER_SECOND,
 			ballScale = BALL_END_SCALE,
 			targetUserId = if targetData then targetData.player.UserId else nil,
 		})
 
-		if projectileTravelDuration <= 0 then
+		if projectileMotion.travelDuration <= 0 then
 			explodeAt(impactPosition)
 			return
 		end
 
-		activeProjectileHitbox = Hitbox.new({
-			Character = bossModel,
-			HitboxCFrame = function()
-				local currentPosition = getCurrentProjectilePosition()
-				if currentPosition == nil then
-					return nil
-				end
-				return CFrame.new(currentPosition)
-			end,
-			HitboxRadius = PROJECTILE_RADIUS,
-			HitboxType = "SpacialQuery",
-			Time = projectileTravelDuration,
-			MaxParts = 64,
-		}, {
-			HitTarget = function() end,
-			HitboxDestroy = function()
+		activeProjectileHitbox = CombatProjectileUtil.CreateTrackingHitbox({
+			debugVisibilityAttribute = "BossHitboxesVisible",
+			hitboxOwner = bossModel,
+			getPosition = getCurrentProjectilePosition,
+			radius = PROJECTILE_RADIUS,
+			duration = projectileMotion.travelDuration,
+			maxParts = 64,
+			onDestroy = function()
 				activeProjectileHitbox = nil
 			end,
 		})
@@ -493,7 +373,7 @@ function WaterBomb.StartCast(context)
 			end
 
 			previousPosition = currentPosition
-			if os.clock() - projectileStartTime >= projectileTravelDuration then
+			if CombatProjectileUtil.GetMotionAlpha(projectileMotion) >= 1 then
 				explodeAt(impactPosition)
 			end
 		end)

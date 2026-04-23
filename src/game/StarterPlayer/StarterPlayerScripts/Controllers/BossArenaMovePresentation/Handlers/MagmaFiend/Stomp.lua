@@ -43,9 +43,12 @@ function Handler:_stompMagmaStomp(record: ActiveRecord, event: PresentationEvent
 
 	local scaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1)
 	local floorModel = floorSource:Clone()
-	floorModel:ScaleTo(scaleMultiplier)
-	self:prepareMovingEffectModel(floorModel)
-	floorModel:PivotTo(payload.impactCFrame)
+	if not self:pivotEffectInstanceAtAuthoredPivot(floorModel, payload.impactCFrame, scaleMultiplier) then
+		self:warnWithPrefix("Magma Stomp floor VFX model cannot be pivoted.")
+		floorModel:Destroy()
+		self:_cleanupRecord(record)
+		return
+	end
 	floorModel.Parent = self:_ensureVisualFolder()
 
 	self:playAllSounds(floorModel, scaleMultiplier)

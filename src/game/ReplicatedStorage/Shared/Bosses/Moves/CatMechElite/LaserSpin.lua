@@ -321,6 +321,7 @@ local function spawnBeamHitboxes(context, baseCFrame: CFrame, visualScale: numbe
 	local hitboxes = table.create(#geometries)
 	for _, beamGeometry in ipairs(geometries) do
 		local hitbox = Hitbox.new({
+			DebugVisibilityAttribute = "BossHitboxesVisible",
 			Character = bossModel,
 			HitboxCFrame = function()
 				return resolveSpinningBeamCFrame(baseCFrame, beamGeometry, startedAt)

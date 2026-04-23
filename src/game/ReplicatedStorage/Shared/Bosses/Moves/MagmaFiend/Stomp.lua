@@ -1,8 +1,8 @@
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 
@@ -64,50 +64,33 @@ local function resolveAnimationInstance(): Animation?
 end
 
 local function resolveRootPart(model: Model?): BasePart?
-	if model == nil then
-		return nil
-	end
-
-	local rootPart = model:FindFirstChild("HumanoidRootPart")
-	if rootPart and rootPart:IsA("BasePart") then
-		return rootPart
-	end
-
-	local primaryPart = model.PrimaryPart
-	if primaryPart then
-		return primaryPart
-	end
-
-	return model:FindFirstChildWhichIsA("BasePart", true)
+	return CombatMoveUtil.ResolveRootPart(model)
 end
 
 local function resolveHumanoid(model: Model?): Humanoid?
-	if model == nil then
-		return nil
-	end
-
-	return model:FindFirstChildOfClass("Humanoid")
+	return CombatMoveUtil.ResolveHumanoid(model)
 end
 
 local function resolveLeftFootPart(bossModel: Model): BasePart?
-	for _, partName in ipairs(LEFT_FOOT_CANDIDATE_NAMES) do
-		local part = bossModel:FindFirstChild(partName, true)
-		if part and part:IsA("BasePart") then
-			return part
-		end
-	end
-
-	return nil
+	return CombatMoveUtil.ResolveNamedPart(bossModel, LEFT_FOOT_CANDIDATE_NAMES)
 end
 
-local function resolveImpactCFrame(bossModel: Model, bossRootPart: BasePart): CFrame
-	local leftFoot = resolveLeftFootPart(bossModel)
-	if leftFoot then
-		return leftFoot.CFrame
+local function resolveImpactCFrames(context, bossModel: Model, bossRootPart: BasePart): (CFrame, CFrame?)
+	local footPart = resolveLeftFootPart(bossModel)
+	local rawImpactCFrame = if footPart then footPart.CFrame else bossRootPart.CFrame
+	if footPart == nil then
+		warn("[MagmaStomp] Could not resolve left foot part. Falling back to boss root.")
 	end
 
-	warn("[MagmaStomp] Could not resolve left foot part. Falling back to boss root.")
-	return bossRootPart.CFrame
+	return CombatMoveUtil.ResolveFloorImpactCFrames({
+		rawImpactCFrame = rawImpactCFrame,
+		sourceModel = bossModel,
+		targetCharacter = context.targetCharacter,
+		aliveTargets = context.aliveTargets,
+		warnPrefix = "[MagmaStomp]",
+		distance = 2048,
+		visualOffsetY = 1,
+	})
 end
 
 local function resolveHitboxCFrame(impactCFrame: CFrame): CFrame
@@ -115,16 +98,12 @@ local function resolveHitboxCFrame(impactCFrame: CFrame): CFrame
 end
 
 local function buildKnockbackDirection(impactPosition: Vector3, targetRootPart: BasePart?): Vector3
-	local direction = Vector3.new(0, 0, -1)
-	if targetRootPart and targetRootPart.Parent ~= nil then
-		local offset = targetRootPart.Position - impactPosition
-		local planarOffset = Vector3.new(offset.X, 0, offset.Z)
-		if planarOffset.Magnitude > 0.001 then
-			direction = planarOffset.Unit
-		end
-	end
-
-	return (direction * KNOCKBACK_SPEED) + Vector3.new(0, KNOCKBACK_UPWARD_SPEED, 0)
+	return CombatMoveUtil.BuildRadialKnockbackDirection({
+		impactPosition = impactPosition,
+		targetRootPart = targetRootPart,
+		speed = KNOCKBACK_SPEED,
+		upwardSpeed = KNOCKBACK_UPWARD_SPEED,
+	})
 end
 
 local function spawnStompHitbox(context, impactCFrame: CFrame, hitTargets: { [Model]: boolean })
@@ -136,6 +115,7 @@ local function spawnStompHitbox(context, impactCFrame: CFrame, hitTargets: { [Mo
 	local impactPosition = impactCFrame.Position
 	local hitbox
 	hitbox = Hitbox.new({
+		DebugVisibilityAttribute = "BossHitboxesVisible",
 		Character = bossModel,
 		HitboxCFrame = resolveHitboxCFrame(impactCFrame),
 		HitboxSize = HITBOX_SIZE,
@@ -144,25 +124,13 @@ local function spawnStompHitbox(context, impactCFrame: CFrame, hitTargets: { [Mo
 		MaxParts = MAX_HITBOX_PARTS,
 	}, {
 		HitTarget = function(targetModel: Model)
-			if hitTargets[targetModel] == true then
+			local targetInfo = CombatMoveUtil.DamageOnce(hitTargets, targetModel, DAMAGE)
+			if targetInfo == nil then
 				return
 			end
-
-			local player = Players:GetPlayerFromCharacter(targetModel)
-			if player == nil then
-				return
-			end
-
-			local humanoid = resolveHumanoid(targetModel)
-			if humanoid == nil or humanoid.Health <= 0 then
-				return
-			end
-
-			hitTargets[targetModel] = true
-			humanoid:TakeDamage(DAMAGE)
 
 			Knockback(targetModel, "Default", {
-				Direction = buildKnockbackDirection(impactPosition, resolveRootPart(targetModel)),
+				Direction = buildKnockbackDirection(impactPosition, targetInfo.rootPart),
 				Duration = 0.25,
 				RagdollDuration = 0.65,
 				Stun = 0.45,
@@ -178,7 +146,6 @@ local function spawnStompHitbox(context, impactCFrame: CFrame, hitTargets: { [Mo
 		end,
 	})
 
-	hitbox:Visible(true)
 	return hitbox
 end
 
@@ -298,11 +265,13 @@ function Stomp.StartCast(context)
 		stompTriggered = true
 		destroyHitbox()
 
-		local impactCFrame = resolveImpactCFrame(bossModel, bossRootPart)
-		context.EmitPresentation("stomp", {
-			impactCFrame = impactCFrame,
-			scaleMultiplier = context.bossDefinition.scaleMultiplier,
-		})
+		local impactCFrame, floorImpactCFrame = resolveImpactCFrames(context, bossModel, bossRootPart)
+		if floorImpactCFrame ~= nil then
+			context.EmitPresentation("stomp", {
+				impactCFrame = floorImpactCFrame,
+				scaleMultiplier = context.bossDefinition.scaleMultiplier,
+			})
+		end
 		activeHitbox = spawnStompHitbox(context, impactCFrame, hitTargets)
 	end
 

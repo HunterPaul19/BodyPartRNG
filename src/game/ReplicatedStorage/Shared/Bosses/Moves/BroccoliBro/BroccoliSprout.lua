@@ -327,6 +327,7 @@ local function spawnSproutHitboxes(
 	for _, point in ipairs(points) do
 		local hitbox
 		hitbox = Hitbox.new({
+			DebugVisibilityAttribute = "BossHitboxesVisible",
 			Character = bossModel,
 			HitboxCFrame = function()
 				if bossModel.Parent == nil then
@@ -368,7 +369,6 @@ local function spawnSproutHitboxes(
 		})
 
 		table.insert(activeHitboxes, hitbox)
-		hitbox:Visible(true)
 	end
 end
 

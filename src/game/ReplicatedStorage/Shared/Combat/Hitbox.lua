@@ -1266,6 +1266,10 @@ function Hitbox:_shouldDetectVisualProxyParts()
 	return self.Data.DetectVisualProxyParts ~= false
 end
 
+function Hitbox:_hasDebugVisibilityAttribute()
+	return typeof(self.Data.DebugVisibilityAttribute) == "string" and self.Data.DebugVisibilityAttribute ~= ""
+end
+
 function Hitbox:GetCharacter()
 	return resolveCharacterSource(self.Data.Character, self.Attack)
 end
@@ -1383,7 +1387,7 @@ function Hitbox.HitboxTypes.ReturnMapBaseParts(self)
 end
 
 function Hitbox.HitboxTypes.ReturnHitboxPart(self)
-	if not self.Visualizer then
+	if not self.Visualizer and not self:_hasDebugVisibilityAttribute() then
 		self:Visible(true)
 	end
 
@@ -1484,7 +1488,7 @@ function Hitbox.HitboxTypes.SpacialQuery(self)
 end
 
 function Hitbox.HitboxTypes.GroundShockwave(self)
-	if not self.Visualizer then
+	if not self.Visualizer and not self:_hasDebugVisibilityAttribute() then
 		self:Visible(true)
 	end
 
@@ -1647,6 +1651,20 @@ function Hitbox:Init()
 	local localPlayer = if RunService:IsClient() then Players.LocalPlayer else nil
 	if localPlayer and localPlayer:GetAttribute("DisplayHitbox") then
 		self:Visible(true)
+	end
+
+	if self:_hasDebugVisibilityAttribute() then
+		local debugVisibilityAttribute = self.Data.DebugVisibilityAttribute
+		local function syncDebugVisibility()
+			if self.Destroyed then
+				return
+			end
+
+			self:Visible(Workspace:GetAttribute(debugVisibilityAttribute) == true)
+		end
+
+		self.HitboxTrove:Connect(Workspace:GetAttributeChangedSignal(debugVisibilityAttribute), syncDebugVisibility)
+		syncDebugVisibility()
 	end
 
 	local hitboxTypeName = self.Data.HitboxType or "SpacialQuery"

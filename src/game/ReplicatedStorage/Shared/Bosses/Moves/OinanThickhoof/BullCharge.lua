@@ -311,6 +311,7 @@ function BullCharge.StartCast(context)
 
 		local hitbox
 		hitbox = Hitbox.new({
+			DebugVisibilityAttribute = "BossHitboxesVisible",
 			Character = bossModel,
 			HitboxCFrame = getChargeHitboxCFrame,
 			HitboxOffset = CFrame.new(0, 0, -hitboxForwardOffset),

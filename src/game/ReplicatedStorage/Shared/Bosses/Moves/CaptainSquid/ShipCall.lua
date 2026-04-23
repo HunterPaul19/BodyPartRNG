@@ -331,6 +331,7 @@ function ShipCall.StartCast(context)
 
 		local shipHitbox
 		shipHitbox = Hitbox.new({
+			DebugVisibilityAttribute = "BossHitboxesVisible",
 			Character = bossModel,
 			HitboxCFrame = function()
 				if cancelled then

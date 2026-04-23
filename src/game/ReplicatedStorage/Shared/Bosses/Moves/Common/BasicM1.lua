@@ -254,6 +254,7 @@ function BasicM1.StartCast(context)
 
 		local hitbox
 		hitbox = Hitbox.new({
+			DebugVisibilityAttribute = "BossHitboxesVisible",
 			Character = bossModel,
 			HitboxCFrame = function()
 				if bossRootPart.Parent == nil then
@@ -295,7 +296,6 @@ function BasicM1.StartCast(context)
 		})
 
 		activeHitbox = hitbox
-		hitbox:Visible(true)
 	end
 
 	local track = profile:PlayAnimation(animationInstance, Enum.AnimationPriority.Action, 1, {

@@ -39,6 +39,31 @@ local SQUID_CALL_PROJECTILE_IMPACT_PART_NAME = Constants.Values.SQUID_CALL_PROJE
 
 local Handler = {}
 
+local function resolveSquidCallBarrelCFrame(middleBaseCFrame: CFrame, targetPosition: Vector3?): CFrame
+	if typeof(targetPosition) ~= "Vector3" then
+		return middleBaseCFrame
+	end
+
+	local offset = targetPosition - middleBaseCFrame.Position
+	if offset.Magnitude <= 0.001 then
+		return middleBaseCFrame
+	end
+
+	local rightVector = -offset.Unit
+	local upVector = middleBaseCFrame.UpVector - (rightVector * middleBaseCFrame.UpVector:Dot(rightVector))
+	if upVector.Magnitude <= 0.001 then
+		upVector = Vector3.yAxis - (rightVector * Vector3.yAxis:Dot(rightVector))
+	end
+	if upVector.Magnitude <= 0.001 then
+		upVector = middleBaseCFrame.LookVector - (rightVector * middleBaseCFrame.LookVector:Dot(rightVector))
+	end
+	if upVector.Magnitude <= 0.001 then
+		return middleBaseCFrame
+	end
+
+	return CFrame.fromMatrix(middleBaseCFrame.Position, rightVector, upVector.Unit)
+end
+
 function Handler:_applySquidCallCannonPose(record: ActiveRecord, targetPosition: Vector3?, alpha: number)
 	local cannonModel = record.cannonModel
 	local cannonMiddle = record.cannonMiddle
@@ -57,7 +82,7 @@ function Handler:_applySquidCallCannonPose(record: ActiveRecord, targetPosition:
 	cannonModel:PivotTo(baseCFrame)
 
 	local middleBaseCFrame = baseCFrame * aimData.middleLocalCFrame
-	cannonMiddle.CFrame = middleBaseCFrame * CFrame.Angles(self:resolveSquidCallPitch(middleBaseCFrame, targetPosition), 0, 0)
+	cannonMiddle.CFrame = resolveSquidCallBarrelCFrame(middleBaseCFrame, targetPosition)
 end
 
 function Handler:_updateSquidCallMotion(record: ActiveRecord, nowServerTime: number)
@@ -241,7 +266,7 @@ function Handler:_fireSquidCall(record: ActiveRecord, event: PresentationEvent)
 			record.cannonModel:PivotTo(baseCFrame)
 			local middleLocalCFrame = if storedAimData then storedAimData.middleLocalCFrame else baseCFrame:ToObjectSpace(record.cannonMiddle.CFrame)
 			local middleBaseCFrame = baseCFrame * middleLocalCFrame
-			record.cannonMiddle.CFrame = middleBaseCFrame * CFrame.Angles(self:resolveSquidCallPitch(middleBaseCFrame, impactPosition), 0, 0)
+			record.cannonMiddle.CFrame = resolveSquidCallBarrelCFrame(middleBaseCFrame, impactPosition)
 		end
 	end
 

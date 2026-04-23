@@ -43,7 +43,7 @@ function Handler:_stompAgrynothStomp(record: ActiveRecord, event: PresentationEv
 
 	local scaleMultiplier = math.max(0.1, tonumber(payload.scaleMultiplier) or 1)
 	local effectInstance = effectSource:Clone()
-	if not self:pivotFloorEffectInstance(effectInstance, payload.impactCFrame, scaleMultiplier) then
+	if not self:pivotEffectInstanceAtAuthoredPivot(effectInstance, payload.impactCFrame, scaleMultiplier) then
 		self:warnWithPrefix("Agrynoth Stomp FloorFx VFX instance cannot be pivoted.")
 		effectInstance:Destroy()
 		self:_cleanupRecord(record)

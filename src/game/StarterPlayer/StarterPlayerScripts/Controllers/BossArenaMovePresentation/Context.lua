@@ -849,6 +849,27 @@ function Context:pivotBroccoliSproutEffectInstance(effectInstance: Instance, cfr
 	return self:pivotFloorEffectInstance(effectInstance, cframe, scaleMultiplier)
 end
 
+function Context:pivotEffectInstanceAtAuthoredPivot(effectInstance: Instance, cframe: CFrame, scaleMultiplier: number): boolean
+	if effectInstance:IsA("Model") then
+		effectInstance:ScaleTo(scaleMultiplier)
+		self:prepareMovingEffectModel(effectInstance)
+		effectInstance:PivotTo(cframe)
+		return true
+	end
+	if effectInstance:IsA("BasePart") then
+		effectInstance.Size *= scaleMultiplier
+		self:prepareMovingEffectPart(effectInstance)
+		effectInstance.CFrame = cframe
+		return true
+	end
+	if effectInstance:IsA("PVInstance") then
+		effectInstance:PivotTo(cframe)
+		return true
+	end
+
+	return false
+end
+
 function Context:pivotFloorEffectInstance(effectInstance: Instance, cframe: CFrame, scaleMultiplier: number): boolean
 	if effectInstance:IsA("Model") then
 		effectInstance:ScaleTo(scaleMultiplier)

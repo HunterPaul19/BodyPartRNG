@@ -305,6 +305,10 @@ function BodyPartPresentation.FormatChance(value: number?): string
 	return formatChance(value)
 end
 
+function BodyPartPresentation.FormatPlayerStatValue(value: number?): string
+	return formatNumberish(value)
+end
+
 function BodyPartPresentation.GetSizeDescriptor(scale: number?, sizeId: any): string
 	return getSizeDescriptor(scale, sizeId)
 end
@@ -358,6 +362,56 @@ function BodyPartPresentation.FormatTemplatedLabelText(templateText: any, value:
 	end
 
 	return formattedValue
+end
+
+local function formatPreviewStatText(templateText: any, value: number): string
+	local formattedValue = formatNumberish(value)
+	local normalizedTemplate = if typeof(templateText) == "string"
+		then string.match(templateText, "^%s*(.-)%s*$") or ""
+		else ""
+	if normalizedTemplate == "" then
+		return formattedValue
+	end
+
+	local richTextPrefix = string.match(normalizedTemplate, "^(.-</font>%s*)[%d%.,%-]+%s*$")
+	if typeof(richTextPrefix) == "string" and richTextPrefix ~= "" then
+		return richTextPrefix .. formattedValue
+	end
+
+	local labelPrefix = string.match(normalizedTemplate, "^(.*:%s*)[%d%.,%-]+%s*$")
+	if typeof(labelPrefix) == "string" and labelPrefix ~= "" then
+		return labelPrefix .. formattedValue
+	end
+
+	return BodyPartPresentation.FormatTemplatedLabelText(normalizedTemplate, formattedValue)
+end
+
+function BodyPartPresentation.BuildPreviewStatTexts(
+	bonuses: any,
+	templates: { [string]: string }?
+): { Strength: string, Speed: string, Health: string }
+	local safeBonuses = if typeof(bonuses) == "table" then bonuses else {}
+	local basePlayerStats = BodyPartsCatalog.GetBasePlayerStats()
+	local statValues = {
+		Strength = tonumber(safeBonuses.damage) or tonumber(basePlayerStats.damage) or 20,
+		Speed = tonumber(safeBonuses.speed) or tonumber(basePlayerStats.speed) or 16,
+		Health = tonumber(safeBonuses.health) or tonumber(basePlayerStats.health) or 100,
+	}
+	local defaultTemplates = {
+		Strength = "Strength: %s",
+		Speed = "Speed: %s",
+		Health = "Health: %s",
+	}
+	local texts = {}
+
+	for statName, value in pairs(statValues) do
+		local template = if typeof(templates) == "table" and typeof(templates[statName]) == "string"
+			then templates[statName]
+			else defaultTemplates[statName]
+		texts[statName] = formatPreviewStatText(template, value)
+	end
+
+	return texts
 end
 
 function BodyPartPresentation.FormatMutationLabelText(templateText: any, record: any): string

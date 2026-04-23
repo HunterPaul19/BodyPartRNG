@@ -1,10 +1,9 @@
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
-local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
+local CombatProjectileUtil = require(ReplicatedStorage.Shared.Combat.CombatProjectileUtil)
 
 local DAMAGE = 10
 local AOE_RADIUS = 14
@@ -66,106 +65,33 @@ local function resolveAnimationInstance(): Animation?
 end
 
 local function resolveHumanoid(model: Model?): Humanoid?
-	if model == nil then
-		return nil
-	end
-
-	return model:FindFirstChildOfClass("Humanoid")
+	return CombatMoveUtil.ResolveHumanoid(model)
 end
 
 local function resolveRootPart(model: Model?): BasePart?
-	if model == nil then
-		return nil
-	end
-
-	local rootPart = model:FindFirstChild("HumanoidRootPart")
-	if rootPart and rootPart:IsA("BasePart") then
-		return rootPart
-	end
-
-	local primaryPart = model.PrimaryPart
-	if primaryPart then
-		return primaryPart
-	end
-
-	return model:FindFirstChildWhichIsA("BasePart", true)
+	return CombatMoveUtil.ResolveRootPart(model)
 end
 
 local function resolveAttachment(model: Model, attachmentName: string): Attachment?
-	for _, descendant in ipairs(model:GetDescendants()) do
-		if descendant:IsA("Attachment") and descendant.Name == attachmentName then
-			return descendant
-		end
-	end
-
-	return nil
+	return CombatMoveUtil.ResolveNamedAttachment(model, attachmentName)
 end
 
 local function buildFloorRaycastParams(bossModel: Model): RaycastParams
-	local includeInstances = {}
-	local activeBossArena = Workspace:FindFirstChild("ActiveBossArena")
-	if activeBossArena then
-		table.insert(includeInstances, activeBossArena)
-	end
-
-	local map = Workspace:FindFirstChild("Map")
-	if map then
-		table.insert(includeInstances, map)
-	end
-
-	local world = Workspace:FindFirstChild("World")
-	local worldMap = world and world:FindFirstChild("Map")
-	if worldMap then
-		table.insert(includeInstances, worldMap)
-	end
-
-	if Workspace.Terrain then
-		table.insert(includeInstances, Workspace.Terrain)
-	end
-
-	local raycastParams = RaycastParams.new()
-	if #includeInstances > 0 then
-		raycastParams.FilterType = Enum.RaycastFilterType.Include
-		raycastParams.FilterDescendantsInstances = includeInstances
-	else
-		raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-		raycastParams.FilterDescendantsInstances = { bossModel }
-	end
-
-	return raycastParams
+	return CombatMoveUtil.BuildFloorRaycastParams({
+		sourceModel = bossModel,
+	})
 end
 
 local function raycastGroundNear(position: Vector3, bossModel: Model): Vector3?
-	local raycastParams = buildFloorRaycastParams(bossModel)
-	local rayOrigin = position + Vector3.new(0, FLOOR_RAYCAST_START_HEIGHT, 0)
-	local rayDirection = Vector3.new(0, -(FLOOR_RAYCAST_START_HEIGHT + FLOOR_RAYCAST_DISTANCE), 0)
-	local raycastResult = Workspace:Raycast(rayOrigin, rayDirection, raycastParams)
-	if raycastResult == nil then
-		return nil
-	end
-
-	return raycastResult.Position
+	return CombatMoveUtil.RaycastGroundNear(position, {
+		sourceModel = bossModel,
+		startHeight = FLOOR_RAYCAST_START_HEIGHT,
+		distance = FLOOR_RAYCAST_DISTANCE,
+	})
 end
 
 local function collectAliveTargets(context): { any }
-	local aliveTargets = {}
-
-	for _, targetContext in ipairs(context.aliveTargets or {}) do
-		local player = targetContext.player
-		local character = player and (player.Character or targetContext.character)
-		local humanoid = resolveHumanoid(character)
-		local rootPart = resolveRootPart(character)
-		if player ~= nil and character ~= nil and humanoid ~= nil and humanoid.Health > 0 and rootPart ~= nil then
-			table.insert(aliveTargets, {
-				player = player,
-				character = character,
-				humanoid = humanoid,
-				rootPart = rootPart,
-			})
-		end
-	end
-
-	return aliveTargets
+	return CombatMoveUtil.CollectAliveTargets(context.aliveTargets or {})
 end
 
 local function resolveImpactPosition(targetRootPart: BasePart, bossModel: Model, rng: Random): Vector3
@@ -177,44 +103,18 @@ local function resolveImpactPosition(targetRootPart: BasePart, bossModel: Model,
 end
 
 local function resolveArcControlPosition(startPosition: Vector3, impactPosition: Vector3): Vector3
-	local midpoint = startPosition:Lerp(impactPosition, 0.5)
-	local distance = (impactPosition - startPosition).Magnitude
-	local arcHeight = math.clamp(distance * 0.65, MIN_ARC_HEIGHT, MAX_ARC_HEIGHT)
-	return midpoint + Vector3.new(0, arcHeight, 0)
+	return CombatProjectileUtil.ResolveArcControlPosition(startPosition, impactPosition, MIN_ARC_HEIGHT, MAX_ARC_HEIGHT)
 end
 
 local function applyImpactDamage(bossModel: Model, impactPosition: Vector3)
-	local hitTargets = {}
-	local hitbox
-	hitbox = Hitbox.new({
-		Character = bossModel,
-		HitboxCFrame = CFrame.new(impactPosition),
-		HitboxRadius = AOE_RADIUS,
-		HitboxType = "SpacialQuery",
-		Time = HITBOX_DURATION_SECONDS,
-		MaxParts = MAX_HITBOX_PARTS,
-	}, {
-		HitTarget = function(targetModel: Model)
-			if hitTargets[targetModel] == true then
-				return
-			end
-
-			local player = Players:GetPlayerFromCharacter(targetModel)
-			if player == nil then
-				return
-			end
-
-			local humanoid = resolveHumanoid(targetModel)
-			if humanoid == nil or humanoid.Health <= 0 then
-				return
-			end
-
-			hitTargets[targetModel] = true
-			humanoid:TakeDamage(DAMAGE)
-		end,
-		HitboxDestroy = function()
-			hitbox = nil
-		end,
+	CombatProjectileUtil.CreateRadiusDamageHitbox({
+		debugVisibilityAttribute = "BossHitboxesVisible",
+		hitboxOwner = bossModel,
+		impactPosition = impactPosition,
+		radius = AOE_RADIUS,
+		duration = HITBOX_DURATION_SECONDS,
+		maxParts = MAX_HITBOX_PARTS,
+		damage = DAMAGE,
 	})
 end
 

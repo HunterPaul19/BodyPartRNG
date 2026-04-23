@@ -385,6 +385,7 @@ function RainbowBlast.StartCast(context)
 		})
 
 		activeHitbox = Hitbox.new({
+			DebugVisibilityAttribute = "BossHitboxesVisible",
 			Character = bossModel,
 			HitboxCFrame = function()
 				local beamCFrame = getBeamCFrameAndSize()

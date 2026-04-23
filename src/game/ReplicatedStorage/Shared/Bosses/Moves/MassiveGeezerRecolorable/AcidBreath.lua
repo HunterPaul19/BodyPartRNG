@@ -221,6 +221,7 @@ function AcidBreath.StartCast(context)
 
 		local hitbox
 		hitbox = Hitbox.new({
+			DebugVisibilityAttribute = "BossHitboxesVisible",
 			Character = bossModel,
 			HitboxCFrame = getConeCFrame,
 			HitboxType = "SpacialQuery",
@@ -261,7 +262,6 @@ function AcidBreath.StartCast(context)
 		})
 
 		activeHitbox = hitbox
-		hitbox:Visible(true)
 	end
 
 	local track = profile:PlayAnimation(animationInstance, Enum.AnimationPriority.Action, 1, {

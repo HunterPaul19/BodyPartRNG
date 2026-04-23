@@ -1,10 +1,10 @@
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
-local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
+local CombatProjectileUtil = require(ReplicatedStorage.Shared.Combat.CombatProjectileUtil)
 
 local DAMAGE = 15
 local ANIMATION_FADE_SECONDS = 0.08
@@ -61,68 +61,28 @@ local function resolveAnimationInstance(): Animation?
 end
 
 local function resolveRootPart(model: Model?): BasePart?
-	if model == nil then
-		return nil
-	end
-
-	local rootPart = model:FindFirstChild("HumanoidRootPart")
-	if rootPart and rootPart:IsA("BasePart") then
-		return rootPart
-	end
-
-	local primaryPart = model.PrimaryPart
-	if primaryPart then
-		return primaryPart
-	end
-
-	return model:FindFirstChildWhichIsA("BasePart", true)
+	return CombatMoveUtil.ResolveRootPart(model)
 end
 
 local function resolveHumanoid(model: Model?): Humanoid?
-	if model == nil then
-		return nil
-	end
-
-	return model:FindFirstChildOfClass("Humanoid")
+	return CombatMoveUtil.ResolveHumanoid(model)
 end
 
 local function resolveHandPart(bossModel: Model, handName: string): BasePart?
-	local hand = bossModel:FindFirstChild(handName, true)
-	if hand and hand:IsA("BasePart") then
-		return hand
-	end
-
-	return nil
+	return CombatMoveUtil.ResolveNamedPart(bossModel, { handName })
 end
 
 local function resolvePlanarDirection(vector: Vector3): Vector3?
-	local planar = Vector3.new(vector.X, 0, vector.Z)
-	if planar.Magnitude <= 0.001 then
+	local direction = CombatMoveUtil.ResolvePlanarDirection(Vector3.zero, vector, nil)
+	if direction == Vector3.new(0, 0, -1) and Vector3.new(vector.X, 0, vector.Z).Magnitude <= 0.001 then
 		return nil
 	end
-
-	return planar.Unit
+	return direction
 end
 
 local function resolveNearestAliveTargetRootPart(context, bossRootPart: BasePart): BasePart?
-	local nearestRootPart = nil
-	local nearestDistance = math.huge
-
-	for _, targetContext in ipairs(context.aliveTargets or {}) do
-		local player = targetContext.player
-		local character = player and (player.Character or targetContext.character)
-		local humanoid = resolveHumanoid(character)
-		local rootPart = resolveRootPart(character)
-		if player ~= nil and humanoid ~= nil and humanoid.Health > 0 and rootPart ~= nil then
-			local distance = (rootPart.Position - bossRootPart.Position).Magnitude
-			if distance < nearestDistance then
-				nearestDistance = distance
-				nearestRootPart = rootPart
-			end
-		end
-	end
-
-	return nearestRootPart
+	local nearestTarget = CombatMoveUtil.ResolveNearestAliveTarget(bossRootPart.Position, context.aliveTargets or {})
+	return if nearestTarget then nearestTarget.rootPart else nil
 end
 
 local function resolveAimTargetRootPart(context, bossRootPart: BasePart): BasePart?
@@ -201,13 +161,15 @@ local function buildProjectilePlans(context, bossModel: Model, bossRootPart: Bas
 			+ (forwardDirection * PROJECTILE_DISTANCE_STUDS)
 			+ (rightDirection * laneOffset)
 		local endPosition = Vector3.new(endPlanarPosition.X, endHeight, endPlanarPosition.Z)
-		local travelDistance = (endPosition - startPosition).Magnitude
-
 		table.insert(plans, {
 			index = index,
 			startPosition = startPosition,
 			endPosition = endPosition,
-			travelDuration = travelDistance / PROJECTILE_SPEED_STUDS_PER_SECOND,
+			travelDuration = CombatProjectileUtil.ResolveTravelDuration(
+				startPosition,
+				endPosition,
+				PROJECTILE_SPEED_STUDS_PER_SECOND
+			),
 		})
 	end
 
@@ -221,9 +183,12 @@ local function getProjectilePosition(plan: { [string]: any }, startedAt: number)
 		return Vector3.zero
 	end
 
-	local travelDuration = math.max(0.001, tonumber(plan.travelDuration) or 0)
-	local alpha = math.clamp((os.clock() - startedAt) / travelDuration, 0, 1)
-	return startPosition:Lerp(endPosition, alpha)
+	return CombatProjectileUtil.ResolveMotionPosition({
+		startPosition = startPosition,
+		impactPosition = endPosition,
+		startedAt = startedAt,
+		travelDuration = math.max(0.001, tonumber(plan.travelDuration) or 0),
+	})
 end
 
 function EatChicken.GetSelectionWeight(context)
@@ -389,35 +354,34 @@ function EatChicken.StartCast(context)
 			longestTravelDuration = math.max(longestTravelDuration, tonumber(plan.travelDuration) or 0)
 
 			local hitbox
-			hitbox = Hitbox.new({
-				Character = bossModel,
-				HitboxCFrame = function()
+			hitbox = CombatProjectileUtil.CreateTrackingHitbox({
+				debugVisibilityAttribute = "BossHitboxesVisible",
+				hitboxOwner = bossModel,
+				getPosition = function()
 					if cancelled then
 						return nil
 					end
 
-					return CFrame.new(getProjectilePosition(plan, projectileStartedAt))
+					return getProjectilePosition(plan, projectileStartedAt)
 				end,
-				HitboxRadius = PROJECTILE_RADIUS,
-				HitboxType = "SpacialQuery",
-				Time = plan.travelDuration,
-				MaxParts = PROJECTILE_MAX_PARTS,
-			}, {
-				HitTarget = function(targetModel: Model)
-					local player = Players:GetPlayerFromCharacter(targetModel)
+				radius = PROJECTILE_RADIUS,
+				duration = plan.travelDuration,
+				maxParts = PROJECTILE_MAX_PARTS,
+				onHit = function(targetModel: Model)
+					local targetInfo = CombatMoveUtil.ResolveDamageTarget(targetModel)
+					if targetInfo == nil then
+						return
+					end
+
+					local player = targetInfo.player
 					if player == nil or hitPlayers[player] == true then
 						return
 					end
 
-					local humanoid = resolveHumanoid(targetModel)
-					if humanoid == nil or humanoid.Health <= 0 then
-						return
-					end
-
 					hitPlayers[player] = true
-					humanoid:TakeDamage(DAMAGE)
+					targetInfo.humanoid:TakeDamage(DAMAGE)
 				end,
-				HitboxDestroy = function()
+				onDestroy = function()
 					for activeIndex, activeHitbox in ipairs(activeHitboxes) do
 						if activeHitbox == hitbox then
 							table.remove(activeHitboxes, activeIndex)

@@ -264,6 +264,7 @@ local function spawnFinalHitbox(context, hazardCFrame: CFrame, hazardSize: Vecto
 	local hitTargets = {}
 	local finalHitbox
 	finalHitbox = Hitbox.new({
+		DebugVisibilityAttribute = "BossHitboxesVisible",
 		Character = bossModel,
 		HitboxCFrame = hazardCFrame,
 		HitboxSize = hazardSize,
@@ -283,7 +284,6 @@ local function spawnFinalHitbox(context, hazardCFrame: CFrame, hazardSize: Vecto
 			finalHitbox = nil
 		end,
 	})
-	finalHitbox:Visible(true)
 end
 
 local function spawnHazardHitbox(context, hazardCFrame: CFrame, hazardSize: Vector3)
@@ -294,6 +294,7 @@ local function spawnHazardHitbox(context, hazardCFrame: CFrame, hazardSize: Vect
 
 	local hitbox
 	hitbox = Hitbox.new({
+		DebugVisibilityAttribute = "BossHitboxesVisible",
 		Character = bossModel,
 		HitboxCFrame = hazardCFrame,
 		HitboxSize = hazardSize,
@@ -307,7 +308,6 @@ local function spawnHazardHitbox(context, hazardCFrame: CFrame, hazardSize: Vect
 			hitbox = nil
 		end,
 	})
-	hitbox:Visible(true)
 	return hitbox
 end
 

@@ -28,6 +28,7 @@ return BossConfigFactory.Create({
 			cooldownSeconds = 6.0,
 			weight = 2,
 			rootDuringCast = true,
+			faceTargetOnCast = true,
 			castTimeSeconds = 0.35,
 			recoverySeconds = 0.5,
 		},

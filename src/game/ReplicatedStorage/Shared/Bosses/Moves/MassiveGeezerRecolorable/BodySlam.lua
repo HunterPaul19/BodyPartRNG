@@ -263,6 +263,7 @@ local function spawnImpactHitbox(context, impactPosition: Vector3)
 	local hitTargets = {}
 	local hitbox
 	hitbox = Hitbox.new({
+		DebugVisibilityAttribute = "BossHitboxesVisible",
 		Character = bossModel,
 		HitboxCFrame = CFrame.new(impactPosition + Vector3.new(0, IMPACT_HITBOX_HEIGHT * 0.5, 0)),
 		HitboxSize = Vector3.new(IMPACT_RADIUS * 2, IMPACT_HITBOX_HEIGHT, IMPACT_RADIUS * 2),
@@ -303,7 +304,6 @@ local function spawnImpactHitbox(context, impactPosition: Vector3)
 		end,
 	})
 
-	hitbox:Visible(true)
 end
 
 function BodySlam.GetSelectionWeight(context)

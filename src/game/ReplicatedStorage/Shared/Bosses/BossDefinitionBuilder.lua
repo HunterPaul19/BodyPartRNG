@@ -92,6 +92,7 @@ local function freezeMoveDefinition(moveDefinition: any)
 		cooldownSeconds = normalizePositiveNumber(moveDefinition.cooldownSeconds, 1),
 		weight = math.max(0.01, normalizePositiveNumber(moveDefinition.weight, 1)),
 		rootDuringCast = moveDefinition.rootDuringCast == true,
+		faceTargetOnCast = moveDefinition.faceTargetOnCast == true,
 		castTimeSeconds = normalizePositiveNumber(moveDefinition.castTimeSeconds, 0),
 		recoverySeconds = normalizePositiveNumber(moveDefinition.recoverySeconds, 0),
 		animationFolderName = animationFolderName,

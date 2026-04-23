@@ -4,7 +4,8 @@ local RunService = game:GetService("RunService")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
-local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
+local CombatProjectileUtil = require(ReplicatedStorage.Shared.Combat.CombatProjectileUtil)
 
 local DAMAGE = 18
 local CANNON_FIRE_SECONDS = 2.65
@@ -41,29 +42,11 @@ local SquidCall = {
 }
 
 local function resolveHumanoid(model: Model?): Humanoid?
-	if model == nil then
-		return nil
-	end
-
-	return model:FindFirstChildOfClass("Humanoid")
+	return CombatMoveUtil.ResolveHumanoid(model)
 end
 
 local function resolveRootPart(model: Model?): BasePart?
-	if model == nil then
-		return nil
-	end
-
-	local rootPart = model:FindFirstChild("HumanoidRootPart")
-	if rootPart and rootPart:IsA("BasePart") then
-		return rootPart
-	end
-
-	local primaryPart = model.PrimaryPart
-	if primaryPart then
-		return primaryPart
-	end
-
-	return model:FindFirstChildWhichIsA("BasePart", true)
+	return CombatMoveUtil.ResolveRootPart(model)
 end
 
 local function resolveAnimationInstance(): Animation?
@@ -120,20 +103,37 @@ local function resolveCannonSourceModel(): Model?
 end
 
 local function resolvePlanarDirection(fromPosition: Vector3, toPosition: Vector3?): Vector3
-	if typeof(toPosition) == "Vector3" then
-		local offset = toPosition - fromPosition
-		local planarOffset = Vector3.new(offset.X, 0, offset.Z)
-		if planarOffset.Magnitude > 0.001 then
-			return planarOffset.Unit
-		end
-	end
-
-	return Vector3.new(0, 0, -1)
+	return CombatMoveUtil.ResolvePlanarDirection(fromPosition, toPosition, nil)
 end
 
 local function resolveCannonBaseCFrame(originPosition: Vector3, targetPosition: Vector3?): CFrame
 	local planarDirection = resolvePlanarDirection(originPosition, targetPosition)
 	return CFrame.lookAt(originPosition, originPosition + planarDirection) * CFrame.Angles(0, CANNON_ASSET_YAW_OFFSET_RADIANS, 0)
+end
+
+local function resolveCannonBarrelCFrame(middleBaseCFrame: CFrame, targetPosition: Vector3?): CFrame
+	if typeof(targetPosition) ~= "Vector3" then
+		return middleBaseCFrame
+	end
+
+	local offset = targetPosition - middleBaseCFrame.Position
+	if offset.Magnitude <= 0.001 then
+		return middleBaseCFrame
+	end
+
+	local rightVector = -offset.Unit
+	local upVector = middleBaseCFrame.UpVector - (rightVector * middleBaseCFrame.UpVector:Dot(rightVector))
+	if upVector.Magnitude <= 0.001 then
+		upVector = Vector3.yAxis - (rightVector * Vector3.yAxis:Dot(rightVector))
+	end
+	if upVector.Magnitude <= 0.001 then
+		upVector = middleBaseCFrame.LookVector - (rightVector * middleBaseCFrame.LookVector:Dot(rightVector))
+	end
+	if upVector.Magnitude <= 0.001 then
+		return middleBaseCFrame
+	end
+
+	return CFrame.fromMatrix(middleBaseCFrame.Position, rightVector, upVector.Unit)
 end
 
 local function resolveModelPrimaryPart(model: Model?): BasePart?
@@ -194,6 +194,7 @@ local function probeCannonMuzzlePosition(
 
 	local pivotCFrame = resolveCannonBaseCFrame(bossRootPart.Position, impactPosition)
 	cannonModel:PivotTo(pivotCFrame)
+	middle.CFrame = resolveCannonBarrelCFrame(middle.CFrame, impactPosition)
 
 	local muzzlePosition = muzzleAttachment.WorldPosition
 	cannonModel:Destroy()
@@ -222,36 +223,19 @@ local function applyExplosionDamage(
 	impactPosition: Vector3,
 	damagedTargets: { [Model]: boolean }
 )
-	local explosionHitbox
-	explosionHitbox = Hitbox.new({
-		Character = bossModel,
-		HitboxCFrame = CFrame.new(impactPosition),
-		HitboxRadius = EXPLOSION_RADIUS,
-		HitboxType = "SpacialQuery",
-		Time = EXPLOSION_LIFETIME_SECONDS,
-		MaxParts = 128,
-	}, {
-		HitTarget = function(targetModel: Model)
-			if damagedTargets[targetModel] == true then
-				return
-			end
-
-			local humanoid = resolveHumanoid(targetModel)
-			if humanoid == nil or humanoid.Health <= 0 then
-				return
-			end
-
-			damagedTargets[targetModel] = true
-			humanoid:TakeDamage(DAMAGE)
-		end,
-		HitboxDestroy = function()
-			if explosionHitbox then
-				explosionHitbox = nil
-			end
+	return CombatProjectileUtil.CreateRadiusDamageHitbox({
+		debugVisibilityAttribute = "BossHitboxesVisible",
+		hitboxOwner = bossModel,
+		impactPosition = impactPosition,
+		radius = EXPLOSION_RADIUS,
+		duration = EXPLOSION_LIFETIME_SECONDS,
+		maxParts = 128,
+		damage = DAMAGE,
+		requirePlayerCharacter = false,
+		onHit = function(targetInfo)
+			damagedTargets[targetInfo.character] = true
 		end,
 	})
-
-	return explosionHitbox
 end
 
 function SquidCall.StartCast(context)
@@ -290,8 +274,7 @@ function SquidCall.StartCast(context)
 	local lockedTargetUserId = if context.targetPlayer then context.targetPlayer.UserId else nil
 	local lastKnownTargetPosition = if context.targetRootPart then context.targetRootPart.Position else nil
 	local castStartedAt = os.clock()
-	local projectileStartTime = 0
-	local projectileStartPosition = nil :: Vector3?
+	local projectileMotion = nil
 	local projectileImpactPosition = nil :: Vector3?
 	local aimSequenceStarted = false
 	local fireTriggered = false
@@ -363,20 +346,11 @@ function SquidCall.StartCast(context)
 	end
 
 	local function getCurrentProjectilePosition(): Vector3
-		local startPosition = projectileStartPosition or bossRootPart.Position
-		local impactPosition = projectileImpactPosition or startPosition
-		local distance = (impactPosition - startPosition).Magnitude
-		if distance <= 0.001 then
-			return impactPosition
+		if projectileMotion == nil then
+			return projectileImpactPosition or bossRootPart.Position
 		end
 
-		local travelDuration = distance / PROJECTILE_SPEED_STUDS_PER_SECOND
-		if travelDuration <= 0 then
-			return impactPosition
-		end
-
-		local alpha = math.clamp((os.clock() - projectileStartTime) / travelDuration, 0, 1)
-		return startPosition:Lerp(impactPosition, alpha)
+		return CombatProjectileUtil.ResolveMotionPosition(projectileMotion)
 	end
 
 	local exploded = false
@@ -422,19 +396,18 @@ function SquidCall.StartCast(context)
 			bossRootPart,
 			resolvedImpactPosition
 		) or bossRootPart.Position
-		local travelVector = resolvedImpactPosition - resolvedStartPosition
-		local travelDistance = travelVector.Magnitude
-		local travelDuration = if travelDistance > 0.001 then travelDistance / PROJECTILE_SPEED_STUDS_PER_SECOND else 0
-
-		projectileStartTime = os.clock()
-		projectileStartPosition = resolvedStartPosition
+		projectileMotion = CombatProjectileUtil.CreateLinearMotion(
+			resolvedStartPosition,
+			resolvedImpactPosition,
+			PROJECTILE_SPEED_STUDS_PER_SECOND
+		)
 		projectileImpactPosition = resolvedImpactPosition
 
 		context.EmitPresentation("fire", {
 			targetUserId = lockedTargetUserId,
 			startPosition = resolvedStartPosition,
 			impactPosition = resolvedImpactPosition,
-			travelDuration = travelDuration,
+			travelDuration = projectileMotion.travelDuration,
 			projectileSpeed = PROJECTILE_SPEED_STUDS_PER_SECOND,
 			explosionRadius = EXPLOSION_RADIUS,
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
@@ -445,27 +418,24 @@ function SquidCall.StartCast(context)
 			lastKnownTargetPosition = liveTargetRootPart.Position
 		end
 
-		if travelDuration <= 0 then
+		if projectileMotion.travelDuration <= 0 then
 			explodeAt(resolvedImpactPosition)
 			markComplete()
 			return
 		end
 
 		local projectileHitbox
-		projectileHitbox = Hitbox.new({
-			Character = bossModel,
-			HitboxCFrame = function()
-				return CFrame.new(getCurrentProjectilePosition())
-			end,
-			HitboxRadius = PROJECTILE_RADIUS,
-			HitboxType = "SpacialQuery",
-			Time = travelDuration,
-			MaxParts = 64,
-		}, {
-			HitTarget = function(_targetModel: Model)
+		projectileHitbox = CombatProjectileUtil.CreateTrackingHitbox({
+			debugVisibilityAttribute = "BossHitboxesVisible",
+			hitboxOwner = bossModel,
+			getPosition = getCurrentProjectilePosition,
+			radius = PROJECTILE_RADIUS,
+			duration = projectileMotion.travelDuration,
+			maxParts = 64,
+			onHit = function(_targetModel: Model)
 				explodeAt(getCurrentProjectilePosition())
 			end,
-			HitboxDestroy = function()
+			onDestroy = function()
 				if activeProjectileHitbox == projectileHitbox then
 					activeProjectileHitbox = nil
 				end

@@ -1005,6 +1005,9 @@ local function buildOwnedBodyPartCandidate(ownedId: string, ownedRecord: OwnedBo
 		passiveIncomePerSecond = tonumber(ownedRecord.finalPassiveIncomePerSecond) or piece.passiveIncomePerSecond,
 		luckBonus = tonumber(piece.luckBonus) or 0,
 		rollSpeedBonus = tonumber(piece.rollSpeedBonus) or 0,
+		speedBonus = tonumber(piece.speedBonus) or 0,
+		damageBonus = tonumber(piece.damageBonus) or 0,
+		healthBonus = tonumber(piece.healthBonus) or 0,
 	}
 end
 
@@ -1027,6 +1030,15 @@ local function compareOwnedBodyPartCandidates(leftCandidate, rightCandidate, pre
 	end
 	if leftCandidate.rollSpeedBonus ~= rightCandidate.rollSpeedBonus then
 		return if leftCandidate.rollSpeedBonus > rightCandidate.rollSpeedBonus then 1 else -1
+	end
+	if leftCandidate.damageBonus ~= rightCandidate.damageBonus then
+		return if leftCandidate.damageBonus > rightCandidate.damageBonus then 1 else -1
+	end
+	if leftCandidate.healthBonus ~= rightCandidate.healthBonus then
+		return if leftCandidate.healthBonus > rightCandidate.healthBonus then 1 else -1
+	end
+	if leftCandidate.speedBonus ~= rightCandidate.speedBonus then
+		return if leftCandidate.speedBonus > rightCandidate.speedBonus then 1 else -1
 	end
 
 	local prefersLeft = preferredOwnedId ~= nil and leftCandidate.ownedId == preferredOwnedId
@@ -1086,6 +1098,9 @@ local function buildLoadoutCandidate(selectedCandidatesByRegion, setBonus: BodyP
 		passiveIncomePerSecond = 0,
 		luckBonus = 0,
 		rollSpeedBonus = 0,
+		speedBonus = 0,
+		damageBonus = 0,
+		healthBonus = 0,
 	}
 
 	for _, region in ipairs(BodyPartRegions.Order) do
@@ -1100,6 +1115,9 @@ local function buildLoadoutCandidate(selectedCandidatesByRegion, setBonus: BodyP
 			totals.passiveIncomePerSecond += candidate.passiveIncomePerSecond
 			totals.luckBonus += candidate.luckBonus
 			totals.rollSpeedBonus += candidate.rollSpeedBonus
+			totals.speedBonus += candidate.speedBonus
+			totals.damageBonus += candidate.damageBonus
+			totals.healthBonus += candidate.healthBonus
 		end
 	end
 
@@ -1107,6 +1125,9 @@ local function buildLoadoutCandidate(selectedCandidatesByRegion, setBonus: BodyP
 		totals.passiveIncomePerSecond += tonumber(setBonus.passiveIncomePerSecond) or 0
 		totals.luckBonus += tonumber(setBonus.luckBonus) or 0
 		totals.rollSpeedBonus += tonumber(setBonus.rollSpeedBonus) or 0
+		totals.speedBonus += tonumber(setBonus.speedBonus) or 0
+		totals.damageBonus += tonumber(setBonus.damageBonus) or 0
+		totals.healthBonus += tonumber(setBonus.healthBonus) or 0
 	end
 
 	return {
@@ -1114,6 +1135,9 @@ local function buildLoadoutCandidate(selectedCandidatesByRegion, setBonus: BodyP
 		passiveIncomePerSecond = totals.passiveIncomePerSecond,
 		luckBonus = totals.luckBonus,
 		rollSpeedBonus = totals.rollSpeedBonus,
+		speedBonus = totals.speedBonus,
+		damageBonus = totals.damageBonus,
+		healthBonus = totals.healthBonus,
 	}
 end
 
@@ -1136,6 +1160,15 @@ local function compareLoadoutCandidates(leftCandidate, rightCandidate): number
 	end
 	if leftCandidate.rollSpeedBonus ~= rightCandidate.rollSpeedBonus then
 		return if leftCandidate.rollSpeedBonus > rightCandidate.rollSpeedBonus then 1 else -1
+	end
+	if leftCandidate.damageBonus ~= rightCandidate.damageBonus then
+		return if leftCandidate.damageBonus > rightCandidate.damageBonus then 1 else -1
+	end
+	if leftCandidate.healthBonus ~= rightCandidate.healthBonus then
+		return if leftCandidate.healthBonus > rightCandidate.healthBonus then 1 else -1
+	end
+	if leftCandidate.speedBonus ~= rightCandidate.speedBonus then
+		return if leftCandidate.speedBonus > rightCandidate.speedBonus then 1 else -1
 	end
 
 	for _, region in ipairs(BodyPartRegions.Order) do
@@ -1255,10 +1288,17 @@ local function computeLoadoutBonuses(
 	equippedAuraId: string?
 )
 	local normalizedEquippedState = BodyPartLoadout.NormalizeEquippedState(equippedState, ownedBodyParts)
+	local basePlayerStats = BodyPartsCatalog.GetBasePlayerStats()
 	local bonuses = {
 		passiveIncomePerSecond = 0,
 		luckBonus = 0,
 		rollSpeedBonus = 0,
+		speedBonus = 0,
+		damageBonus = 0,
+		healthBonus = 0,
+		speed = tonumber(basePlayerStats.speed) or 16,
+		damage = tonumber(basePlayerStats.damage) or 20,
+		health = tonumber(basePlayerStats.health) or 100,
 		activeSetId = nil,
 	}
 
@@ -1273,6 +1313,9 @@ local function computeLoadoutBonuses(
 					or 0
 				bonuses.luckBonus += tonumber(piece.luckBonus) or 0
 				bonuses.rollSpeedBonus += tonumber(piece.rollSpeedBonus) or 0
+				bonuses.speedBonus += tonumber(piece.speedBonus) or 0
+				bonuses.damageBonus += tonumber(piece.damageBonus) or 0
+				bonuses.healthBonus += tonumber(piece.healthBonus) or 0
 			end
 		end
 	end
@@ -1283,6 +1326,9 @@ local function computeLoadoutBonuses(
 		bonuses.passiveIncomePerSecond += tonumber(setBonus.passiveIncomePerSecond) or 0
 		bonuses.luckBonus += tonumber(setBonus.luckBonus) or 0
 		bonuses.rollSpeedBonus += tonumber(setBonus.rollSpeedBonus) or 0
+		bonuses.speedBonus += tonumber(setBonus.speedBonus) or 0
+		bonuses.damageBonus += tonumber(setBonus.damageBonus) or 0
+		bonuses.healthBonus += tonumber(setBonus.healthBonus) or 0
 
 		local samplePieceId = pieceIdsByRegion[BodyPartRegions.Order[1]]
 		local setConfig = samplePieceId and BodyPartsCatalog.GetSetForPiece(samplePieceId) or nil
@@ -1295,6 +1341,10 @@ local function computeLoadoutBonuses(
 		bonuses.luckBonus += tonumber(auraConfig.bonuses.luckBonus) or 0
 		bonuses.rollSpeedBonus += tonumber(auraConfig.bonuses.rollSpeedBonus) or 0
 	end
+
+	bonuses.speed += bonuses.speedBonus
+	bonuses.damage += bonuses.damageBonus
+	bonuses.health += bonuses.healthBonus
 
 	return bonuses
 end

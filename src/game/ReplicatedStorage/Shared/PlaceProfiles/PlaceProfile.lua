@@ -18,6 +18,7 @@ local ALL_SERVICE_NAMES = {
 	"MerchantShopService",
 	"OfflineEarningsService",
 	"PassiveIncomeService",
+	"PlayerLoadoutStatsService",
 	"PotionService",
 	"PremiumBenefitsService",
 	"PreviewAppearanceService",

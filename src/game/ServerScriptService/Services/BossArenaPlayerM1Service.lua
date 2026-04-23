@@ -5,6 +5,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local BossArenaRuntimeService = require(script.Parent.BossArenaRuntimeService)
+local BodyPartService = require(script.Parent.BodyPartService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local PlayerM1Config = require(ReplicatedStorage.Shared.BossArena.PlayerM1Config)
@@ -236,6 +237,32 @@ local function chooseAnimation(): Animation?
 	return animations[index]
 end
 
+local function resolvePredictedAnimation(predictedAnimationName: any): Animation?
+	if typeof(predictedAnimationName) ~= "string" or predictedAnimationName == "" then
+		return nil
+	end
+
+	local folder = resolveAnimationFolder()
+	if folder == nil then
+		return nil
+	end
+
+	local animationInstance = folder:FindFirstChild(predictedAnimationName)
+	if animationInstance and animationInstance:IsA("Animation") then
+		return animationInstance
+	end
+
+	return nil
+end
+
+local function warmImpactDelayCache()
+	task.defer(function()
+		for _, animationInstance in ipairs(getM1Animations()) do
+			resolveImpactDelaySeconds(animationInstance)
+		end
+	end)
+end
+
 local function averageBasePartSizes(root: Instance, blacklist: { [string]: boolean }?): (Vector3?, number)
 	local sum = Vector3.zero
 	local count = 0
@@ -308,6 +335,12 @@ end
 local function isActiveBossMinion(model: Model): boolean
 	local activeMinionsFolder = Workspace:FindFirstChild(ACTIVE_MINIONS_FOLDER_NAME)
 	return activeMinionsFolder ~= nil and model.Parent == activeMinionsFolder
+end
+
+local function resolvePlayerM1Damage(player: Player): number
+	local bonuses = BodyPartService:GetComputedLoadoutBonuses(player)
+	local damage = tonumber(bonuses and bonuses.damage) or PlayerM1Config.Damage
+	return math.max(0, damage)
 end
 
 function BossArenaPlayerM1Service:_bindCharacter(player: Player, character: Model)
@@ -392,7 +425,7 @@ function BossArenaPlayerM1Service:_spawnHitboxForSwing(player: Player, swingId: 
 			end
 
 			damagedTarget = true
-			targetHumanoid:TakeDamage(PlayerM1Config.Damage)
+			targetHumanoid:TakeDamage(resolvePlayerM1Damage(player))
 		end,
 		HitboxDestroy = function()
 			if activeSwingByPlayer[player] == swingState then
@@ -408,7 +441,7 @@ function BossArenaPlayerM1Service:_spawnHitboxForSwing(player: Player, swingId: 
 	end)
 end
 
-function BossArenaPlayerM1Service:_handleRequest(player: Player): { [string]: any }
+function BossArenaPlayerM1Service:_handleRequest(player: Player, predictedAnimationName: any): { [string]: any }
 	local allowed, retryAfterSeconds = RequestLimiter:Allow(player, REQUEST_RATE_LIMIT_KEY)
 	if not allowed then
 		return buildFailureResponse("RATE_LIMITED", retryAfterSeconds)
@@ -441,7 +474,7 @@ function BossArenaPlayerM1Service:_handleRequest(player: Player): { [string]: an
 		return buildFailureResponse("INVALID_CHARACTER")
 	end
 
-	local animationInstance = chooseAnimation()
+	local animationInstance = resolvePredictedAnimation(predictedAnimationName) or chooseAnimation()
 	if animationInstance == nil then
 		warnWithPrefix("No animations exist under ReplicatedStorage.GameAssets.Animations.M1.")
 		return buildFailureResponse("MISSING_ANIMATION")
@@ -492,9 +525,10 @@ function BossArenaPlayerM1Service:OnStart()
 	end
 
 	local requestRemote = ensureRequestM1Remote()
-	requestRemote.OnServerInvoke = function(player: Player)
-		return self:_handleRequest(player)
+	requestRemote.OnServerInvoke = function(player: Player, predictedAnimationName: any)
+		return self:_handleRequest(player, predictedAnimationName)
 	end
+	warmImpactDelayCache()
 
 	self._disconnectEncounterStateListener = BossArenaRuntimeService:ConnectEncounterStateChanged(function(activeBossId: string?)
 		if activeBossId == nil then

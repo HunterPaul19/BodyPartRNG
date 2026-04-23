@@ -24,6 +24,9 @@ export type PieceConfig = {
 	passiveIncomePerSecond: number,
 	luckBonus: number,
 	rollSpeedBonus: number,
+	speedBonus: number,
+	damageBonus: number,
+	healthBonus: number,
 	attachRules: { [string]: AttachRuleConfig }?,
 }
 
@@ -31,6 +34,9 @@ export type SetBonus = {
 	passiveIncomePerSecond: number,
 	luckBonus: number,
 	rollSpeedBonus: number,
+	speedBonus: number,
+	damageBonus: number,
+	healthBonus: number,
 }
 
 export type RollDisplay = {
@@ -60,6 +66,12 @@ export type RollEntry = SetConfig & {
 
 local Catalog = {}
 
+local BASE_PLAYER_STATS = table.freeze({
+	speed = 16,
+	damage = 20,
+	health = 100,
+})
+
 local REGION_ORDER: { BodyRegion } = {
 	"Head",
 	"Torso",
@@ -88,12 +100,18 @@ local REQUIRED_PIECE_NUMBER_FIELDS = {
 	"passiveIncomePerSecond",
 	"luckBonus",
 	"rollSpeedBonus",
+	"speedBonus",
+	"damageBonus",
+	"healthBonus",
 }
 
 local REQUIRED_SET_BONUS_FIELDS = {
 	"passiveIncomePerSecond",
 	"luckBonus",
 	"rollSpeedBonus",
+	"speedBonus",
+	"damageBonus",
+	"healthBonus",
 }
 
 local REQUIRED_ROLL_DISPLAY_NUMBER_FIELDS = {
@@ -192,6 +210,82 @@ local function resolveBundleModelForPiece(piece: PieceConfig): Model?
 	end
 
 	return nil
+end
+
+local function getCombatStatTier(chance: any): number
+	local denominator = math.max(1, tonumber(chance) or 1)
+	if denominator >= 1000000 then
+		return 5
+	elseif denominator >= 250000 then
+		return 4
+	elseif denominator >= 50000 then
+		return 3
+	elseif denominator >= 5000 then
+		return 2
+	elseif denominator >= 100 then
+		return 1
+	end
+
+	return 0
+end
+
+local function getDefaultPieceCombatStats(piece: any): (number, number, number)
+	local weight = getCombatStatTier(piece and piece.rarity) + 1
+	local speedBonus = 0.1 * weight
+	local damageBonus = 0.5 * weight
+	local healthBonus = 2 * weight
+	local region = if typeof(piece) == "table" then piece.region else nil
+
+	if region == "Torso" then
+		healthBonus += 3 * weight
+	elseif region == "LeftArm" or region == "RightArm" then
+		damageBonus += 0.5 * weight
+	elseif region == "LeftLeg" or region == "RightLeg" then
+		speedBonus += 0.15 * weight
+	elseif region == "Head" then
+		damageBonus += 0.25 * weight
+		healthBonus += weight
+	end
+
+	return speedBonus, damageBonus, healthBonus
+end
+
+local function getDefaultSetCombatStats(setConfig: any): (number, number, number)
+	local chance = if typeof(setConfig) == "table" and typeof(setConfig.rollDisplay) == "table"
+		then setConfig.rollDisplay.chance
+		else 1
+	local weight = getCombatStatTier(chance) + 1
+	return 0.25 * weight, 1.5 * weight, 8 * weight
+end
+
+local function withDefaultPieceCombatStats(piece: any): any
+	if typeof(piece) ~= "table" then
+		return piece
+	end
+
+	local normalized = deepCopy(piece)
+	local defaultSpeedBonus, defaultDamageBonus, defaultHealthBonus = getDefaultPieceCombatStats(normalized)
+	normalized.speedBonus = tonumber(normalized.speedBonus) or defaultSpeedBonus
+	normalized.damageBonus = tonumber(normalized.damageBonus) or defaultDamageBonus
+	normalized.healthBonus = tonumber(normalized.healthBonus) or defaultHealthBonus
+	return normalized
+end
+
+local function withDefaultSetCombatStats(setConfig: any): any
+	if typeof(setConfig) ~= "table" then
+		return setConfig
+	end
+
+	local normalized = deepCopy(setConfig)
+	if typeof(normalized.fullSetBonus) ~= "table" then
+		return normalized
+	end
+
+	local defaultSpeedBonus, defaultDamageBonus, defaultHealthBonus = getDefaultSetCombatStats(normalized)
+	normalized.fullSetBonus.speedBonus = tonumber(normalized.fullSetBonus.speedBonus) or defaultSpeedBonus
+	normalized.fullSetBonus.damageBonus = tonumber(normalized.fullSetBonus.damageBonus) or defaultDamageBonus
+	normalized.fullSetBonus.healthBonus = tonumber(normalized.fullSetBonus.healthBonus) or defaultHealthBonus
+	return normalized
 end
 
 local function getExpectedPieceDisplayName(setDisplayName: string, region: BodyRegion): string
@@ -372,14 +466,16 @@ local function buildCatalog()
 	local allPieces = {}
 	local allSets = {}
 
-	for pieceKey, piece in pairs(RawPieces) do
+	for pieceKey, rawPiece in pairs(RawPieces) do
+		local piece = withDefaultPieceCombatStats(rawPiece)
 		validatePieceConfig(pieceKey, piece, seenPieceIds, errors)
 		if typeof(piece) == "table" and typeof(piece.id) == "string" and piece.id ~= "" then
 			piecesById[piece.id] = piece
 		end
 	end
 
-	for setKey, setConfig in pairs(RawSets) do
+	for setKey, rawSetConfig in pairs(RawSets) do
+		local setConfig = withDefaultSetCombatStats(rawSetConfig)
 		validateSetConfig(setKey, setConfig, piecesById, seenSetIds, errors)
 		if typeof(setConfig) == "table" and typeof(setConfig.id) == "string" and setConfig.id ~= "" then
 			setsById[setConfig.id] = setConfig
@@ -497,6 +593,10 @@ end
 
 function Catalog.GetRollEntries(): { RollEntry }
 	return ROLL_ENTRIES
+end
+
+function Catalog.GetBasePlayerStats(): { speed: number, damage: number, health: number }
+	return BASE_PLAYER_STATS
 end
 
 function Catalog.ResolveBundleModel(pieceId: string): Model?

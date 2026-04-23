@@ -206,6 +206,7 @@ local function spawnEruptionHitboxes(
 		local hitboxSize = Vector3.new(point.footprintSize.X, HITBOX_HEIGHT, point.footprintSize.Z)
 		local hitbox
 		hitbox = Hitbox.new({
+			DebugVisibilityAttribute = "BossHitboxesVisible",
 			Character = bossModel,
 			HitboxCFrame = point.floorCFrame + Vector3.new(0, HITBOX_HEIGHT * 0.5, 0),
 			HitboxSize = hitboxSize,

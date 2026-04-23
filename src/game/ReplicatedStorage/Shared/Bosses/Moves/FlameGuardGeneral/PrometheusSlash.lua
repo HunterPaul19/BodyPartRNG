@@ -343,6 +343,7 @@ function PrometheusSlash.StartCast(context)
 
 		local hitbox
 		hitbox = Hitbox.new({
+			DebugVisibilityAttribute = "BossHitboxesVisible",
 			Character = bossModel,
 			HitboxCFrame = function()
 				if cancelled or bossModel.Parent == nil or bossRootPart.Parent == nil then

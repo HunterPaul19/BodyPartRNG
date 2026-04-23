@@ -406,6 +406,7 @@ local function spawnMinionAttackHitbox(
 	local hitboxSize, forwardOffset = resolveMinionHitboxSizeAndOffset(minionRootPart)
 	local hitbox
 	hitbox = Hitbox.new({
+		DebugVisibilityAttribute = "BossHitboxesVisible",
 		Character = minionModel,
 		HitboxCFrame = function()
 			if minionRootPart.Parent == nil then
@@ -444,7 +445,6 @@ local function spawnMinionAttackHitbox(
 	})
 
 	activeHitboxes[hitbox] = true
-	hitbox:Visible(true)
 end
 
 function CatSummon.StartCast(context)
