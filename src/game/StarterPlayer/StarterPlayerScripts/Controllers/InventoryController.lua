@@ -798,6 +798,31 @@ function InventoryController:_resolvePreviewModel()
 		})
 	end
 
+	local previewBodyPartContext = self:_resolvePreviewBodyPartContext()
+	if not previewBodyPartContext then
+		return nil
+	end
+
+	return BodyPartPresentation.BuildPreviewPresentation({
+		record = previewBodyPartContext.ownedRecord,
+		entry = previewBodyPartContext.entry,
+		piece = previewBodyPartContext.piece,
+		scale = if previewBodyPartContext.entry and typeof(previewBodyPartContext.entry.scale) == "number"
+			then previewBodyPartContext.entry.scale
+			else previewBodyPartContext.ownedRecord and previewBodyPartContext.ownedRecord.sizeMultiplier or 1,
+	})
+end
+
+function InventoryController:_resolvePreviewBodyPartContext(): {
+	ownedRecord: OwnedBodyPartRecord?,
+	entry: BodyPartLoadout.LoadoutEntry?,
+	piece: any,
+}?
+	local previewState = self._previewState
+	if not previewState or previewState.itemType ~= "bodyPart" then
+		return nil
+	end
+
 	local ownedLookup = self:_getOwnedLookup()
 	local ownedRecord = previewState.ownedId and ownedLookup[previewState.ownedId] or nil
 	local entry = previewState.entry
@@ -807,12 +832,11 @@ function InventoryController:_resolvePreviewModel()
 		return nil
 	end
 
-	return BodyPartPresentation.BuildPreviewPresentation({
-		record = ownedRecord,
+	return {
+		ownedRecord = ownedRecord,
 		entry = entry,
 		piece = piece,
-		scale = if entry and typeof(entry.scale) == "number" then entry.scale else ownedRecord and ownedRecord.sizeMultiplier or 1,
-	})
+	}
 end
 
 function InventoryController:_setExistingPreviewText(text: string)
@@ -1018,7 +1042,8 @@ function InventoryController:_setPreviewState(previewState: PreviewState?)
 end
 
 function InventoryController:_setPreviewTab(tabName: string?)
-	local resolvedTab = if tabName == "stats" then "stats" else "info"
+	local hasPreviewBodyPart = self:_resolvePreviewBodyPartContext() ~= nil
+	local resolvedTab = if tabName == "stats" and hasPreviewBodyPart then "stats" else "info"
 	self._previewTab = resolvedTab
 
 	local infoFrame = self._ui.infoFrame
@@ -2273,8 +2298,9 @@ function InventoryController:_syncPreviewStatLabels()
 		return
 	end
 
-	local statTexts = BodyPartPresentation.BuildPreviewStatTexts(
-		self._loadoutState and self._loadoutState.bonuses or nil,
+	local previewBodyPartContext = self:_resolvePreviewBodyPartContext()
+	local statTexts = BodyPartPresentation.BuildBodyPartContributionStatTexts(
+		if previewBodyPartContext then previewBodyPartContext.piece else nil,
 		self._previewStatNativeTexts
 	)
 
@@ -2295,12 +2321,14 @@ function InventoryController:_syncPreview()
 	local renderKey = if previewModel == nil
 		then "none"
 		else string.format(
-			"%s|%s|%s|%s|%s",
+			"%s|%s|%s|%s|%s|%s|%s",
 			tostring(previewModel.itemType),
 			tostring(previewModel.ownedId or ""),
 			tostring(previewModel.pieceId or previewModel.auraId or previewModel.potionId or ""),
 			tostring(previewModel.region or ""),
-			tostring(previewModel.sizeText or previewModel.rarityText or "")
+			tostring(previewModel.sizeText or previewModel.rarityText or ""),
+			tostring(previewModel.applyPlayerClothing),
+			tostring(previewModel.applyPlayerBodyColors)
 		)
 	self._previewExistingRequestToken += 1
 	local requestToken = self._previewExistingRequestToken
@@ -2351,7 +2379,11 @@ function InventoryController:_syncPreview()
 						previewModel.bundleModel,
 						previewModel.region,
 						appearanceSnapshot,
-						previewModel.previewScale
+						previewModel.previewScale,
+						{
+							applyPlayerClothing = previewModel.applyPlayerClothing,
+							applyPlayerBodyColors = previewModel.applyPlayerBodyColors,
+						}
 					)
 				else
 					ViewportModelRenderer.RenderBundle(previewViewport, previewModel.bundleModel)

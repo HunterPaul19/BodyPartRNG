@@ -55,6 +55,8 @@ export type SetConfig = {
 	bundleLink: string?,
 	bundleId: number?,
 	rollEnabled: boolean?,
+	applyPlayerClothing: boolean,
+	applyPlayerBodyColors: boolean,
 	rollDisplay: RollDisplay,
 	piecesByRegion: { [BodyRegion]: string },
 	strength: number,
@@ -93,6 +95,7 @@ local REGION_LABELS: { [BodyRegion]: string } = {
 	LeftLeg = "Left Leg",
 	RightLeg = "Right Leg",
 }
+local EMPTY_PIECE_LIST = table.freeze({})
 
 local REGION_COMBAT_WEIGHTS = table.freeze({
 	strength = table.freeze({
@@ -149,6 +152,11 @@ local REQUIRED_SET_COMBAT_TOTAL_FIELDS = {
 	"strength",
 	"health",
 	"speed",
+}
+
+local REQUIRED_SET_APPEARANCE_POLICY_FIELDS = {
+	"applyPlayerClothing",
+	"applyPlayerBodyColors",
 }
 
 local REQUIRED_ROLL_DISPLAY_NUMBER_FIELDS = {
@@ -332,6 +340,13 @@ local function withDefaultSetCombatStats(setConfig: any): any
 	end
 
 	local normalized = deepCopy(setConfig)
+	if normalized.applyPlayerClothing == nil then
+		normalized.applyPlayerClothing = true
+	end
+	if normalized.applyPlayerBodyColors == nil then
+		normalized.applyPlayerBodyColors = true
+	end
+
 	if typeof(normalized.fullSetBonus) ~= "table" then
 		return normalized
 	end
@@ -557,6 +572,11 @@ local function validateSetConfig(setKey: string, setConfig: any, piecesById: { [
 			pushError(errors, `Set "{setKey}" must provide numeric field "{fieldName}"`)
 		end
 	end
+	for _, fieldName in ipairs(REQUIRED_SET_APPEARANCE_POLICY_FIELDS) do
+		if typeof(setConfig[fieldName]) ~= "boolean" then
+			pushError(errors, `Set "{setKey}" must provide boolean field "{fieldName}"`)
+		end
+	end
 end
 
 local function buildCatalog()
@@ -569,6 +589,8 @@ local function buildCatalog()
 	local setByPieceId: { [string]: SetConfig } = {}
 	local allPieces = {}
 	local allSets = {}
+	local rollEligiblePieces = {}
+	local rollEligiblePiecesByRegion: { [BodyRegion]: { PieceConfig } } = {}
 	local normalizedRawSetsById: { [string]: any } = {}
 
 	for setKey, rawSetConfig in pairs(RawSets) do
@@ -642,12 +664,22 @@ local function buildCatalog()
 
 	for setId, setConfig in pairs(frozenSetsById) do
 		local orderedPieces = {}
+		local isRollEnabled = setConfig.rollEnabled ~= false
 		for _, region in ipairs(REGION_ORDER) do
 			local pieceId = setConfig.piecesByRegion[region]
 			local piece = frozenPiecesById[pieceId]
 			table.insert(orderedPieces, piece)
 			table.insert(allPieces, piece)
 			setByPieceId[pieceId] = setConfig
+			if isRollEnabled then
+				table.insert(rollEligiblePieces, piece)
+				local rollEligibleRegionPieces = rollEligiblePiecesByRegion[region]
+				if not rollEligibleRegionPieces then
+					rollEligibleRegionPieces = {}
+					rollEligiblePiecesByRegion[region] = rollEligibleRegionPieces
+				end
+				table.insert(rollEligibleRegionPieces, piece)
+			end
 		end
 		piecesForSet[setId] = deepFreeze(orderedPieces)
 		table.insert(allSets, setConfig)
@@ -655,6 +687,11 @@ local function buildCatalog()
 	table.freeze(piecesForSet)
 	table.freeze(setByPieceId)
 	table.freeze(allPieces)
+	table.freeze(rollEligiblePieces)
+	for region, regionPieces in pairs(rollEligiblePiecesByRegion) do
+		rollEligiblePiecesByRegion[region] = table.freeze(regionPieces)
+	end
+	table.freeze(rollEligiblePiecesByRegion)
 	table.sort(allSets, function(a, b)
 		local chanceA = math.max(1, tonumber(a.rollDisplay.chance) or math.huge)
 		local chanceB = math.max(1, tonumber(b.rollDisplay.chance) or math.huge)
@@ -682,10 +719,26 @@ local function buildCatalog()
 	end
 	table.freeze(rollEntries)
 
-	return frozenPiecesById, frozenSetsById, piecesForSet, setByPieceId, allPieces, allSets, rollEntries
+	return frozenPiecesById,
+		frozenSetsById,
+		piecesForSet,
+		setByPieceId,
+		allPieces,
+		allSets,
+		rollEligiblePieces,
+		rollEligiblePiecesByRegion,
+		rollEntries
 end
 
-local PIECES_BY_ID, SETS_BY_ID, PIECES_FOR_SET, SET_BY_PIECE_ID, ALL_PIECES, ALL_SETS, ROLL_ENTRIES = buildCatalog()
+local PIECES_BY_ID,
+	SETS_BY_ID,
+	PIECES_FOR_SET,
+	SET_BY_PIECE_ID,
+	ALL_PIECES,
+	ALL_SETS,
+	ROLL_ELIGIBLE_PIECES,
+	ROLL_ELIGIBLE_PIECES_BY_REGION,
+	ROLL_ENTRIES = buildCatalog()
 
 function Catalog.GetPiece(pieceId: string): PieceConfig?
 	return PIECES_BY_ID[pieceId]
@@ -705,6 +758,14 @@ end
 
 function Catalog.GetAllPieces(): { PieceConfig }
 	return ALL_PIECES
+end
+
+function Catalog.GetRollEligiblePieces(region: BodyRegion?): { PieceConfig }
+	if region == nil then
+		return ROLL_ELIGIBLE_PIECES
+	end
+
+	return ROLL_ELIGIBLE_PIECES_BY_REGION[region] or EMPTY_PIECE_LIST
 end
 
 function Catalog.GetAllSets(): { SetConfig }

@@ -374,8 +374,22 @@ function BodyPartPresentation.FormatTemplatedLabelText(templateText: any, value:
 	return formattedValue
 end
 
-local function formatPreviewStatText(templateText: any, value: number): string
-	local formattedValue = formatNumberish(value)
+local function formatSignedNumberish(value: number?): string
+	local numericValue = tonumber(value) or 0
+	if math.abs(numericValue) < 0.005 then
+		return "0"
+	end
+
+	local absoluteFormattedValue = formatNumberish(math.abs(numericValue))
+	if numericValue > 0 then
+		return "+" .. absoluteFormattedValue
+	end
+
+	return "-" .. absoluteFormattedValue
+end
+
+local function formatPreviewStatText(templateText: any, value: any): string
+	local formattedValue = if typeof(value) == "string" then value else formatNumberish(value)
 	local normalizedTemplate = if typeof(templateText) == "string"
 		then string.match(templateText, "^%s*(.-)%s*$") or ""
 		else ""
@@ -421,6 +435,38 @@ function BodyPartPresentation.BuildPreviewStatTexts(
 		else
 			texts[statName] = TranslationHelper.formatByKey(defaultEntries[statName], {
 				Value = formatNumberish(value),
+			})
+		end
+	end
+
+	return texts
+end
+
+function BodyPartPresentation.BuildBodyPartContributionStatTexts(
+	piece: any,
+	templates: { [string]: string }?
+): { Strength: string, Speed: string, Health: string }
+	local safePiece = if typeof(piece) == "table" then piece else {}
+	local statValues = {
+		Strength = tonumber(safePiece.damageBonus) or 0,
+		Speed = tonumber(safePiece.speedBonus) or 0,
+		Health = tonumber(safePiece.healthBonus) or 0,
+	}
+	local defaultEntries = {
+		Strength = LocalizationKeys.BodyPart.Stats.Strength,
+		Speed = LocalizationKeys.BodyPart.Stats.Speed,
+		Health = LocalizationKeys.BodyPart.Stats.Health,
+	}
+	local texts = {}
+
+	for statName, value in pairs(statValues) do
+		local formattedValue = formatSignedNumberish(value)
+		local template = if typeof(templates) == "table" and typeof(templates[statName]) == "string" then templates[statName] else nil
+		if template ~= nil and template ~= "" and template ~= "Strength: %s" and template ~= "Speed: %s" and template ~= "Health: %s" then
+			texts[statName] = formatPreviewStatText(template, formattedValue)
+		else
+			texts[statName] = TranslationHelper.formatByKey(defaultEntries[statName], {
+				Value = formattedValue,
 			})
 		end
 	end
@@ -592,6 +638,8 @@ function BodyPartPresentation.BuildPreviewPresentation(payload: any)
 	end
 
 	local setConfig = BodyPartsCatalog.GetSetForPiece(piece.id)
+	local applyPlayerClothing = setConfig == nil or setConfig.applyPlayerClothing ~= false
+	local applyPlayerBodyColors = setConfig == nil or setConfig.applyPlayerBodyColors ~= false
 	local previewScale = tonumber(source.scale)
 		or tonumber(entry and entry.scale)
 		or tonumber(record and (record.sizeMultiplier or record.scale))
@@ -624,6 +672,8 @@ function BodyPartPresentation.BuildPreviewPresentation(payload: any)
 		piece = piece,
 		region = piece.region,
 		setConfig = setConfig,
+		applyPlayerClothing = applyPlayerClothing,
+		applyPlayerBodyColors = applyPlayerBodyColors,
 		passiveIncomePerSecond = passiveIncomePerSecond,
 		previewScale = previewScale,
 		appearanceUserId = tonumber(source.appearanceUserId)
@@ -921,7 +971,11 @@ function BodyPartPresentation.PopulateBundleCard(cardRoot: Instance, payload: an
 					source.bundleModel,
 					source.region,
 					appearanceSnapshot,
-					source.previewScale
+					source.previewScale,
+					{
+						applyPlayerClothing = source.applyPlayerClothing,
+						applyPlayerBodyColors = source.applyPlayerBodyColors,
+					}
 				)
 			else
 				ViewportModelRenderer.RenderBundle(viewport, source.bundleModel)

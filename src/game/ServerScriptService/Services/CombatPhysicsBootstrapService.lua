@@ -3,7 +3,14 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Constants = require(ReplicatedStorage.Shared.Combat.Constants)
 
-local CombatPhysicsBootstrapService = {}
+type PlayerCollisionConnections = {
+	characterAdded: RBXScriptConnection?,
+	characterDescendantAdded: RBXScriptConnection?,
+}
+
+local CombatPhysicsBootstrapService = {
+	_playerConnections = {} :: { [Player]: PlayerCollisionConnections },
+}
 
 local function ensureFolder(parent: Instance, childName: string): Folder
 	local existing = parent:FindFirstChild(childName)
@@ -57,6 +64,26 @@ local function setCollidable(groupA: string, groupB: string, isCollidable: boole
 	PhysicsService:CollisionGroupSetCollidable(groupA, groupB, isCollidable)
 end
 
+local function applyCollisionGroupToPart(instance: Instance, groupName: string)
+	if not instance:IsA("BasePart") then
+		return
+	end
+
+	instance.CollisionGroup = groupName
+end
+
+local function applyCollisionGroupToCharacter(character: Model, groupName: string)
+	for _, descendant in ipairs(character:GetDescendants()) do
+		applyCollisionGroupToPart(descendant, groupName)
+	end
+end
+
+local function disconnectConnection(connection: RBXScriptConnection?)
+	if connection ~= nil then
+		connection:Disconnect()
+	end
+end
+
 local function ensureRemotes()
 	local remotesFolder = ensureFolder(ReplicatedStorage, Constants.REMOTES_FOLDER_NAME)
 	local combatRemotesFolder = ensureFolder(remotesFolder, Constants.COMBAT_REMOTES_FOLDER_NAME)
@@ -69,11 +96,19 @@ end
 local function ensureCollisionGroups()
 	local collisionGroups = Constants.COLLISION_GROUPS
 
+	ensureCollisionGroup(collisionGroups.Player)
+	ensureCollisionGroup(collisionGroups.BossBody)
 	ensureCollisionGroup(collisionGroups.BodyPhysics)
 	ensureCollisionGroup(collisionGroups.Hitbox)
 	ensureCollisionGroup(collisionGroups.HitboxNoCollide)
 	ensureCollisionGroup(collisionGroups.Ragdoll)
 
+	setCollidable(collisionGroups.BossBody, "Default", true)
+	setCollidable(collisionGroups.BossBody, collisionGroups.Player, false)
+	setCollidable(collisionGroups.BossBody, collisionGroups.BodyPhysics, false)
+	setCollidable(collisionGroups.BossBody, collisionGroups.Hitbox, true)
+	setCollidable(collisionGroups.BossBody, collisionGroups.HitboxNoCollide, false)
+	setCollidable(collisionGroups.BossBody, collisionGroups.Ragdoll, false)
 	setCollidable(collisionGroups.BodyPhysics, collisionGroups.BodyPhysics, false)
 	setCollidable(collisionGroups.BodyPhysics, collisionGroups.Hitbox, false)
 	setCollidable(collisionGroups.BodyPhysics, collisionGroups.HitboxNoCollide, false)
@@ -84,9 +119,9 @@ local function ensureCollisionGroups()
 	setCollidable(collisionGroups.Ragdoll, collisionGroups.Ragdoll, false)
 	setCollidable(collisionGroups.Ragdoll, collisionGroups.HitboxNoCollide, false)
 
-	for _, externalGroupName in ipairs({ "Default", "Players" }) do
+	for _, externalGroupName in ipairs({ "Default", collisionGroups.Player }) do
 		if isCollisionGroupRegistered(externalGroupName) then
-			if externalGroupName == "Players" then
+			if externalGroupName == collisionGroups.Player then
 				setCollidable(collisionGroups.BodyPhysics, externalGroupName, false)
 				setCollidable(collisionGroups.HitboxNoCollide, externalGroupName, false)
 				setCollidable(collisionGroups.Hitbox, externalGroupName, true)
@@ -101,9 +136,58 @@ local function ensureCollisionGroups()
 	end
 end
 
+function CombatPhysicsBootstrapService:_bindCharacter(player: Player, character: Model)
+	local collisionGroups = Constants.COLLISION_GROUPS
+	local connections = self._playerConnections[player]
+	if connections == nil then
+		connections = {}
+		self._playerConnections[player] = connections
+	end
+
+	disconnectConnection(connections.characterDescendantAdded)
+	applyCollisionGroupToCharacter(character, collisionGroups.Player)
+
+	connections.characterDescendantAdded = character.DescendantAdded:Connect(function(descendant)
+		applyCollisionGroupToPart(descendant, collisionGroups.Player)
+	end)
+end
+
+function CombatPhysicsBootstrapService:_disconnectPlayer(player: Player)
+	local connections = self._playerConnections[player]
+	if connections == nil then
+		return
+	end
+
+	disconnectConnection(connections.characterAdded)
+	disconnectConnection(connections.characterDescendantAdded)
+
+	self._playerConnections[player] = nil
+end
+
 function CombatPhysicsBootstrapService:OnStart()
 	ensureRemotes()
 	ensureCollisionGroups()
+end
+
+function CombatPhysicsBootstrapService:OnPlayerAdded(player: Player)
+	self:_disconnectPlayer(player)
+
+	local characterAddedConnection = player.CharacterAdded:Connect(function(character)
+		self:_bindCharacter(player, character)
+	end)
+
+	self._playerConnections[player] = {
+		characterAdded = characterAddedConnection,
+		characterDescendantAdded = nil,
+	}
+
+	if player.Character then
+		self:_bindCharacter(player, player.Character)
+	end
+end
+
+function CombatPhysicsBootstrapService:OnPlayerRemoving(player: Player)
+	self:_disconnectPlayer(player)
 end
 
 return CombatPhysicsBootstrapService

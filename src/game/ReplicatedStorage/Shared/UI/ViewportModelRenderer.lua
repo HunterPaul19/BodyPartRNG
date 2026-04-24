@@ -30,6 +30,19 @@ local BODY_COLOR3_PROPERTY_BY_REGION = table.freeze({
 	RightLeg = "RightLegColor3",
 })
 
+local function isAppearancePolicy(value: any): boolean
+	return typeof(value) == "table"
+		and (value.applyPlayerClothing ~= nil or value.applyPlayerBodyColors ~= nil)
+end
+
+local function normalizeAppearancePolicy(value: any): { applyPlayerClothing: boolean, applyPlayerBodyColors: boolean }
+	local policy = if isAppearancePolicy(value) then value else {}
+	return {
+		applyPlayerClothing = policy.applyPlayerClothing ~= false,
+		applyPlayerBodyColors = policy.applyPlayerBodyColors ~= false,
+	}
+end
+
 local function applyViewportLighting(viewportFrame: ViewportFrame, camera: Camera)
 	viewportFrame.CurrentCamera = camera
 	viewportFrame.Ambient = VIEWPORT_AMBIENT
@@ -180,27 +193,41 @@ local function applyPreviewBodyColors(previewModel: Model, snapshot: any)
 	bodyColors.Parent = previewModel
 end
 
-local function addPreviewClothing(previewModel: Model, snapshot: any, region: string)
+local function addPreviewClothing(previewModel: Model, snapshot: any, region: string, appearancePolicy: any)
 	local relevantClasses = AppearanceRegionRules.GetRelevantClasses(region)
-	if relevantClasses.BodyColors then
+	local policy = normalizeAppearancePolicy(appearancePolicy)
+
+	if relevantClasses.BodyColors and policy.applyPlayerBodyColors then
 		applyPreviewBodyColors(previewModel, snapshot)
 	end
 
-	if relevantClasses.Shirt and typeof(snapshot.shirtTemplate) == "string" and snapshot.shirtTemplate ~= "" then
+	if policy.applyPlayerClothing
+		and relevantClasses.Shirt
+		and typeof(snapshot.shirtTemplate) == "string"
+		and snapshot.shirtTemplate ~= ""
+	then
 		local shirt = Instance.new("Shirt")
 		shirt.Name = "PreviewShirt"
 		shirt.ShirtTemplate = snapshot.shirtTemplate
 		shirt.Parent = previewModel
 	end
 
-	if relevantClasses.Pants and typeof(snapshot.pantsTemplate) == "string" and snapshot.pantsTemplate ~= "" then
+	if policy.applyPlayerClothing
+		and relevantClasses.Pants
+		and typeof(snapshot.pantsTemplate) == "string"
+		and snapshot.pantsTemplate ~= ""
+	then
 		local pants = Instance.new("Pants")
 		pants.Name = "PreviewPants"
 		pants.PantsTemplate = snapshot.pantsTemplate
 		pants.Parent = previewModel
 	end
 
-	if relevantClasses.ShirtGraphic and typeof(snapshot.shirtGraphic) == "string" and snapshot.shirtGraphic ~= "" then
+	if policy.applyPlayerClothing
+		and relevantClasses.ShirtGraphic
+		and typeof(snapshot.shirtGraphic) == "string"
+		and snapshot.shirtGraphic ~= ""
+	then
 		local shirtGraphic = Instance.new("ShirtGraphic")
 		shirtGraphic.Name = "PreviewShirtGraphic"
 		shirtGraphic.Graphic = snapshot.shirtGraphic
@@ -212,15 +239,19 @@ local function buildBodyPartPreviewCacheKey(
 	bundleModel: Model,
 	region: string,
 	snapshot: any,
-	scale: number?
+	scale: number?,
+	appearancePolicy: any
 ): string
 	local normalizedScale = tonumber(scale) or 1
+	local policy = normalizeAppearancePolicy(appearancePolicy)
 	return table.concat({
 		"bodyPartPreview",
 		getModelCacheToken(bundleModel),
 		tostring(region),
 		snapshot.cacheKey,
 		string.format("%.4f", normalizedScale),
+		if policy.applyPlayerClothing then "clothing:on" else "clothing:off",
+		if policy.applyPlayerBodyColors then "colors:on" else "colors:off",
 	}, "|")
 end
 
@@ -228,9 +259,10 @@ local function buildBodyPartPreviewSourceModel(
 	bundleModel: Model,
 	region: string,
 	snapshot: any,
-	scale: number?
+	scale: number?,
+	appearancePolicy: any
 ): Model?
-	local cacheKey = buildBodyPartPreviewCacheKey(bundleModel, region, snapshot, scale)
+	local cacheKey = buildBodyPartPreviewCacheKey(bundleModel, region, snapshot, scale, appearancePolicy)
 	local cachedModel = bodyPartPreviewSourceModels[cacheKey]
 	if cachedModel then
 		return cachedModel
@@ -245,7 +277,7 @@ local function buildBodyPartPreviewSourceModel(
 	local humanoid = createPreviewHumanoid()
 	humanoid.Name = "PreviewHumanoid"
 	humanoid.Parent = previewModel
-	addPreviewClothing(previewModel, snapshot, region)
+	addPreviewClothing(previewModel, snapshot, region, appearancePolicy)
 
 	bodyPartPreviewSourceModels[cacheKey] = previewModel
 	return previewModel
@@ -641,36 +673,44 @@ function ViewportModelRenderer.RenderBodyPartPreview(
 	region: string?,
 	appearanceSnapshot: any,
 	scale: number?,
-	sessionToken: any?
+	appearancePolicyOrSessionToken: any,
+	sessionToken: any
 ): boolean
+	local hasAppearancePolicy = isAppearancePolicy(appearancePolicyOrSessionToken)
+	local appearancePolicy = if hasAppearancePolicy then appearancePolicyOrSessionToken else nil
+	local resolvedSessionToken = if sessionToken ~= nil
+		then sessionToken
+		elseif hasAppearancePolicy then nil
+		else appearancePolicyOrSessionToken
+
 	if not (bundleModel and bundleModel:IsA("Model") and typeof(region) == "string" and region ~= "") then
-		if sessionToken ~= nil then
-			return ViewportModelRenderer.RenderRollPreview(viewportFrame, bundleModel, sessionToken)
+		if resolvedSessionToken ~= nil then
+			return ViewportModelRenderer.RenderRollPreview(viewportFrame, bundleModel, resolvedSessionToken)
 		end
 
 		return renderModel(viewportFrame, bundleModel, nil)
 	end
 
 	if appearanceSnapshot == nil then
-		if sessionToken ~= nil then
-			return ViewportModelRenderer.RenderRollPreview(viewportFrame, bundleModel, sessionToken)
+		if resolvedSessionToken ~= nil then
+			return ViewportModelRenderer.RenderRollPreview(viewportFrame, bundleModel, resolvedSessionToken)
 		end
 
 		return renderModel(viewportFrame, bundleModel, nil)
 	end
 
 	local snapshot = PreviewAppearanceSnapshot.Normalize(appearanceSnapshot)
-	local previewModel = buildBodyPartPreviewSourceModel(bundleModel, region, snapshot, scale)
+	local previewModel = buildBodyPartPreviewSourceModel(bundleModel, region, snapshot, scale, appearancePolicy)
 	if not previewModel then
-		if sessionToken ~= nil then
-			return ViewportModelRenderer.RenderRollPreview(viewportFrame, bundleModel, sessionToken)
+		if resolvedSessionToken ~= nil then
+			return ViewportModelRenderer.RenderRollPreview(viewportFrame, bundleModel, resolvedSessionToken)
 		end
 
 		return renderModel(viewportFrame, bundleModel, nil)
 	end
 
-	if sessionToken ~= nil then
-		return ViewportModelRenderer.RenderRollPreview(viewportFrame, previewModel, sessionToken)
+	if resolvedSessionToken ~= nil then
+		return ViewportModelRenderer.RenderRollPreview(viewportFrame, previewModel, resolvedSessionToken)
 	end
 
 	return renderModel(viewportFrame, previewModel, nil)

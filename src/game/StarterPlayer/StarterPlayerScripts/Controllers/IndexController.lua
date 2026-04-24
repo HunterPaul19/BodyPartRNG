@@ -668,7 +668,11 @@ function IndexController:_renderViewportForPiece(pieceId: string?)
 			previewPresentation.bundleModel,
 			previewPresentation.region,
 			appearanceSnapshot,
-			previewPresentation.previewScale
+			previewPresentation.previewScale,
+			{
+				applyPlayerClothing = previewPresentation.applyPlayerClothing,
+				applyPlayerBodyColors = previewPresentation.applyPlayerBodyColors,
+			}
 		)
 		return
 	end

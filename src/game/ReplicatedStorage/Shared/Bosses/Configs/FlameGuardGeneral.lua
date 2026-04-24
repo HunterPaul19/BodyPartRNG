@@ -10,7 +10,7 @@ return BossConfigFactory.Create({
 	bossId = "Flame Guard General",
 	arenaId = "Spire",
 	recommendedCombatScore = 150,
-	baseHealth = 18000,
+	baseHealth = 5000,
 	scaleMultiplier = 12.5,
 	walkSpeed = 13,
 	aggroRadius = 118,

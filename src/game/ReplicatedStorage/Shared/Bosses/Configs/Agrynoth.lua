@@ -10,7 +10,7 @@ return BossConfigFactory.Create({
 	bossId = "Agrynoth",
 	arenaId = "Suburban",
 	recommendedCombatScore = 6500,
-	baseHealth = 500000,
+	baseHealth = 420000,
 	walkSpeed = 12,
 	aggroRadius = 122,
 	leashRadius = 182,

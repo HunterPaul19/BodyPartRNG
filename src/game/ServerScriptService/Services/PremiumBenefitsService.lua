@@ -9,7 +9,6 @@ local PurchaseReceiptService = require(script.Parent.PurchaseReceiptService)
 local VIP_ATTR = "VIP"
 local VIP_PLUS_ATTR = "VIPPlus"
 local PREMIUM_TAG_ATTR = "PremiumTag"
-local BASE_WALK_SPEED_ATTR = "PremiumBaseWalkSpeed"
 local MOVEMENT_MULTIPLIER_ATTR = "PremiumMovementSpeedMultiplier"
 
 local PremiumBenefitsService = {}
@@ -38,6 +37,7 @@ function PremiumBenefitsService:_applyAttributes(player: Player, premiumState: a
 	player:SetAttribute(VIP_ATTR, premiumState.hasVip == true)
 	player:SetAttribute(VIP_PLUS_ATTR, premiumState.hasVipPlus == true)
 	player:SetAttribute(PREMIUM_TAG_ATTR, premiumState.premiumTag ~= "" and premiumState.premiumTag or nil)
+	player:SetAttribute(MOVEMENT_MULTIPLIER_ATTR, premiumState.movementSpeedMultiplier)
 end
 
 function PremiumBenefitsService:_applyMovementSpeed(player: Player, premiumState: any)
@@ -51,14 +51,7 @@ function PremiumBenefitsService:_applyMovementSpeed(player: Player, premiumState
 		return
 	end
 
-	local baseWalkSpeed = tonumber(humanoid:GetAttribute(BASE_WALK_SPEED_ATTR))
-	if baseWalkSpeed == nil or baseWalkSpeed <= 0 then
-		baseWalkSpeed = humanoid.WalkSpeed
-		humanoid:SetAttribute(BASE_WALK_SPEED_ATTR, baseWalkSpeed)
-	end
-
 	humanoid:SetAttribute(MOVEMENT_MULTIPLIER_ATTR, premiumState.movementSpeedMultiplier)
-	humanoid.WalkSpeed = baseWalkSpeed * premiumState.movementSpeedMultiplier
 end
 
 function PremiumBenefitsService:_refreshPlayer(player: Player)

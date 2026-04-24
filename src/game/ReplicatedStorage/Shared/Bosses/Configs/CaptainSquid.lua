@@ -10,7 +10,7 @@ return BossConfigFactory.Create({
 	bossId = "Captain Squid",
 	arenaId = "Sakura",
 	recommendedCombatScore = 350,
-	baseHealth = 36000,
+	baseHealth = 10000,
 	walkSpeed = 12,
 	aggroRadius = 116,
 	leashRadius = 176,

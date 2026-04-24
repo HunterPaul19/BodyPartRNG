@@ -27,7 +27,9 @@ local function resolveKeyAndFallback(entryOrKey: any, fallbackText: string?): (s
 	if typeof(entryOrKey) == "table" then
 		local key = entryOrKey.key
 		local fallback = entryOrKey.fallback
-		return if typeof(key) == "string" and key ~= "" then key else nil, if typeof(fallback) == "string" then fallback else fallbackText
+		local resolvedKey = if typeof(key) == "string" and key ~= "" then key else nil
+		local resolvedFallback = if typeof(fallback) == "string" then fallback else fallbackText
+		return resolvedKey, resolvedFallback
 	end
 
 	if typeof(entryOrKey) == "string" and entryOrKey ~= "" then
@@ -146,13 +148,15 @@ end
 function TranslationHelper.setLiteralText(target: Instance, text: string, propertyName: string?)
 	local resolvedPropertyName = if typeof(propertyName) == "string" and propertyName ~= "" then propertyName else "Text"
 	setAutoLocalize(target, false)
-	(target :: any)[resolvedPropertyName] = text
+	local writableTarget = target :: any
+	writableTarget[resolvedPropertyName] = text
 end
 
 function TranslationHelper.setSourceText(target: Instance, sourceText: string, propertyName: string?)
 	local resolvedPropertyName = if typeof(propertyName) == "string" and propertyName ~= "" then propertyName else "Text"
 	setAutoLocalize(target, true)
-	(target :: any)[resolvedPropertyName] = sourceText
+	local writableTarget = target :: any
+	writableTarget[resolvedPropertyName] = sourceText
 end
 
 function TranslationHelper.setKeyText(target: Instance, entryOrKey: any, arguments: any?, propertyName: string?, fallbackText: string?)

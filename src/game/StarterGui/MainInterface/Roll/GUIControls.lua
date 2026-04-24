@@ -17,6 +17,7 @@ GUIControls.EquipStatusToken = 0
 GUIControls.RollingStateRefreshPending = false
 GUIControls.RollPreviewSessionId = 0
 GUIControls.ActiveRollPreviewSessionId = nil
+GUIControls.ActiveMutationLoopSound = nil
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -25,6 +26,7 @@ local GroupService = game:GetService("GroupService")
 
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local SoundUtil = require(ReplicatedStorage.Shared.Audio.SoundUtil)
+local RollResultAudio = require(ReplicatedStorage.Shared.Audio.RollResultAudio)
 local ToggleSoundUtil = require(ReplicatedStorage.Shared.Audio.ToggleSoundUtil)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
@@ -270,6 +272,7 @@ local function playRollCutsceneIfNeeded(rollResult, rollInfo)
 
 	local cutsceneColor = if typeof(rollInfo.Color) == "Color3" then rollInfo.Color else Color3.new(1, 1, 1)
 	local tier = tonumber(rollResult.cutsceneTier) or RollCutsceneConfig.ResolveTier(rollInfo.Rarity)
+	RollResultAudio.PlayCutscene(rollResult, rollInfo)
 	RollCutscene.Play(cutsceneColor, tier, RollCutsceneConfig.DefaultDuration)
 end
 
@@ -299,6 +302,30 @@ local function resolveRollResultMutationId(rollInfo)
 	end
 
 	return MutationConfig.GetDefault().id
+end
+
+local function buildResolvedRollResultAudioInfo(rollInfo)
+	if typeof(rollInfo) ~= "table" then
+		return rollInfo
+	end
+
+	local resolvedMutationId = resolveRollResultMutationId(rollInfo)
+	local resolvedRollInfo = table.clone(rollInfo)
+	resolvedRollInfo.MutationId = resolvedMutationId
+	if typeof(resolvedRollInfo.Mutation) ~= "string" or resolvedRollInfo.Mutation == "" then
+		resolvedRollInfo.Mutation = MutationConfig.GetDisplayName(resolvedMutationId)
+	end
+
+	return resolvedRollInfo
+end
+
+local function stopActiveMutationLoop()
+	RollResultAudio.StopMutationLoop(GUIControls.ActiveMutationLoopSound)
+	GUIControls.ActiveMutationLoopSound = nil
+end
+
+local function playRollStartSound()
+	SoundUtil.Play(ROLL_TICK_SOUND_NAME)
 end
 
 local function syncRollResultScreenEffect(rollInfo)
@@ -454,12 +481,9 @@ local function getEligiblePreviewPieces(rollRegion)
 		return cached
 	end
 
-	local eligiblePieces = {}
-	for _, piece in ipairs(BodyPartsCatalog.GetAllPieces()) do
-		if normalizedRegion == RollTargetRegions.FullBody or piece.region == normalizedRegion then
-			table.insert(eligiblePieces, piece)
-		end
-	end
+	local eligiblePieces = if normalizedRegion == RollTargetRegions.FullBody
+		then BodyPartsCatalog.GetRollEligiblePieces()
+		else BodyPartsCatalog.GetRollEligiblePieces(normalizedRegion)
 
 	previewPiecesByRegion[normalizedRegion] = eligiblePieces
 	return eligiblePieces
@@ -585,6 +609,7 @@ local function renderRollInfo(rollInfo, sessionId)
 end
 
 local function restoreIdleRollUi()
+	stopActiveMutationLoop()
 	HideBlackTween:Play()
 	UnblurTween:Play()
 	ScreenEffects.HideAll()
@@ -1182,6 +1207,8 @@ function GUIControls:RollSequence(previewSequence, previewCount)
 end
 
 function GUIControls:ShowRollResults(rollInfo)
+	local resolvedRollInfo = buildResolvedRollResultAudioInfo(rollInfo)
+
 	ShowBlackTween:Play()
 	BlurTween:Play()
 
@@ -1190,16 +1217,17 @@ function GUIControls:ShowRollResults(rollInfo)
 	local mutationLabel = Main.SubInfo:FindFirstChild("Mutation")
 	local everRolledLabel = Main.SubInfo:FindFirstChild("EverRolled")
 	if rarityLabel and rarityLabel:IsA("TextLabel") then
-		local setConfig = if typeof(rollInfo.PieceId) == "string" and rollInfo.PieceId ~= ""
-			then BodyPartsCatalog.GetSetForPiece(rollInfo.PieceId)
+		local setConfig = if typeof(resolvedRollInfo.PieceId) == "string" and resolvedRollInfo.PieceId ~= ""
+			then BodyPartsCatalog.GetSetForPiece(resolvedRollInfo.PieceId)
 			else nil
 		restoreTextLabelVisualState(rarityLabel, DEFAULT_SUBINFO_RARITY_VISUAL_STATE)
-		rarityLabel.Text = BodyPartPresentation.FormatTemplatedLabelText(DEFAULT_SUBINFO_RARITY_TEXT, rollInfo.Rarity or "-")
+		rarityLabel.Text =
+			BodyPartPresentation.FormatTemplatedLabelText(DEFAULT_SUBINFO_RARITY_TEXT, resolvedRollInfo.Rarity or "-")
 		BodyPartPresentation.ApplySetRarityTemplateToLabel(
 			rarityLabel,
 			setConfig,
-			rollInfo.Rarity,
-			if typeof(rollInfo.Color) == "Color3" then rollInfo.Color else nil
+			resolvedRollInfo.Rarity,
+			if typeof(resolvedRollInfo.Color) == "Color3" then resolvedRollInfo.Color else nil
 		)
 	end
 	if mutationLabel and mutationLabel:IsA("TextLabel") then
@@ -1207,7 +1235,7 @@ function GUIControls:ShowRollResults(rollInfo)
 		mutationLabel.RichText = true
 		mutationLabel.Text = BodyPartPresentation.FormatMutationLabelText(
 			DEFAULT_SUBINFO_MUTATION_TEXT,
-			{ mutationId = resolveRollResultMutationId(rollInfo) }
+			{ mutationId = resolveRollResultMutationId(resolvedRollInfo) }
 		)
 	end
 
@@ -1232,14 +1260,14 @@ function GUIControls:ShowRollResults(rollInfo)
 	DisplayTween:Play()
 	DisplayViewportTween:Play()
 
-	Main.SubInfo.Income.Text = formatRollIncomePerSecond(rollInfo.CashPerSec)
-	Main.SubInfo.BodyPart.Text = rollInfo.BodyPart
+	Main.SubInfo.Income.Text = formatRollIncomePerSecond(resolvedRollInfo.CashPerSec)
+	Main.SubInfo.BodyPart.Text = resolvedRollInfo.BodyPart
 	if sizeLabel and sizeLabel:IsA("TextLabel") then
-		local sizeMultiplier = tonumber(rollInfo.SizeMultiplier)
+		local sizeMultiplier = tonumber(resolvedRollInfo.SizeMultiplier)
 			or tonumber(GUIControls.CurrentRollResult and GUIControls.CurrentRollResult.sizeResult and GUIControls.CurrentRollResult.sizeResult.scale)
 			or tonumber(GUIControls.CurrentRollResult and GUIControls.CurrentRollResult.ownedRecord and GUIControls.CurrentRollResult.ownedRecord.sizeMultiplier)
 			or 1
-		local sizeName = rollInfo.Size
+		local sizeName = resolvedRollInfo.Size
 			or (GUIControls.CurrentRollResult and GUIControls.CurrentRollResult.sizeResult and GUIControls.CurrentRollResult.sizeResult.displayName)
 			or "Normal"
 		sizeLabel.Text = formatSizeLabel(sizeName, sizeMultiplier)
@@ -1257,9 +1285,12 @@ function GUIControls:ShowRollResults(rollInfo)
 		everRolledLabel.Visible = true
 	end
 
-	renderRollInfo(rollInfo, GUIControls.ActiveRollPreviewSessionId)
+	renderRollInfo(resolvedRollInfo, GUIControls.ActiveRollPreviewSessionId)
 	GUIControls:RefreshEquipButton()
-	syncRollResultScreenEffect(rollInfo)
+	syncRollResultScreenEffect(resolvedRollInfo)
+	stopActiveMutationLoop()
+	RollResultAudio.PlayRarity(resolvedRollInfo)
+	GUIControls.ActiveMutationLoopSound = RollResultAudio.StartMutationLoop(resolvedRollInfo)
 
 	if GUIControls.AutoRoll then
 		local loopId = GUIControls.AutoRollLoopId
@@ -1273,6 +1304,7 @@ end
 
 function GUIControls:HideRollResults()
 	if not Main.Visible then
+		stopActiveMutationLoop()
 		return
 	end
 
@@ -1299,6 +1331,7 @@ function GUIControls:Roll(triggerSource)
 			return
 		end
 
+		stopActiveMutationLoop()
 		GUIControls.CurrentRollResult = nil
 		GUIControls.CurrentRollResultEquipped = false
 		GUIControls.EquipDebounce = false
@@ -1344,6 +1377,7 @@ function GUIControls:Roll(triggerSource)
 
 		GUIControls:ApplyRollingState(rollResponse.state)
 		local rollResult = rollResponse.rollResult
+		playRollStartSound()
 		if rollResult.skipPresentation == true then
 			playRollCutsceneIfNeeded(rollResult, rollResult.finalResult)
 			GUIControls.CurrentRollResult = nil

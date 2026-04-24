@@ -10,7 +10,7 @@ return BossConfigFactory.Create({
 	bossId = "Merfin the Great",
 	arenaId = "Sakura",
 	recommendedCombatScore = 700,
-	baseHealth = 65000,
+	baseHealth = 25000,
 	walkSpeed = 13,
 	aggroRadius = 118,
 	leashRadius = 175,

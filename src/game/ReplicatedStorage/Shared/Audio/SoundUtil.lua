@@ -25,6 +25,19 @@ local function resolveBaseSound(soundOrName)
 	return nil
 end
 
+local function resolvePlaybackParent(baseSound: Sound, parent: Instance?): Instance
+	if parent then
+		return parent
+	end
+
+	local baseParent = baseSound.Parent
+	if baseParent and baseParent:IsA("SoundGroup") then
+		return baseParent
+	end
+
+	return SoundService
+end
+
 local function createCleanup(sound: Sound)
 	local cleanedUp = false
 
@@ -45,41 +58,70 @@ local function createCleanup(sound: Sound)
 	return cleanup
 end
 
-function SoundUtil.Play(soundOrName, parent: Instance?): Sound?
+local function playClone(soundOrName, parent: Instance?, looped: boolean): Sound?
 	local baseSound = resolveBaseSound(soundOrName)
 	if not baseSound then
 		return nil
 	end
 
 	local clone = baseSound:Clone()
-	clone.Looped = false
+	clone.Looped = looped == true
 	clone.TimePosition = 0
-	clone.Parent = parent or SoundService
+	clone.Parent = resolvePlaybackParent(baseSound, parent)
 
 	local cleanup = createCleanup(clone)
 
-	local endedConnection: RBXScriptConnection? = nil
-	endedConnection = clone.Ended:Connect(function()
-		if endedConnection then
-			endedConnection:Disconnect()
-			endedConnection = nil
-		end
+	if not looped then
+		local endedConnection: RBXScriptConnection? = nil
+		endedConnection = clone.Ended:Connect(function()
+			if endedConnection then
+				endedConnection:Disconnect()
+				endedConnection = nil
+			end
 
-		cleanup()
-	end)
+			cleanup()
+		end)
+
+		clone:Play()
+
+		task.delay(math.max(1, tonumber(clone.TimeLength) or 0, (tonumber(clone.TimeLength) or 0) + 0.25), function()
+			if endedConnection then
+				endedConnection:Disconnect()
+				endedConnection = nil
+			end
+
+			cleanup()
+		end)
+
+		return clone
+	end
 
 	clone:Play()
 
-	task.delay(math.max(1, tonumber(clone.TimeLength) or 0, (tonumber(clone.TimeLength) or 0) + 0.25), function()
-		if endedConnection then
-			endedConnection:Disconnect()
-			endedConnection = nil
-		end
-
-		cleanup()
-	end)
-
 	return clone
+end
+
+function SoundUtil.Play(soundOrName, parent: Instance?): Sound?
+	return playClone(soundOrName, parent, false)
+end
+
+function SoundUtil.PlayLooped(soundOrName, parent: Instance?): Sound?
+	return playClone(soundOrName, parent, true)
+end
+
+function SoundUtil.Stop(sound: Sound?)
+	if not (sound and sound:IsA("Sound")) then
+		return
+	end
+
+	local cleanup = cleanupBySound[sound]
+	sound:Stop()
+
+	if cleanup then
+		cleanup()
+	elseif sound.Parent then
+		sound:Destroy()
+	end
 end
 
 return SoundUtil

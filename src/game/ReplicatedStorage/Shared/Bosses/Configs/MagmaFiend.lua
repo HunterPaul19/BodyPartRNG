@@ -10,7 +10,7 @@ return BossConfigFactory.Create({
 	bossId = "Magma Fiend",
 	arenaId = "Suburban",
 	recommendedCombatScore = 2000,
-	baseHealth = 165000,
+	baseHealth = 100000,
 	walkSpeed = 12,
 	aggroRadius = 117,
 	leashRadius = 178,

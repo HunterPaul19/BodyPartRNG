@@ -10,7 +10,7 @@ return BossConfigFactory.Create({
 	bossId = "Broccoli Bro",
 	arenaId = "Suburban",
 	recommendedCombatScore = 3200,
-	baseHealth = 250000,
+	baseHealth = 175000,
 	walkSpeed = 13,
 	aggroRadius = 110,
 	leashRadius = 165,

@@ -5,7 +5,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local BossArenaRuntimeService = require(script.Parent.BossArenaRuntimeService)
-local BodyPartService = require(script.Parent.BodyPartService)
+local PlayerLoadoutStatsService = require(script.Parent.PlayerLoadoutStatsService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local PlayerM1Config = require(ReplicatedStorage.Shared.BossArena.PlayerM1Config)
@@ -338,8 +338,8 @@ local function isActiveBossMinion(model: Model): boolean
 end
 
 local function resolvePlayerM1Damage(player: Player): number
-	local bonuses = BodyPartService:GetComputedLoadoutBonuses(player)
-	local damage = tonumber(bonuses and bonuses.damage) or PlayerM1Config.Damage
+	local stats = PlayerLoadoutStatsService:GetFinalStats(player)
+	local damage = tonumber(stats and stats.damage) or PlayerM1Config.Damage
 	return math.max(0, damage)
 end
 

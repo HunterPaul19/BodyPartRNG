@@ -860,6 +860,7 @@ local function buildVisualApplyRequest(
 			if not bundleModel then
 				return nil, string.format("Missing bundle model for piece '%s'.", entry.pieceId)
 			end
+			local setConfig = BodyPartsCatalog.GetSetForPiece(entry.pieceId)
 
 			local ownedRecord = if ownedBodyPartsById then ownedBodyPartsById[entry.ownedId] else nil
 			local mutationRequest, mutationError = buildMutationApplyRequest(ownedRecord)
@@ -872,6 +873,8 @@ local function buildVisualApplyRequest(
 				scale = tonumber(bodyPartScaleOverride) or entry.scale,
 				attachRules = BodyPartsCatalog.ResolveAttachRules(entry.pieceId),
 				mutation = mutationRequest,
+				applyPlayerClothing = setConfig == nil or setConfig.applyPlayerClothing ~= false,
+				applyPlayerBodyColors = setConfig == nil or setConfig.applyPlayerBodyColors ~= false,
 			}
 		elseif hasAnyEquippedRegions then
 			regions[region] = {

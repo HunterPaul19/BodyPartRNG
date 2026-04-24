@@ -10,7 +10,7 @@ return BossConfigFactory.Create({
 	bossId = "Massive Geezer RECOLORABLE",
 	arenaId = "Spire",
 	recommendedCombatScore = 8500,
-	baseHealth = 680000,
+	baseHealth = 600000,
 	walkSpeed = 11,
 	aggroRadius = 124,
 	leashRadius = 188,

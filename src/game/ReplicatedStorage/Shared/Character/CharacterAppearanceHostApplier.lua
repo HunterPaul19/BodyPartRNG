@@ -46,6 +46,11 @@ local ALL_RIG_PARTS = {
 
 local CLOTHING_CLASS_NAMES = AppearanceRegionRules.ClothingClassNames
 local REGION_CLOTHING_CLASSES = AppearanceRegionRules.RegionClothingClasses
+local PLAYER_CLOTHING_CLASS_NAMES = table.freeze({
+	Shirt = true,
+	Pants = true,
+	ShirtGraphic = true,
+})
 
 local ATTACHMENT_REGION_LOOKUP = {
 	HairAttachment = "Head",
@@ -902,13 +907,32 @@ local function clearAppearanceState(character: Model)
 	end
 end
 
-local function cloneSnapshotClothing(regionFolder: Model, snapshotSource: Folder, region: string): (number, string)
+local function shouldApplySnapshotClothingClass(className: string, regionRequest: any): boolean
+	if PLAYER_CLOTHING_CLASS_NAMES[className] and regionRequest and regionRequest.applyPlayerClothing == false then
+		return false
+	end
+	if className == "BodyColors" and regionRequest and regionRequest.applyPlayerBodyColors == false then
+		return false
+	end
+
+	return true
+end
+
+local function cloneSnapshotClothing(
+	regionFolder: Model,
+	snapshotSource: Folder,
+	region: string,
+	regionRequest: any
+): (number, string)
 	local relevantClasses = REGION_CLOTHING_CLASSES[region] or {}
 	local classNames = {}
 	local clothingCloneCount = 0
 
 	for _, child in ipairs(snapshotSource:GetChildren()) do
-		if CLOTHING_CLASS_NAMES[child.ClassName] and relevantClasses[child.ClassName] then
+		if CLOTHING_CLASS_NAMES[child.ClassName]
+			and relevantClasses[child.ClassName]
+			and shouldApplySnapshotClothingClass(child.ClassName, regionRequest)
+		then
 			local clone = child:Clone()
 			setDebugAttributes(clone, child.Name, true, "RegionLocalClothingHost")
 			clone.Parent = regionFolder
@@ -942,7 +966,8 @@ local function applyRegionAppearanceHosts(
 
 	for _, region in ipairs(BodyPartRegions.Order) do
 		local regionFolder = appliedFolder:FindFirstChild(region)
-		if equippedState and equippedState[region] and regionFolder and regionFolder:IsA("Model") then
+		local regionRequest = equippedState and equippedState[region] or nil
+		if regionRequest and regionFolder and regionFolder:IsA("Model") then
 			local humanoidClone = snapshotHumanoid:Clone()
 			pcall(function()
 				humanoidClone.EvaluateStateMachine = false
@@ -951,12 +976,15 @@ local function applyRegionAppearanceHosts(
 			humanoidClone.Parent = regionFolder
 			humanoidCount += 1
 
-			local regionClothingCount, clothingClasses = cloneSnapshotClothing(regionFolder, snapshotSource, region)
+			local regionClothingCount, clothingClasses =
+				cloneSnapshotClothing(regionFolder, snapshotSource, region, regionRequest)
 			clothingCount += regionClothingCount
 			hostCount += 1
 
 			regionFolder:SetAttribute("HasAppearanceHost", true)
 			regionFolder:SetAttribute("AppearanceHostClothingClasses", clothingClasses)
+			regionFolder:SetAttribute("AppliesPlayerClothing", regionRequest.applyPlayerClothing ~= false)
+			regionFolder:SetAttribute("AppliesPlayerBodyColors", regionRequest.applyPlayerBodyColors ~= false)
 			regionFolder:SetAttribute("AppearanceSnapshotReady", true)
 		end
 	end

@@ -8,12 +8,14 @@ local Workspace = game:GetService("Workspace")
 
 local BossArenaArrivalService = require(script.Parent.BossArenaArrivalService)
 local BossAnimationController = require(script.Parent.Common.BossAnimationController)
+local BossArenaRewardService = require(script.Parent.BossArenaRewardService)
 local BossArenas = require(ReplicatedStorage.Shared.BossArenas)
 local BossEncounterScaling = require(ReplicatedStorage.Shared.BossArena.EncounterScaling)
 local BossQueueTeleportPayload = require(ReplicatedStorage.Shared.BossQueue.TeleportPayload)
 local BossFacing = require(ReplicatedStorage.Shared.Bosses.BossFacing)
 local BossMoveTags = require(ReplicatedStorage.Shared.Bosses.MoveTags)
 local Bosses = require(ReplicatedStorage.Shared.Bosses)
+local CombatConstants = require(ReplicatedStorage.Shared.Combat.Constants)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 
 local ACTIVE_PROFILE_ID = "boss_arena"
@@ -95,6 +97,7 @@ type EncounterState = {
 	timerStartedAtServerTime: number,
 	timerEndsAtServerTime: number,
 	timerPhase: string,
+	rewardsGranted: boolean,
 	returnCountdownEndsAt: number?,
 	returnCountdownStartedAtServerTime: number?,
 	returnCountdownEndsAtServerTime: number?,
@@ -288,6 +291,15 @@ local function applyBossBaseHealth(bossHumanoid: Humanoid, baseHealth: number)
 
 	bossHumanoid.MaxHealth = resolvedBaseHealth
 	bossHumanoid.Health = resolvedHealth
+end
+
+local function applyBossBodyCollisionGroup(bossModel: Model)
+	local bossBodyGroup = CombatConstants.COLLISION_GROUPS.BossBody
+	for _, descendant in ipairs(bossModel:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			descendant.CollisionGroup = bossBodyGroup
+		end
+	end
 end
 
 local function chooseWeightedMove(validMoves: { { move: any, context: any, effectiveWeight: number } }, rng: Random)
@@ -592,6 +604,13 @@ function BossArenaRuntimeService:_beginVictoryReturnCountdown(encounter: Encount
 	self:_cancelActiveCast(encounter)
 	encounter.currentTargetUserId = nil
 	self:_setState(encounter, "VictoryReturn")
+	if encounter.rewardsGranted ~= true then
+		encounter.rewardsGranted = true
+		local rewardResults = BossArenaRewardService:GrantVictoryRewards(encounter)
+		if next(rewardResults) == nil then
+			warnWithPrefix(string.format("Boss '%s' victory granted no rewards.", encounter.bossId))
+		end
+	end
 	self:_notifyBossTimerStateChanged()
 end
 
@@ -1061,6 +1080,8 @@ function BossArenaRuntimeService:_spawnBossEncounter(payload: any)
 		), 0)
 	end
 
+	applyBossBodyCollisionGroup(bossModel)
+
 	local bossSpawnCFrame = getFeetAlignedBossSpawnCFrame(bossSpawn.CFrame, bossHumanoid, bossRootPart)
 	bossModel:PivotTo(bossSpawnCFrame)
 	applyBossBaseHealth(bossHumanoid, bossDefinition.baseHealth)
@@ -1110,6 +1131,7 @@ function BossArenaRuntimeService:_spawnBossEncounter(payload: any)
 		timerStartedAtServerTime = timerStartedAtServerTime,
 		timerEndsAtServerTime = timerStartedAtServerTime + BOSS_ENCOUNTER_DURATION_SECONDS,
 		timerPhase = "fight",
+		rewardsGranted = false,
 		returnCountdownEndsAt = nil,
 		returnCountdownStartedAtServerTime = nil,
 		returnCountdownEndsAtServerTime = nil,

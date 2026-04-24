@@ -10,7 +10,7 @@ return BossConfigFactory.Create({
 	bossId = "Oinan Thickhoof",
 	arenaId = "Suburban",
 	recommendedCombatScore = 1200,
-	baseHealth = 105000,
+	baseHealth = 50000,
 	walkSpeed = 14,
 	aggroRadius = 120,
 	leashRadius = 180,

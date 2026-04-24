@@ -26,6 +26,8 @@ export type ApplyRegionRequest = {
 	attachRules: { [string]: AttachRule }?,
 	mutation: ApplyMutationRequest?,
 	isNativeFallback: boolean?,
+	applyPlayerClothing: boolean?,
+	applyPlayerBodyColors: boolean?,
 }
 
 export type ApplyAuraRequest = {
@@ -727,6 +729,8 @@ local function cloneRegionRequest(regionRequest: ApplyRegionRequest?): ApplyRegi
 		scale = regionRequest.scale,
 		attachRules = cloneAttachRules(regionRequest.attachRules),
 		mutation = cloneMutationRequest(regionRequest.mutation),
+		applyPlayerClothing = regionRequest.applyPlayerClothing,
+		applyPlayerBodyColors = regionRequest.applyPlayerBodyColors,
 	}
 end
 
@@ -3466,6 +3470,8 @@ applyRegion = function(character: Model, region: string, regionRequest: ApplyReg
 		scale = finalScale,
 		attachRules = cloneAttachRules(regionRequest.attachRules),
 		isNativeFallback = isNativeFallback,
+		applyPlayerClothing = regionRequest.applyPlayerClothing,
+		applyPlayerBodyColors = regionRequest.applyPlayerBodyColors,
 	})
 
 	return true, nil

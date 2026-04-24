@@ -9,7 +9,6 @@ local BossArenas = require(ReplicatedStorage.Shared.BossArenas)
 local Bosses = require(ReplicatedStorage.Shared.Bosses)
 local BossQueueConstants = require(ReplicatedStorage.Shared.BossQueue.Constants)
 local BossQueueTeleportPayload = require(ReplicatedStorage.Shared.BossQueue.TeleportPayload)
-local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 
 type PortalState = {
@@ -18,7 +17,7 @@ type PortalState = {
 	bossName: string,
 	hitbox: BasePart,
 	zone: any,
-	recommendedCombatScoreLabel: TextLabel?,
+	recommendedPowerLabel: TextLabel?,
 	occupancyLabel: TextLabel,
 	countdownLabel: TextLabel,
 	playersInZone: { [Player]: number },
@@ -87,8 +86,19 @@ local function getPortalDebugName(instance: Instance): string
 	return instance:GetFullName()
 end
 
-local function formatRecommendedCombatScoreText(score: number): string
-	return string.format("Recommended Combat Score: %s", NumberFormatter.Format(math.max(0, score)))
+local function formatNumberWithCommas(value: number): string
+	local digits = tostring(math.max(0, math.floor(value)))
+	local formattedReversed = string.gsub(string.reverse(digits), "(%d%d%d)", "%1,")
+	local formatted = string.reverse(formattedReversed)
+	if string.sub(formatted, 1, 1) == "," then
+		formatted = string.sub(formatted, 2)
+	end
+
+	return formatted
+end
+
+local function formatRecommendedPowerText(score: number): string
+	return string.format("Recommended Power: %s", formatNumberWithCommas(score))
 end
 
 local function setCountdownInactive(state: PortalState)
@@ -133,8 +143,8 @@ function BossQueueService:_refreshPortalUi(state: PortalState)
 	state.queuedPlayers = computeQueuedPlayers(state)
 	state.occupancyLabel.Text = BossQueueConstants.FormatOccupancyText(#state.queuedPlayers)
 	local bossDefinition = Bosses.GetDefinition(state.bossName)
-	if state.recommendedCombatScoreLabel and bossDefinition then
-		state.recommendedCombatScoreLabel.Text = formatRecommendedCombatScoreText(bossDefinition.recommendedCombatScore)
+	if state.recommendedPowerLabel and bossDefinition then
+		state.recommendedPowerLabel.Text = formatRecommendedPowerText(bossDefinition.recommendedCombatScore)
 	end
 
 	if not state.countdownActive then
@@ -389,13 +399,17 @@ function BossQueueService:_buildPortalState(instance: Instance): (PortalState?, 
 		return nil, "Missing billboard label 'Countdown'."
 	end
 
-	local recommendedCombatScoreLabel = billboardGui:FindFirstChild("RecommendedCombatScore", true)
-	if recommendedCombatScoreLabel ~= nil and not recommendedCombatScoreLabel:IsA("TextLabel") then
-		return nil, "Billboard child 'RecommendedCombatScore' must be a TextLabel."
-	end
-	if recommendedCombatScoreLabel == nil then
+	local recommendedPowerLabel = instance:FindFirstChild("RecommendedPower", true)
+	if recommendedPowerLabel ~= nil and not recommendedPowerLabel:IsA("TextLabel") then
 		warn(string.format(
-			"[BossQueueService] Portal %s is missing optional billboard label 'RecommendedCombatScore'.",
+			"[BossQueueService] Portal %s has a non-TextLabel 'RecommendedPower' instance.",
+			getPortalDebugName(instance)
+		))
+		recommendedPowerLabel = nil
+	end
+	if recommendedPowerLabel == nil then
+		warn(string.format(
+			"[BossQueueService] Portal %s is missing optional billboard label 'RecommendedPower'.",
 			getPortalDebugName(instance)
 		))
 	end
@@ -409,7 +423,7 @@ function BossQueueService:_buildPortalState(instance: Instance): (PortalState?, 
 		bossName = bossName,
 		hitbox = hitbox,
 		zone = zone,
-		recommendedCombatScoreLabel = recommendedCombatScoreLabel,
+		recommendedPowerLabel = recommendedPowerLabel,
 		occupancyLabel = occupancyLabel,
 		countdownLabel = countdownLabel,
 		playersInZone = {},
@@ -425,8 +439,8 @@ function BossQueueService:_buildPortalState(instance: Instance): (PortalState?, 
 
 	setCountdownInactive(state)
 	state.occupancyLabel.Text = BossQueueConstants.FormatOccupancyText(0)
-	if state.recommendedCombatScoreLabel and bossDefinition then
-		state.recommendedCombatScoreLabel.Text = formatRecommendedCombatScoreText(bossDefinition.recommendedCombatScore)
+	if state.recommendedPowerLabel and bossDefinition then
+		state.recommendedPowerLabel.Text = formatRecommendedPowerText(bossDefinition.recommendedCombatScore)
 	end
 
 	return state, nil
