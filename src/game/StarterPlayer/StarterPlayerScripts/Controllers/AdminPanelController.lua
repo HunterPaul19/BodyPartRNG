@@ -972,6 +972,7 @@ function AdminPanelController:_syncLuckOverrideUi()
 			string.format("Roll Type: %s", rollTypeName),
 			string.format("Base Luck: %s", formatLuckMultiplier(if typeof(state) == "table" then tonumber(state.baseLuck) else nil)),
 			string.format("Bonus Roll Luck: %s", formatLuckMultiplier(if typeof(state) == "table" then tonumber(state.bonusLuck) else nil)),
+			string.format("Potion Luck: %s", formatLuckMultiplier(if typeof(state) == "table" then tonumber(state.potionLuck) else nil)),
 			string.format("VIP Luck: %s", formatLuckMultiplier(if typeof(state) == "table" then tonumber(state.vipLuck) else nil)),
 			string.format(
 				"Equipped Luck Multiplier: %s",
@@ -980,6 +981,10 @@ function AdminPanelController:_syncLuckOverrideUi()
 			string.format(
 				"Potion Luck Bonus: %s",
 				formatSignedPercent(if typeof(state) == "table" then tonumber(state.potionLuckBonus) or 0 else 0)
+			),
+			string.format(
+				"Potion Luck Multiplier: %s",
+				formatLuckMultiplier(if typeof(state) == "table" then tonumber(state.potionLuckMultiplier) else nil)
 			),
 			string.format(
 				"Pity Roll Ready: %s",

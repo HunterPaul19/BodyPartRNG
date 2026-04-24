@@ -310,22 +310,13 @@ local function collectWarningSproutPoints(context, geometry: SproutGeometry): { 
 	return collectSproutPoints(context.aliveTargets or {}, geometry, bossModel)
 end
 
-local function collectSpawnSproutPoints(context, geometry: SproutGeometry): { SproutPoint }
-	local bossModel = context.bossModel
-	if bossModel == nil then
-		return {}
-	end
-
-	local aliveTargets = CombatMoveUtil.CollectAliveTargets(context.aliveTargets or {})
-	return collectSproutPoints(aliveTargets, geometry, bossModel)
-end
-
 local function resolveRisingCFrame(point: SproutPoint, startedAt: number): CFrame
 	local alpha = math.clamp((os.clock() - startedAt) / math.max(0.001, RISE_DURATION_SECONDS), 0, 1)
 	return point.hitboxStartCFrame:Lerp(point.hitboxEndCFrame, alpha)
 end
 
 local function spawnSproutHitboxes(
+	context,
 	bossModel: Model,
 	points: { SproutPoint },
 	hitTargets: { [Model]: boolean },
@@ -485,23 +476,22 @@ function BroccoliSprout.StartCast(context)
 		end
 
 		sproutTriggered = true
-		local spawnPoints = collectSpawnSproutPoints(context, geometry)
-		if #spawnPoints <= 0 then
-			warn("[BroccoliSprout] Rise timing reached with no alive targets.")
+		if #warningPoints <= 0 then
+			warn("[BroccoliSprout] Rise timing reached with no warning points.")
 			stopPresentation()
 			markComplete()
 			return
 		end
 
 		context.EmitPresentation("sprout", {
-			points = spawnPoints,
+			points = warningPoints,
 			riseDurationSeconds = RISE_DURATION_SECONDS,
 			scaleMultiplier = CUE_SCALE_MULTIPLIER,
 			treeScaleMultiplier = TREE_GAMEPLAY_SCALE_MULTIPLIER,
 			treeRotationCorrection = geometry.treeRotationCorrection,
 			treeUprightAxis = geometry.treeUprightAxis,
 		})
-		spawnSproutHitboxes(bossModel, spawnPoints, hitTargets, activeHitboxes)
+		spawnSproutHitboxes(context, bossModel, warningPoints, hitTargets, activeHitboxes)
 	end
 
 	local function completeCast()

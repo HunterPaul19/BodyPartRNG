@@ -5,6 +5,7 @@ local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local MinionDisplay = require(ReplicatedStorage.Shared.Bosses.MinionDisplay)
+local MinionM1Animation = require(ReplicatedStorage.Shared.Bosses.MinionM1Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
 local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
@@ -691,6 +692,7 @@ function WarCall.StartCast(context)
 			end
 
 			nextAttackAt = now + MINION_M1_COOLDOWN_SECONDS
+			MinionM1Animation.PlayAttack(minionModel, "WarCall")
 			spawnMinionAttackHitbox(context, minionModel, rootPart, {}, activeMinionHitboxes)
 		end))
 	end

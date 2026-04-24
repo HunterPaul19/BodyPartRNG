@@ -606,6 +606,7 @@ function BodyPartPresentation.BuildSummaryTexts(bonuses: any): { income: string,
 	local safeBonuses = if typeof(bonuses) == "table" then bonuses else {}
 	local passiveIncome = tonumber(safeBonuses.passiveIncomePerSecond) or 0
 	local luckBonus = tonumber(safeBonuses.luckBonus) or 0
+	local luckMultiplier = math.max(1, tonumber(safeBonuses.luckMultiplier) or 1)
 	local rollSpeedBonus = tonumber(safeBonuses.rollSpeedBonus) or 0
 
 	return {
@@ -613,7 +614,7 @@ function BodyPartPresentation.BuildSummaryTexts(bonuses: any): { income: string,
 			IncomePerSecond = formatMoneyPerSecond(passiveIncome),
 		}),
 		luck = TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Summary.Luck, {
-			LuckMultiplier = formatMultiplier(1 + luckBonus),
+			LuckMultiplier = formatMultiplier((1 + luckBonus) * luckMultiplier),
 		}),
 		rollSpeed = TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Summary.RollSpeed, {
 			RollSpeedMultiplier = formatMultiplier(1 + rollSpeedBonus),

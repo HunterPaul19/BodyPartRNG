@@ -32,6 +32,7 @@ local BossArenaRewardService = {}
 local DEFAULT_MUTATION = MutationConfig.GetDefault()
 local DEFAULT_SIZE = SizeConfig.GetDefault()
 local DEFAULT_SIZE_SCALE = SizeConfig.GetRepresentativeScale(DEFAULT_SIZE.id)
+local INSUFFICIENT_DAMAGE_REWARD_MESSAGE = "Boss rewards require at least 15% damage contribution."
 local warnedMissingPools = {}
 
 local function warnWithPrefix(message: string)
@@ -138,6 +139,27 @@ local function isInventoryFullError(message: string?): boolean
 	return typeof(message) == "string" and string.find(string.lower(message), "inventory is full", 1, true) ~= nil
 end
 
+local function getPlayerBossDamage(encounter: any, userId: number): number
+	local damageByUserId = if typeof(encounter) == "table" then encounter.damageByUserId else nil
+	if typeof(damageByUserId) ~= "table" then
+		return 0
+	end
+
+	return math.max(0, tonumber(damageByUserId[userId]) or 0)
+end
+
+local function getRewardEligibleDamageThreshold(encounter: any): number
+	if typeof(encounter) ~= "table" then
+		return 0
+	end
+
+	return math.max(0, tonumber(encounter.rewardEligibleDamageThreshold) or 0)
+end
+
+local function hasRewardEligibleDamage(encounter: any, userId: number): boolean
+	return getPlayerBossDamage(encounter, userId) >= getRewardEligibleDamageThreshold(encounter)
+end
+
 local function formatRewardNames(grants: { RewardGrantEntry }): string
 	local names = table.create(#grants)
 
@@ -150,6 +172,10 @@ end
 
 local function buildSummaryMessage(summary: RewardSummary): string
 	if summary.grantedCount <= 0 then
+		if summary.stoppedReason == "insufficient_damage" then
+			return INSUFFICIENT_DAMAGE_REWARD_MESSAGE
+		end
+
 		if summary.stoppedReason == "inventory_full" then
 			return string.format("Boss rewards skipped: inventory full (%d slot(s)).", summary.skippedCount)
 		end
@@ -313,6 +339,20 @@ function BossArenaRewardService:GrantVictoryRewards(encounter: any): { [number]:
 	for _, userId in ipairs(encounter.rosterOrder or {}) do
 		local player = getPlayerByUserId(userId)
 		if player == nil then
+			continue
+		end
+
+		if not hasRewardEligibleDamage(encounter, userId) then
+			local summary = buildRewardSummary(player, bossId)
+			summary.stoppedReason = "insufficient_damage"
+			summary.message = buildSummaryMessage(summary)
+			results[player.UserId] = summary
+
+			Notify.Send(player, summary.message, {
+				title = "Boss Rewards",
+				channel = "inventory",
+				tone = "neutral",
+			})
 			continue
 		end
 

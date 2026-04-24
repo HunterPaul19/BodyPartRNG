@@ -36,11 +36,11 @@ local STUN_SECONDS = 0.45
 local LANDED_RECOVERY_FALLBACK_SECONDS = 0.75
 
 local stub = CreateExplicitBossMoveStub({
-	bossId = "Massive Geezer RECOLORABLE",
+	bossId = "Massive Geezer",
 	moveLabel = "Body Slam",
 	targetMode = "single",
 	summaryTemplate = "{moveLabel} crashes down onto {target}",
-	description = "Massive Geezer RECOLORABLE jumps into the sky and slams his body onto a player.",
+	description = "Massive Geezer jumps into the sky and slams his body onto a player.",
 })
 
 local BodySlam = {

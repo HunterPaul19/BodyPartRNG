@@ -14,6 +14,7 @@ local RollMath = require(ReplicatedStorage.Shared.Rolling.RollMath)
 local RollCutsceneConfig = require(ReplicatedStorage.Shared.UI.RollCutsceneConfig)
 local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
 local BodyPartService = require(script.Parent.BodyPartService)
+local ChatNotificationService = require(script.Parent.ChatNotificationService)
 local DataService = require(script.Parent.DataService)
 local PotionService = require(script.Parent.PotionService)
 local PurchaseReceiptService = require(script.Parent.PurchaseReceiptService)
@@ -292,6 +293,7 @@ local function getEffectiveBonuses(player: Player)
 	return {
 		passiveIncomePerSecond = tonumber(loadoutBonuses.passiveIncomePerSecond) or 0,
 		luckBonus = (tonumber(loadoutBonuses.luckBonus) or 0) + (tonumber(potionBonuses.luckBonus) or 0),
+		luckMultiplier = math.max(1, tonumber(potionBonuses.luckMultiplier) or 1),
 		rollSpeedBonus = (tonumber(loadoutBonuses.rollSpeedBonus) or 0) + (tonumber(potionBonuses.rollSpeedBonus) or 0),
 		activeSetId = loadoutBonuses.activeSetId,
 	}, potionBonuses, loadoutBonuses
@@ -355,9 +357,11 @@ local function computeLuckState(player: Player, rollTypeConfig, successfulRollCo
 	local baseLuck = 1 + basicLuckBonus
 	local bonusRollMultiplier = if useBonusRoll then RollingConfig.BonusMultiplier else 1
 	local specialLuckBonus = math.max(0, tonumber(potionBonuses and potionBonuses.luckBonus) or 0)
+	local potionLuckMultiplier = math.max(1, tonumber(potionBonuses and potionBonuses.luckMultiplier) or 1)
 	local vipMultiplier = if isVipOwned then RollingConfig.VipMultiplier else 1
 	local bonusLuck = (baseLuck * bonusRollMultiplier) + specialLuckBonus
-	local vipLuck = bonusLuck * vipMultiplier
+	local potionLuck = bonusLuck * potionLuckMultiplier
+	local vipLuck = potionLuck * vipMultiplier
 	local rawLuck = vipLuck
 	local bandLuckScalar = math.max(0, tonumber(rollTypeConfig and rollTypeConfig.bandLuckScalar) or 1)
 	local bandLuckInput = rawLuck * bandLuckScalar
@@ -368,6 +372,8 @@ local function computeLuckState(player: Player, rollTypeConfig, successfulRollCo
 		baseLuck = baseLuck,
 		bonusRollMultiplier = bonusRollMultiplier,
 		specialLuckBonus = specialLuckBonus,
+		potionLuckMultiplier = potionLuckMultiplier,
+		potionLuck = potionLuck,
 		vipMultiplier = vipMultiplier,
 		bonusLuck = bonusLuck,
 		vipLuck = vipLuck,
@@ -733,14 +739,16 @@ function RollService:GetProbabilityDebug(player: Player, options: any?)
 			luckState.useBonusRoll = true
 			luckState.bonusRollMultiplier = RollingConfig.BonusMultiplier
 			luckState.bonusLuck = (luckState.baseLuck * luckState.bonusRollMultiplier) + luckState.specialLuckBonus
-			luckState.vipLuck = luckState.bonusLuck * luckState.vipMultiplier
+			luckState.potionLuck = luckState.bonusLuck * luckState.potionLuckMultiplier
+			luckState.vipLuck = luckState.potionLuck * luckState.vipMultiplier
 			luckState.rawLuck = luckState.vipLuck
 			luckState.bandLuckInput = buildBandLuckInput(luckState.rawLuck, rollType)
 		end
 		if options.forceVipOwned ~= nil then
 			luckState.isVipOwned = options.forceVipOwned == true
 			luckState.vipMultiplier = if luckState.isVipOwned then RollingConfig.VipMultiplier else 1
-			luckState.vipLuck = luckState.bonusLuck * luckState.vipMultiplier
+			luckState.potionLuck = luckState.bonusLuck * luckState.potionLuckMultiplier
+			luckState.vipLuck = luckState.potionLuck * luckState.vipMultiplier
 			luckState.rawLuck = luckState.vipLuck
 			luckState.bandLuckInput = buildBandLuckInput(luckState.rawLuck, rollType)
 		end
@@ -758,6 +766,8 @@ function RollService:GetProbabilityDebug(player: Player, options: any?)
 		basicLuckBonus = luckState.basicLuckBonus,
 		specialLuckBonus = luckState.specialLuckBonus,
 		potionLuckBonus = luckState.potionLuckBonus,
+		potionLuckMultiplier = luckState.potionLuckMultiplier,
+		potionLuck = luckState.potionLuck,
 		bonusLuck = luckState.bonusLuck,
 		vipLuck = luckState.vipLuck,
 		equippedLuckMultiplier = luckState.equippedLuckMultiplier,
@@ -823,6 +833,8 @@ function RollService:GetRollingState(player: Player, message: string?)
 		baseRawLuck = luckState.baseLuck,
 		rawLuck = luckState.rawLuck,
 		bonusLuck = luckState.bonusLuck,
+		potionLuck = luckState.potionLuck,
+		potionLuckMultiplier = luckState.potionLuckMultiplier,
 		vipLuck = luckState.vipLuck,
 		equippedLuckMultiplier = luckState.equippedLuckMultiplier,
 		isVipOwned = luckState.isVipOwned,
@@ -880,6 +892,8 @@ function RollService:GetRollingDeltaState(player: Player, message: string?)
 		baseRawLuck = luckState.baseLuck,
 		rawLuck = luckState.rawLuck,
 		bonusLuck = luckState.bonusLuck,
+		potionLuck = luckState.potionLuck,
+		potionLuckMultiplier = luckState.potionLuckMultiplier,
 		vipLuck = luckState.vipLuck,
 		equippedLuckMultiplier = luckState.equippedLuckMultiplier,
 		isVipOwned = luckState.isVipOwned,
@@ -895,6 +909,82 @@ function RollService:GetRollingDeltaState(player: Player, message: string?)
 		cutsceneRarities = buildCutsceneState(player),
 		message = message,
 	})
+end
+
+function RollService:GetRollCompletionDeltaState(player: Player, message: string?)
+	if not isRollingEnabled() then
+		return markDeltaState(buildUnavailableRollingState(message))
+	end
+
+	local selectedRollTypeId = DataService:GetSelectedRollType(player)
+	local selectedRollType = RollTypes.Get(selectedRollTypeId) or RollTypes.GetDefault()
+	local successfulRollCount = DataService:GetSuccessfulRollCount(player)
+	local quickRollState = buildQuickRollState(player)
+	local luckState, bonuses, potionBonuses = computeLuckState(player, selectedRollType, successfulRollCount)
+	local effectiveRollCooldown = getEffectiveRollCooldown(player, bonuses, quickRollState)
+	local rollRegionEntries, selectedRollRegion, selectedRollRegionIcon = buildRollRegionState(player)
+
+	return markDeltaState({
+		money = DataService:GetMoney(player),
+		rollRegions = rollRegionEntries,
+		selectedRollTypeId = selectedRollType.id,
+		selectedRollRegion = selectedRollRegion,
+		selectedRollRegionIcon = selectedRollRegionIcon,
+		selectedRollType = {
+			id = selectedRollType.id,
+			displayName = selectedRollType.displayName,
+			moneyCost = selectedRollType.moneyCost,
+			luckMultiplier = selectedRollType.luckMultiplier,
+			bandLuckScalar = math.max(0, tonumber(selectedRollType.bandLuckScalar) or 1),
+		},
+		bonuses = bonuses,
+		potionBonuses = potionBonuses,
+		successfulRollCount = successfulRollCount,
+		rollsSinceLuckyRoll = luckState.rollsSinceBonusRoll,
+		luckyRollGoal = RollingConfig.BonusInterval,
+		luckBoostReady = luckState.luckBoostReady,
+		willUsePityBoost = luckState.useBonusRoll,
+		willUseBonusRoll = luckState.useBonusRoll,
+		baseTotalLuck = luckState.baseLuck,
+		totalLuck = luckState.rawLuck,
+		baseRawLuck = luckState.baseLuck,
+		rawLuck = luckState.rawLuck,
+		bonusLuck = luckState.bonusLuck,
+		potionLuck = luckState.potionLuck,
+		potionLuckMultiplier = luckState.potionLuckMultiplier,
+		vipLuck = luckState.vipLuck,
+		equippedLuckMultiplier = luckState.equippedLuckMultiplier,
+		isVipOwned = luckState.isVipOwned,
+		bonusInterval = RollingConfig.BonusInterval,
+		bonusMultiplier = RollingConfig.BonusMultiplier,
+		vipMultiplier = RollingConfig.VipMultiplier,
+		bandLuckScalar = luckState.bandLuckScalar,
+		bandLuckInput = luckState.bandLuckInput,
+		nextRollNumber = luckState.nextRollNumber,
+		quickRoll = quickRollState,
+		effectiveRollCooldown = effectiveRollCooldown,
+		message = message,
+	})
+end
+
+local function buildClientRollResult(rollResult: any): any
+	if typeof(rollResult) ~= "table" or rollResult.skipPresentation ~= true then
+		return rollResult
+	end
+
+	return {
+		finalResult = if rollResult.shouldPlayCutscene == true then rollResult.finalResult else nil,
+		skipPreview = rollResult.skipPreview,
+		skipPresentation = rollResult.skipPresentation,
+		autoSoldInstantly = rollResult.autoSoldInstantly,
+		autoSellRarity = rollResult.autoSellRarity,
+		moneySpent = rollResult.moneySpent,
+		remainingMoney = rollResult.remainingMoney,
+		successfulRollCount = rollResult.successfulRollCount,
+		shouldPlayCutscene = rollResult.shouldPlayCutscene,
+		cutsceneTier = rollResult.cutsceneTier,
+		cutsceneSetId = rollResult.cutsceneSetId,
+	}
 end
 
 function RollService:NotifyClient(player: Player, message: string?)
@@ -1080,7 +1170,7 @@ function RollService:PromptQuickRollPurchase(player: Player): (boolean, string)
 	return true, message or "Purchase prompt opened."
 end
 
-function RollService:PerformRoll(player: Player, payload: any?): (boolean, string, any?)
+function RollService:PerformRoll(player: Player, payload: any?): (boolean, string, any?, any?)
 	local startedAt = PerfStats.Begin()
 	StatsService:RecordRollRequest(player)
 	if not isRollingEnabled() then
@@ -1290,6 +1380,8 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		bandLuckScalar = luckState.bandLuckScalar,
 		bandLuckInput = luckState.bandLuckInput,
 		bonusLuck = luckState.bonusLuck,
+		potionLuck = luckState.potionLuck,
+		potionLuckMultiplier = luckState.potionLuckMultiplier,
 		vipLuck = luckState.vipLuck,
 		equippedLuckMultiplier = luckState.equippedLuckMultiplier,
 		usedPityBoost = luckState.useBonusRoll,
@@ -1322,12 +1414,14 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 	}
 
 	rollLocks[player] = nil
-	self:NotifyClient(player, rollMessage)
+	local completionState = self:GetRollCompletionDeltaState(player, rollMessage)
+	local clientRollResult = buildClientRollResult(rollResult)
+	ChatNotificationService:AnnounceRareRoll(player, rollResult)
 	PerfStats.Measure("PerformRoll", startedAt, {
-		payload = rollResult,
+		payload = clientRollResult,
 		detail = string.format("%s:ok", player.Name),
 	})
-	return true, rollMessage, rollResult
+	return true, rollMessage, clientRollResult, completionState
 end
 
 local function handleGetState(player: Player)
@@ -1390,8 +1484,8 @@ local function handlePromptQuickRollPurchase(player: Player)
 end
 
 local function handlePerformRoll(player: Player, payload: any)
-	local ok, message, rollResult = RollService:PerformRoll(player, payload)
-	return response(ok, message, RollService:GetRollingDeltaState(player, message), rollResult)
+	local ok, message, rollResult, completionState = RollService:PerformRoll(player, payload)
+	return response(ok, message, completionState or RollService:GetRollingDeltaState(player, message), rollResult)
 end
 
 function RollService:OnStart()

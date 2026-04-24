@@ -7,7 +7,7 @@ local CaptainSquid = require(ReplicatedStorage.Shared.Bosses.Configs.CaptainSqui
 local CatMechElite = require(ReplicatedStorage.Shared.Bosses.Configs.CatMechElite)
 local FlameGuardGeneral = require(ReplicatedStorage.Shared.Bosses.Configs.FlameGuardGeneral)
 local MagmaFiend = require(ReplicatedStorage.Shared.Bosses.Configs.MagmaFiend)
-local MassiveGeezerRecolorable = require(ReplicatedStorage.Shared.Bosses.Configs.MassiveGeezerRecolorable)
+local MassiveGeezer = require(ReplicatedStorage.Shared.Bosses.Configs.MassiveGeezer)
 local MechArmouredMobileSuitBipedColourable =
 	require(ReplicatedStorage.Shared.Bosses.Configs.MechArmouredMobileSuitBipedColourable)
 local MerfinTheGreat = require(ReplicatedStorage.Shared.Bosses.Configs.MerfinTheGreat)
@@ -22,7 +22,7 @@ local BOSS_DEFINITIONS = {
 	CatMechElite,
 	FlameGuardGeneral,
 	MagmaFiend,
-	MassiveGeezerRecolorable,
+	MassiveGeezer,
 	MechArmouredMobileSuitBipedColourable,
 	MerfinTheGreat,
 	OinanThickhoof,

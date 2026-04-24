@@ -16,6 +16,7 @@ local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts
 local BodyPartLoadout = require(ReplicatedStorage.Shared.Character.BodyPartLoadout)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
 local PreviewAppearanceRegistry = require(ReplicatedStorage.Shared.Character.PreviewAppearanceRegistry)
+local CombatPower = require(ReplicatedStorage.Shared.Combat.CombatPower)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local AuraPresentation = require(ReplicatedStorage.Shared.UI.AuraPresentation)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
@@ -33,6 +34,7 @@ local UIController = require(script.Parent.UIController)
 local LOCAL_PLAYER = Players.LocalPlayer
 local WINDOW_NAME = "Inventory"
 local BODY_PARTS_DATA_KEY = "bodyParts"
+local PREMIUM_MOVEMENT_MULTIPLIER_ATTR = "PremiumMovementSpeedMultiplier"
 local AURA_DATA_KEY = "auras"
 local EQUIPPED_AURA_ID_KEY = "equippedAuraId"
 local AUTO_SIZE_ENABLED_KEY = "autoSizeEnabled"
@@ -136,6 +138,7 @@ type BodyPartClientState = {
 	bonuses: {
 		passiveIncomePerSecond: number?,
 		luckBonus: number?,
+		luckMultiplier: number?,
 		rollSpeedBonus: number?,
 		speed: number?,
 		damage: number?,
@@ -269,6 +272,43 @@ end
 
 local function formatWholeNumber(value: any): string
 	return NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0)))
+end
+
+local function resolvePremiumMovementSpeedMultiplier(): number
+	local multiplier = tonumber(LOCAL_PLAYER:GetAttribute(PREMIUM_MOVEMENT_MULTIPLIER_ATTR))
+	if multiplier == nil or multiplier <= 0 then
+		return 1
+	end
+
+	return multiplier
+end
+
+local function formatPowerLabelText(templateText: any, valueText: string): string
+	local template = if typeof(templateText) == "string" then templateText else ""
+	if string.find(template, "%%s", 1, true) then
+		return BodyPartPresentation.FormatTemplatedLabelText(template, valueText)
+	end
+
+	local replaced = false
+	local formatted = string.gsub(template, "%d[%d%.,]*", function(match)
+		if replaced then
+			return match
+		end
+
+		replaced = true
+		return valueText
+	end, 1)
+
+	if replaced then
+		return formatted
+	end
+
+	local normalized = string.match(template, "^%s*(.-)%s*$") or ""
+	if normalized ~= "" then
+		return string.format("%s %s", valueText, normalized)
+	end
+
+	return valueText
 end
 
 local function extractTrailingLabelText(templateText: any, fallback: string): string
@@ -523,6 +563,7 @@ function InventoryController:_ensureState()
 	self._previewLabelFontFaces = nil
 	self._previewLabelLayouts = nil :: PreviewLabelLayouts?
 	self._previewStatNativeTexts = {}
+	self._powerLabelNativeText = nil :: string?
 	self._autoSizeDescriptionText = AUTO_SIZE_DESCRIPTION_TEXT
 	self._autoSizeButtonVisualEntries = {}
 	self._autoSizeButtonTweens = {}
@@ -2283,12 +2324,27 @@ function InventoryController:_syncSummaryLabels()
 		passiveIncomePerSecond = (tonumber(loadoutBonuses.passiveIncomePerSecond) or 0)
 			* math.max(1, tonumber(potionBonuses.passiveIncomeMultiplier) or 1),
 		luckBonus = (tonumber(loadoutBonuses.luckBonus) or 0) + (tonumber(potionBonuses.luckBonus) or 0),
+		luckMultiplier = math.max(1, tonumber(potionBonuses.luckMultiplier) or 1),
 		rollSpeedBonus = (tonumber(loadoutBonuses.rollSpeedBonus) or 0) + (tonumber(potionBonuses.rollSpeedBonus) or 0),
 	}
 	local summaryTexts = BodyPartPresentation.BuildSummaryTexts(mergedBonuses)
 	TranslationHelper.setLiteralText(self._ui.incomeLabel, summaryTexts.income)
 	TranslationHelper.setLiteralText(self._ui.luckLabel, summaryTexts.luck)
 	TranslationHelper.setLiteralText(self._ui.rollSpeedLabel, summaryTexts.rollSpeed)
+	if self._ui.powerLabel and self._ui.powerLabel:IsA("TextLabel") then
+		local basePlayerStats = BodyPartsCatalog.GetBasePlayerStats()
+		local combatPower = CombatPower.Calculate({
+			damage = math.max(0, tonumber(loadoutBonuses.damage) or tonumber(basePlayerStats.damage) or 20),
+			health = math.max(1, tonumber(loadoutBonuses.health) or tonumber(basePlayerStats.health) or 100),
+			speed = math.max(0, tonumber(loadoutBonuses.speed) or tonumber(basePlayerStats.speed) or 16)
+				* resolvePremiumMovementSpeedMultiplier(),
+		})
+		local templateText = self._powerLabelNativeText or self._ui.powerLabel.Text
+		TranslationHelper.setLiteralText(
+			self._ui.powerLabel,
+			formatPowerLabelText(templateText, NumberFormatter.Format(math.max(0, math.floor(combatPower + 0.5))))
+		)
+	end
 	self:_syncPreviewStatLabels()
 end
 
@@ -3516,6 +3572,7 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 	local autoSizeLabel = autoSizeButton:WaitForChild("Usage", 30)
 	local sellAllButton = characterRoot:WaitForChild("SellAllButton", 30)
 	local equipBestButton = characterRoot:WaitForChild("EquipBest", 30)
+	local powerLabel = characterRoot:WaitForChild("Power", 30)
 	local topBar = inventoryRoot:WaitForChild("TopBar", 30)
 	local topBarButtons = topBar:WaitForChild("ItemTypes", 30)
 	local potionSellFrame = modalRoot:WaitForChild("PotionSellFrame", 30)
@@ -3546,6 +3603,7 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		and autoSizeButton:IsA("GuiButton")
 		and sellAllButton:IsA("GuiButton")
 		and equipBestButton:IsA("GuiButton")
+		and powerLabel:IsA("TextLabel")
 		and topBar:IsA("Frame")
 		and topBarButtons:IsA("Frame")
 		and potionSellFrame:IsA("GuiObject")
@@ -3660,7 +3718,9 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		incomeLabel = inventoryRoot:WaitForChild("Character", 30):WaitForChild("Income", 30),
 		luckLabel = inventoryRoot:WaitForChild("Character", 30):WaitForChild("Luck", 30),
 		rollSpeedLabel = inventoryRoot:WaitForChild("Character", 30):WaitForChild("Roll Speed", 30),
+		powerLabel = powerLabel,
 	}
+	self._powerLabelNativeText = powerLabel.Text
 	if self._ui.autoSizeLabel and self._ui.autoSizeLabel:IsA("TextLabel") then
 		local descriptionText = string.match(self._ui.autoSizeLabel.Text, "<br%s*/?>%s*(.+)$")
 		if typeof(descriptionText) == "string" and descriptionText ~= "" then
@@ -3825,6 +3885,12 @@ function InventoryController:_ensureFullUi(playerGui: PlayerGui)
 
 		LOCAL_PLAYER.CharacterRemoving:Connect(function()
 			self:_invalidateCharacterPreviewModel()
+		end)
+
+		LOCAL_PLAYER:GetAttributeChangedSignal(PREMIUM_MOVEMENT_MULTIPLIER_ATTR):Connect(function()
+			if FrameController:IsOpen(WINDOW_NAME) then
+				self:_syncSummaryLabels()
+			end
 		end)
 
 		task.spawn(function()

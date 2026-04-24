@@ -9,6 +9,7 @@ export type MutationChanceBonusById = { [string]: number }
 export type RuntimeBonuses = {
 	passiveIncomeMultiplier: number,
 	luckBonus: number,
+	luckMultiplier: number,
 	rollSpeedBonus: number,
 	mutationChanceBonusById: MutationChanceBonusById,
 	bodyPartScaleOverride: number?,
@@ -46,6 +47,7 @@ function PotionRuntimeBonuses.CreateEmpty(): RuntimeBonuses
 	return {
 		passiveIncomeMultiplier = 1,
 		luckBonus = 0,
+		luckMultiplier = 1,
 		rollSpeedBonus = 0,
 		mutationChanceBonusById = {},
 		bodyPartScaleOverride = nil,
@@ -62,6 +64,10 @@ function PotionRuntimeBonuses.ApplyConfigBonuses(bonuses: RuntimeBonuses, config
 	end
 
 	bonuses.luckBonus += tonumber(config.luckBonus) or 0
+	local luckMultiplier = normalizeBonusValue(config.luckMultiplier)
+	if luckMultiplier ~= nil and luckMultiplier > 1 then
+		bonuses.luckMultiplier = math.max(1, tonumber(bonuses.luckMultiplier) or 1) * luckMultiplier
+	end
 	bonuses.rollSpeedBonus += tonumber(config.rollSpeedBonus) or 0
 
 	for mutationId, bonusValue in pairs(PotionRuntimeBonuses.CloneMutationChanceBonusById(config.mutationChanceBonusById)) do

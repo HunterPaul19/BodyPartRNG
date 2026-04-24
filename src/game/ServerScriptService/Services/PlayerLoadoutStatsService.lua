@@ -3,6 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
+local CombatPower = require(ReplicatedStorage.Shared.Combat.CombatPower)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 
 local STAT_ATTRIBUTE_NAMES = table.freeze({
@@ -27,10 +28,6 @@ type FinalStats = {
 	baseSpeed: number,
 	movementSpeedMultiplier: number,
 }
-
-local function calculateCombatScore(stats: FinalStats): number
-	return stats.damage + (stats.health * 8) + (stats.speed * 25)
-end
 
 local function resolveHumanoid(character: Model?): Humanoid?
 	if character == nil then
@@ -131,7 +128,7 @@ function PlayerLoadoutStatsService:GetFinalStats(player: Player): FinalStats
 end
 
 function PlayerLoadoutStatsService:GetCombatScore(player: Player): number
-	return calculateCombatScore(resolveFinalStats(player))
+	return CombatPower.Calculate(resolveFinalStats(player))
 end
 
 function PlayerLoadoutStatsService:OnStart()

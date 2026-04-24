@@ -24,6 +24,7 @@ local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
 local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
 local RollTypes = require(ReplicatedStorage.Shared.Config.RollTypes)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
+local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local ProfileService = require(ServerScriptService.Packages.ProfileService)
 local ReplicaService = require(ServerScriptService.Packages.ReplicaService)
 local AuraSerialStore = require(script.AuraSerialStore)
@@ -35,6 +36,10 @@ local DEBUG = false and RunService:IsStudio()
 local USE_MOCK_DATA_IN_STUDIO = false
 local PROFILE_CLASS_TOKEN = ReplicaService.NewClassToken(SCOPE)
 local TIME_PLAYED_FLUSH_INTERVAL = 30
+local LOBBY_ROLL_REGION_RESET_PROFILE_IDS = table.freeze({
+	main = true,
+	boss_lobby = true,
+})
 
 local LEGACY_CASH_KEY = "cash"
 local LEGACY_OWNED_ROLL_TYPES_KEY = "ownedRollTypes"
@@ -718,6 +723,19 @@ local function normalizeProfileData(profile: any)
 	end
 end
 
+local function applyLobbyJoinDefaults(profile: any)
+	if not SELECTED_ROLL_REGION_KEY or not profile or typeof(profile.Data) ~= "table" then
+		return
+	end
+
+	local activeProfile = PlaceProfile.GetActiveProfile()
+	if LOBBY_ROLL_REGION_RESET_PROFILE_IDS[activeProfile.id] ~= true then
+		return
+	end
+
+	profile.Data[SELECTED_ROLL_REGION_KEY] = RollTargetRegions.FullBody
+end
+
 local function flushTimePlayedForPlayer(player: Player, force: boolean?)
 	if not TIME_PLAYED_KEY then
 		return
@@ -819,6 +837,7 @@ function DataService:OnPlayerAdded(player: Player)
 	end
 
 	normalizeProfileData(profile)
+	applyLobbyJoinDefaults(profile)
 
 	if not player:IsDescendantOf(Players) then
 		profile:Release()

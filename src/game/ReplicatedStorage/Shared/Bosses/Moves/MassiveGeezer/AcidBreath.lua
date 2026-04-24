@@ -25,11 +25,11 @@ local FLOOR_RAYCAST_MIN_DISTANCE = 350
 local FLOOR_RAYCAST_START_HEIGHT = 12
 
 local stub = CreateExplicitBossMoveStub({
-	bossId = "Massive Geezer RECOLORABLE",
+	bossId = "Massive Geezer",
 	moveLabel = "Acid Breath",
 	targetMode = "single",
 	summaryTemplate = "{moveLabel} drenches {target}'s lane in acid",
-	description = "Massive Geezer RECOLORABLE spews acid at a targeted player and leaves a puddle of acid on the ground.",
+	description = "Massive Geezer spews acid at a targeted player and leaves a puddle of acid on the ground.",
 })
 
 local AcidBreath = {

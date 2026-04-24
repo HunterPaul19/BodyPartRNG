@@ -3,7 +3,7 @@ type PresentationEvent = any
 
 local Constants = {
 	ModuleIds = {
-		MASSIVE_GEEZER_BODY_SLAM_MODULE_ID = "Moves.MassiveGeezerRecolorable.BodySlam",
+		MASSIVE_GEEZER_BODY_SLAM_MODULE_ID = "Moves.MassiveGeezer.BodySlam",
 	},
 	Vfx = {
 		MASSIVE_GEEZER_BODY_SLAM_GROUND_SLAM_VFX_NAME = "GroundSlam",

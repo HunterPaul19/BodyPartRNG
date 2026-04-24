@@ -97,6 +97,19 @@ local function resolveGroundedImpactCFrame(self, authoredCFrame: CFrame, bossMod
 	return authoredCFrame
 end
 
+local function resolvePayloadFloorCFrame(payload: any): CFrame?
+	if typeof(payload) ~= "table" then
+		return nil
+	end
+
+	local floorCFrame = payload.floorCFrame
+	if typeof(floorCFrame) == "CFrame" then
+		return floorCFrame
+	end
+
+	return nil
+end
+
 local function getSoundDelay(sound: Sound): number
 	return math.max(0, tonumber(sound:GetAttribute("Delay")) or tonumber(sound:GetAttribute("Start")) or 0)
 end
@@ -140,23 +153,6 @@ function Handler:_emitAuthoredExplosion(record: ActiveRecord, event: Presentatio
 		return
 	end
 
-	local bossRootPart = self:resolveBossRootPart(bossModel)
-	if bossRootPart == nil then
-		self:warnWithPrefix("Agrynoth Bone Breaker presentation could not resolve the live boss RootPart.")
-		self:_cleanupRecord(record)
-		return
-	end
-
-	local rootPartSource = self:resolveBossVfxModel(
-		AGRYNOTH_VFX_FOLDER_NAME,
-		AGRYNOTH_BONE_BREAKER_VFX_NAME,
-		AGRYNOTH_BONE_BREAKER_ROOT_PART_VFX_NAME
-	)
-	if rootPartSource == nil then
-		self:warnWithPrefix("Agrynoth Bone Breaker RootPart reference VFX model is missing from ReplicatedStorage.GameAssets.VFX.")
-		return
-	end
-
 	local explosionName = string.format("%s%d", AGRYNOTH_BONE_BREAKER_EXPLOSION_NAME_PREFIX, hitIndex)
 	local explosionSource = self:resolveBossVfxModel(AGRYNOTH_VFX_FOLDER_NAME, AGRYNOTH_BONE_BREAKER_VFX_NAME, explosionName)
 	if explosionSource == nil then
@@ -169,8 +165,29 @@ function Handler:_emitAuthoredExplosion(record: ActiveRecord, event: Presentatio
 
 	local payload = event.payload
 	local scaleMultiplier = math.max(0.1, tonumber(payload and payload.scaleMultiplier) or 1)
-	local authoredCFrame = resolveScaledAuthoredCFrame(bossRootPart, rootPartSource, explosionSource, scaleMultiplier)
-	local groundedCFrame = resolveGroundedImpactCFrame(self, authoredCFrame, bossModel)
+	local groundedCFrame = resolvePayloadFloorCFrame(payload)
+	if groundedCFrame == nil then
+		local bossRootPart = self:resolveBossRootPart(bossModel)
+		if bossRootPart == nil then
+			self:warnWithPrefix("Agrynoth Bone Breaker presentation could not resolve the live boss RootPart.")
+			self:_cleanupRecord(record)
+			return
+		end
+
+		local rootPartSource = self:resolveBossVfxModel(
+			AGRYNOTH_VFX_FOLDER_NAME,
+			AGRYNOTH_BONE_BREAKER_VFX_NAME,
+			AGRYNOTH_BONE_BREAKER_ROOT_PART_VFX_NAME
+		)
+		if rootPartSource == nil then
+			self:warnWithPrefix("Agrynoth Bone Breaker RootPart reference VFX model is missing from ReplicatedStorage.GameAssets.VFX.")
+			return
+		end
+
+		local authoredCFrame = resolveScaledAuthoredCFrame(bossRootPart, rootPartSource, explosionSource, scaleMultiplier)
+		groundedCFrame = resolveGroundedImpactCFrame(self, authoredCFrame, bossModel)
+	end
+
 	local explosionModel = explosionSource:Clone()
 	explosionModel:ScaleTo(AGRYNOTH_BONE_BREAKER_EXPLOSION_SCALE)
 	self:prepareMovingEffectModel(explosionModel)

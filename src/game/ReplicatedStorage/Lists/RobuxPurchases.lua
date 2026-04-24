@@ -84,6 +84,60 @@ local Marketplace = {
 				robloxId = 3575813551,
 			},
 		},
+
+		time_shards_50 = {
+			offerKey = "time_shards_50",
+			displayName = "50 Time Shards",
+			kind = "product",
+			handlerKey = "time_shards",
+			grantMode = "repeatable",
+			giftable = true,
+			amount = 50,
+			selfPurchase = {
+				saleKind = "product",
+				robloxId = 3580883605,
+			},
+			giftPurchase = {
+				saleKind = "product",
+				robloxId = 3580883796,
+			},
+		},
+
+		time_shards_500 = {
+			offerKey = "time_shards_500",
+			displayName = "500 Time Shards",
+			kind = "product",
+			handlerKey = "time_shards",
+			grantMode = "repeatable",
+			giftable = true,
+			amount = 500,
+			selfPurchase = {
+				saleKind = "product",
+				robloxId = 3580883663,
+			},
+			giftPurchase = {
+				saleKind = "product",
+				robloxId = 3580883862,
+			},
+		},
+
+		time_shards_1000 = {
+			offerKey = "time_shards_1000",
+			displayName = "1000 Time Shards",
+			kind = "product",
+			handlerKey = "time_shards",
+			grantMode = "repeatable",
+			giftable = true,
+			amount = 1000,
+			selfPurchase = {
+				saleKind = "product",
+				robloxId = 3580883739,
+			},
+			giftPurchase = {
+				saleKind = "product",
+				robloxId = 3580883944,
+			},
+		},
 	},
 }
 

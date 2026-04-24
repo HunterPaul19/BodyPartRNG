@@ -20,11 +20,13 @@ local CLIENT_STARTUP_PHASE_DEFINITIONS = {
 			"MainInterfaceController",
 			"CombatPhysicsController",
 			"BossHealthBarController",
+			"BossHitFlashController",
 			"BossArenaTimerController",
 			"BossArenaM1Controller",
 			"BossArenaMovePresentationController",
 			"BossArenaStudioTestSuiteController",
 			"BossArenaStudioPickerController",
+			"ChatNotificationController",
 		},
 	},
 	{

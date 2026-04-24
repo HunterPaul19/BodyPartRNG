@@ -10,6 +10,7 @@ local Bosses = require(ReplicatedStorage.Shared.Bosses)
 local BossQueueConstants = require(ReplicatedStorage.Shared.BossQueue.Constants)
 local BossQueueTeleportPayload = require(ReplicatedStorage.Shared.BossQueue.TeleportPayload)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
+local PotionService = require(script.Parent.PotionService)
 
 type PortalState = {
 	instance: Model,
@@ -190,6 +191,23 @@ function BossQueueService:_collectTeleportRoster(state: PortalState): ({ Player 
 	return teleportPlayers, queuedUserIds
 end
 
+function BossQueueService:_buildPotionEffectsByUserId(teleportPlayers: { Player })
+	local potionEffectsByUserId = {}
+
+	for _, player in ipairs(teleportPlayers) do
+		if player.Parent ~= Players then
+			continue
+		end
+
+		local snapshot = PotionService:BuildTeleportSnapshot(player)
+		if snapshot then
+			potionEffectsByUserId[tostring(player.UserId)] = snapshot
+		end
+	end
+
+	return if next(potionEffectsByUserId) ~= nil then potionEffectsByUserId else nil
+end
+
 function BossQueueService:_handleLaunchFailure(state: PortalState, reason: string)
 	warn(string.format("[BossQueueService] %s for portal %s.", reason, getPortalDebugName(state.instance)))
 	state.launchInFlight = false
@@ -235,7 +253,8 @@ function BossQueueService:_launchPortal(state: PortalState, countdownToken: numb
 		arenaId,
 		state.portalId,
 		queuedUserIds,
-		state.enqueuedAtUnix
+		state.enqueuedAtUnix,
+		self:_buildPotionEffectsByUserId(teleportPlayers)
 	)
 	if not payload then
 		self:_handleLaunchFailure(state, payloadError or "Failed to build boss queue teleport payload")

@@ -172,8 +172,10 @@ end
 
 function CombatProjectileUtil.CreateTrackingHitbox(options: {
 	hitboxOwner: Model,
-	getPosition: () -> Vector3?,
-	radius: number,
+	getPosition: (() -> Vector3?)?,
+	getCFrame: (() -> CFrame?)?,
+	radius: number?,
+	size: Vector3?,
 	duration: number,
 	maxParts: number?,
 	debugVisibilityAttribute: string?,
@@ -181,21 +183,35 @@ function CombatProjectileUtil.CreateTrackingHitbox(options: {
 	onDestroy: (() -> ())?,
 })
 	local hitbox
-	hitbox = Hitbox.new({
+	local hitboxData: { [string]: any } = {
 		Character = options.hitboxOwner,
 		HitboxCFrame = function()
+			if options.getCFrame then
+				return options.getCFrame()
+			end
+
+			if not options.getPosition then
+				return nil
+			end
+
 			local currentPosition = options.getPosition()
 			if currentPosition == nil then
 				return nil
 			end
 			return CFrame.new(currentPosition)
 		end,
-		HitboxRadius = math.max(0, tonumber(options.radius) or 0),
 		HitboxType = "SpacialQuery",
 		Time = math.max(0, tonumber(options.duration) or 0),
 		MaxParts = math.max(1, tonumber(options.maxParts) or 64),
 		DebugVisibilityAttribute = options.debugVisibilityAttribute,
-	}, {
+	}
+	if options.size ~= nil then
+		hitboxData.HitboxSize = options.size
+	else
+		hitboxData.HitboxRadius = math.max(0, tonumber(options.radius) or 0)
+	end
+
+	hitbox = Hitbox.new(hitboxData, {
 		HitTarget = function(targetModel: Model)
 			if options.onHit then
 				options.onHit(targetModel)

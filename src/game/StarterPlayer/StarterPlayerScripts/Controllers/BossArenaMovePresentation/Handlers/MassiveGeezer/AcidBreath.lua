@@ -3,7 +3,7 @@ type PresentationEvent = any
 
 local Constants = {
 	ModuleIds = {
-		MASSIVE_GEEZER_ACID_BREATH_MODULE_ID = "Moves.MassiveGeezerRecolorable.AcidBreath",
+		MASSIVE_GEEZER_ACID_BREATH_MODULE_ID = "Moves.MassiveGeezer.AcidBreath",
 	},
 	Vfx = {
 		MASSIVE_GEEZER_ACID_BREATH_HEAD_VFX_NAME = "Head",

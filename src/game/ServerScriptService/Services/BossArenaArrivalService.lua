@@ -16,6 +16,31 @@ local function isEnabledForPlace(): boolean
 	return PlaceProfile.GetActiveProfile().id == ACTIVE_PROFILE_ID
 end
 
+local function clonePotionEffectsByUserId(source: BossQueueTeleportPayload.BossQueuePotionEffectsByUserId?)
+	local cloned = {}
+	if typeof(source) ~= "table" then
+		return nil
+	end
+
+	for userId, snapshot in pairs(source) do
+		if typeof(snapshot) ~= "table" or typeof(snapshot.activeByPotionId) ~= "table" then
+			continue
+		end
+
+		local activeByPotionId = {}
+		for potionId, remainingSeconds in pairs(snapshot.activeByPotionId) do
+			activeByPotionId[potionId] = remainingSeconds
+		end
+
+		cloned[userId] = {
+			capturedAtUnix = snapshot.capturedAtUnix,
+			activeByPotionId = activeByPotionId,
+		}
+	end
+
+	return if next(cloned) ~= nil then cloned else nil
+end
+
 local function clonePayload(payload: ArrivalPayload): ArrivalPayload
 	return {
 		version = payload.version,
@@ -25,6 +50,7 @@ local function clonePayload(payload: ArrivalPayload): ArrivalPayload
 		queuedUserIds = table.clone(payload.queuedUserIds),
 		queueSize = payload.queueSize,
 		enqueuedAtUnix = payload.enqueuedAtUnix,
+		potionEffectsByUserId = clonePotionEffectsByUserId(payload.potionEffectsByUserId),
 	}
 end
 

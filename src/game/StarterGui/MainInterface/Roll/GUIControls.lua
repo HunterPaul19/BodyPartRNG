@@ -403,6 +403,10 @@ local function getQuickRollState(state)
 	return state.quickRoll
 end
 
+local function shouldPredictSkippedRollPresentation(triggerSource)
+	return triggerSource == "auto" and getQuickRollState(GUIControls.RollingState).enabled == true
+end
+
 local function isPlayerInAutoRollGroup()
 	local ok, inGroup = pcall(function()
 		return LocalPlayer:IsInGroup(GROUP_ID)
@@ -990,7 +994,9 @@ function GUIControls:ApplyRollingState(state)
 		GUIControls:RebuildRollDropdown()
 	end
 	GUIControls:RefreshRollButton()
-	GUIControls:SetDropdownOpen(GUIControls.IsDropdownOpen)
+	if shouldRebuildRollDropdown or GUIControls.IsDropdownOpen then
+		GUIControls:SetDropdownOpen(GUIControls.IsDropdownOpen)
+	end
 end
 
 function GUIControls:SelectRollType(rollTypeId)
@@ -1323,6 +1329,7 @@ end
 function GUIControls:Roll(triggerSource)
 	task.spawn(function()
 		local resolvedTriggerSource = if typeof(triggerSource) == "string" and triggerSource ~= "" then triggerSource else "manual"
+		local predictedSkippedPresentation = shouldPredictSkippedRollPresentation(resolvedTriggerSource)
 
 		if os.clock() < GUIControls.SuppressRollClickUntil then
 			return
@@ -1331,14 +1338,16 @@ function GUIControls:Roll(triggerSource)
 			return
 		end
 
-		stopActiveMutationLoop()
 		GUIControls.CurrentRollResult = nil
 		GUIControls.CurrentRollResultEquipped = false
 		GUIControls.EquipDebounce = false
 		GUIControls.EquipStatusToken += 1
-		ScreenEffects.HideAll()
-		clearViewport()
-		GUIControls.ActiveRollPreviewSessionId = nil
+		if not predictedSkippedPresentation then
+			stopActiveMutationLoop()
+			ScreenEffects.HideAll()
+			clearViewport()
+			GUIControls.ActiveRollPreviewSessionId = nil
+		end
 		if resolvedTriggerSource ~= "auto" then
 			GUIControls:SetDropdownOpen(false)
 		end
@@ -1384,7 +1393,18 @@ function GUIControls:Roll(triggerSource)
 			GUIControls.CurrentRollResultEquipped = false
 			GUIControls.EquipDebounce = false
 			GUIControls.CurrentlyRolling = false
-			restoreIdleRollUi()
+			if predictedSkippedPresentation then
+				Main.Visible = false
+				Main.SkipButton.Visible = false
+				Main.SubInfo.Visible = false
+				Main.EquipButton.Visible = false
+				MainButtons.RollButton.Visible = true
+				MainButtons.QuickRoll.Visible = true
+				MainButtons.AutoRoll.Visible = true
+				GUIControls.ActiveRollPreviewSessionId = nil
+			else
+				restoreIdleRollUi()
+			end
 			GUIControls:RefreshEquipButton()
 			GUIControls:SetButtonCooldown()
 			if GUIControls.AutoRoll then

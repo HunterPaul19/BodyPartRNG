@@ -1,6 +1,14 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local BossQueueConstants = require(ReplicatedStorage.Shared.BossQueue.Constants)
+local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
+
+export type BossQueuePotionTeleportSnapshot = {
+	capturedAtUnix: number,
+	activeByPotionId: { [string]: number },
+}
+
+export type BossQueuePotionEffectsByUserId = { [string]: BossQueuePotionTeleportSnapshot }
 
 export type BossQueueTeleportPayload = {
 	version: number,
@@ -10,6 +18,7 @@ export type BossQueueTeleportPayload = {
 	queuedUserIds: { number },
 	queueSize: number,
 	enqueuedAtUnix: number,
+	potionEffectsByUserId: BossQueuePotionEffectsByUserId?,
 }
 
 local BossQueueTeleportPayload = {}
@@ -44,6 +53,74 @@ local function normalizeQueuedUserIds(value: any): { number }
 	end
 
 	return normalizedUserIds
+end
+
+local function buildAllowedUserIdSet(queuedUserIds: { number }): { [number]: boolean }
+	local allowedUserIds = {}
+	for _, userId in ipairs(queuedUserIds) do
+		allowedUserIds[userId] = true
+	end
+	return allowedUserIds
+end
+
+local function normalizePotionTeleportSnapshot(value: any): BossQueuePotionTeleportSnapshot?
+	if typeof(value) ~= "table" then
+		return nil
+	end
+
+	local capturedAtUnix = math.max(0, math.floor(tonumber(value.capturedAtUnix) or 0))
+	if capturedAtUnix <= 0 then
+		return nil
+	end
+
+	local activeByPotionId = {}
+	if typeof(value.activeByPotionId) == "table" then
+		for potionId, remainingSeconds in pairs(value.activeByPotionId) do
+			local normalizedPotionId = PotionConfig.NormalizeId(potionId)
+			local resolvedRemainingSeconds = math.max(0, math.floor(tonumber(remainingSeconds) or 0))
+			if normalizedPotionId and resolvedRemainingSeconds > 0 then
+				activeByPotionId[normalizedPotionId] = math.max(
+					resolvedRemainingSeconds,
+					tonumber(activeByPotionId[normalizedPotionId]) or 0
+				)
+			end
+		end
+	end
+
+	if next(activeByPotionId) == nil then
+		return nil
+	end
+
+	return {
+		capturedAtUnix = capturedAtUnix,
+		activeByPotionId = activeByPotionId,
+	}
+end
+
+local function normalizePotionEffectsByUserId(
+	value: any,
+	queuedUserIds: { number }
+): BossQueuePotionEffectsByUserId?
+	if typeof(value) ~= "table" then
+		return nil
+	end
+
+	local allowedUserIds = buildAllowedUserIdSet(queuedUserIds)
+	local potionEffectsByUserId = {}
+
+	for userId, snapshot in pairs(value) do
+		local resolvedUserId = math.max(0, math.floor(tonumber(userId) or 0))
+		if resolvedUserId <= 0 or allowedUserIds[resolvedUserId] ~= true then
+			continue
+		end
+
+		local normalizedSnapshot = normalizePotionTeleportSnapshot(snapshot)
+		if normalizedSnapshot then
+			potionEffectsByUserId[tostring(resolvedUserId)] = normalizedSnapshot
+		end
+	end
+
+	return if next(potionEffectsByUserId) ~= nil then potionEffectsByUserId else nil
 end
 
 function BossQueueTeleportPayload.Normalize(payload: any): (BossQueueTeleportPayload?, string?)
@@ -82,6 +159,7 @@ function BossQueueTeleportPayload.Normalize(payload: any): (BossQueueTeleportPay
 	end
 
 	local queueSize = #queuedUserIds
+	local potionEffectsByUserId = normalizePotionEffectsByUserId(payload.potionEffectsByUserId, queuedUserIds)
 
 	return {
 		version = version,
@@ -91,6 +169,7 @@ function BossQueueTeleportPayload.Normalize(payload: any): (BossQueueTeleportPay
 		queuedUserIds = queuedUserIds,
 		queueSize = queueSize,
 		enqueuedAtUnix = enqueuedAtUnix,
+		potionEffectsByUserId = potionEffectsByUserId,
 	}, nil
 end
 
@@ -99,7 +178,8 @@ function BossQueueTeleportPayload.Build(
 	arenaId: string,
 	portalId: string,
 	queuedUserIds: { number },
-	enqueuedAtUnix: number
+	enqueuedAtUnix: number,
+	potionEffectsByUserId: BossQueuePotionEffectsByUserId?
 ): (BossQueueTeleportPayload?, string?)
 	return BossQueueTeleportPayload.Normalize({
 		version = BossQueueConstants.PayloadVersion,
@@ -109,6 +189,7 @@ function BossQueueTeleportPayload.Build(
 		queuedUserIds = queuedUserIds,
 		queueSize = if typeof(queuedUserIds) == "table" then #queuedUserIds else 0,
 		enqueuedAtUnix = enqueuedAtUnix,
+		potionEffectsByUserId = potionEffectsByUserId,
 	})
 end
 

@@ -581,11 +581,13 @@ local function makePurchaseContext(offer: any, sale: any, context: any?)
 		then context.purchaseKind
 		else "self"
 	return {
+		key = offer.offerKey,
 		offerKey = offer.offerKey,
 		offerKind = offer.kind,
 		saleKind = sale.saleKind,
 		purchaseKind = purchaseKind,
 		robloxId = sale.robloxId,
+		amount = math.max(0, math.floor(tonumber(offer.amount) or 0)),
 		purchaseId = if typeof(context) == "table" then context.purchaseId else nil,
 		senderUserId = if typeof(context) == "table" then context.senderUserId else nil,
 		recipientUserId = if typeof(context) == "table" then context.recipientUserId else nil,
@@ -713,6 +715,23 @@ local function hasDuplicateGiftOwnership(recipientUserId: number, offer: any): b
 	return false
 end
 
+local function hasProcessedGiftDelivery(player: Player, giftRecord: any): boolean
+	local state = getMarketplaceState(player)
+	local purchaseId = normalizeString(giftRecord and giftRecord.purchaseId)
+	if purchaseId ~= "" and typeof(state.purchaseIds) == "table" and state.purchaseIds[purchaseId] ~= nil then
+		return true
+	end
+
+	local gifts = if typeof(state.gifts) == "table" then state.gifts else nil
+	local giftId = normalizeString(giftRecord and giftRecord.giftId)
+	if giftId ~= "" and gifts then
+		return (typeof(gifts.historyById) == "table" and gifts.historyById[giftId] ~= nil)
+			or (typeof(gifts.failedById) == "table" and gifts.failedById[giftId] ~= nil)
+	end
+
+	return false
+end
+
 local function promptProductPurchase(player: Player, robloxId: number): (boolean, string?)
 	local ok, err = pcall(function()
 		MarketplaceService:PromptProductPurchase(player, robloxId)
@@ -810,6 +829,10 @@ local function processGiftDelivery(player: Player, giftRecord: any)
 	local offer = getOffer(giftRecord.offerKey)
 	if not offer then
 		moveGiftToFinalState(player, giftRecord, "failedById", "missing_offer")
+		return
+	end
+
+	if hasProcessedGiftDelivery(player, giftRecord) then
 		return
 	end
 

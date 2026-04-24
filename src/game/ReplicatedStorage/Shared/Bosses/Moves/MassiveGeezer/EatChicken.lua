@@ -15,7 +15,7 @@ local PROJECTILE_COUNT = 16
 local PROJECTILES_PER_HAND = math.floor(PROJECTILE_COUNT / 2)
 local BASE_PROJECTILE_SPEED_STUDS_PER_SECOND = 170
 local PROJECTILE_DISTANCE_STUDS = 185
-local PROJECTILE_RADIUS = 10
+local FALLBACK_PROJECTILE_RADIUS = 10
 local PROJECTILE_MAX_PARTS = 64
 local THROW_YAW_STEP_DEGREES = 15
 local SHOTGUN_SCATTER_YAW_DEGREES = 10
@@ -36,12 +36,30 @@ local ATE_CHICKEN_MARKER_NAME = "AteChicken"
 local TURN_TO_PLAYER_MARKER_NAME = "TurnToPlayer"
 local CHICKEN_THROW_MARKER_NAME = "ChickenThrow"
 
+local VFX_FOLDER_NAME = "MassiveGeezer"
+local EAT_CHICKEN_VFX_NAME = "EatChicken"
+local CHICKEN_LEG_VFX_NAME = "ChickenLeg"
+local CHICKEN_MEAT_NAME = "ChickenMeat"
+local CHICKEN_VISUAL_SCALE_FACTOR = 0.5
+local CHICKEN_FLIGHT_FORWARD_YAW_DEGREES = -90
+local CHICKEN_HOLD_PITCH_DEGREES = -20
+local CHICKEN_HOLD_ROLL_DEGREES = 90
+local CHICKEN_RELEASE_BLEND_ALPHA = 0.2
+local CHICKEN_PRIMARY_SPIN_MAX_DEGREES_PER_SECOND = 1080
+local CHICKEN_PRIMARY_SPIN_MIN_DEGREES_PER_SECOND = 540
+local CHICKEN_SECONDARY_SPIN_MAX_DEGREES_PER_SECOND = 220
+local CHICKEN_SECONDARY_SPIN_MIN_DEGREES_PER_SECOND = 60
+
+local FLIGHT_ROTATION_OFFSET = CFrame.Angles(0, math.rad(CHICKEN_FLIGHT_FORWARD_YAW_DEGREES), 0)
+local HOLD_ROTATION_OFFSET = FLIGHT_ROTATION_OFFSET
+	* CFrame.Angles(math.rad(CHICKEN_HOLD_PITCH_DEGREES), 0, math.rad(CHICKEN_HOLD_ROLL_DEGREES))
+
 local stub = CreateExplicitBossMoveStub({
-	bossId = "Massive Geezer RECOLORABLE",
+	bossId = "Massive Geezer",
 	moveLabel = "Eat Chicken",
 	targetMode = "all_players",
 	summaryTemplate = "{moveLabel} throws chicken bones through the arena",
-	description = "Massive Geezer RECOLORABLE eats chicken and throws a spread of bones across the arena.",
+	description = "Massive Geezer eats chicken and throws a spread of bones across the arena.",
 })
 
 local EatChicken = {
@@ -72,6 +90,74 @@ local function resolveAnimationInstance(): Animation?
 	end
 
 	return nil
+end
+
+local function resolveChickenLegModel(): Model?
+	local gameAssets = ReplicatedStorage:FindFirstChild("GameAssets")
+	if not (gameAssets and gameAssets:IsA("Folder")) then
+		return nil
+	end
+
+	local vfxFolder = gameAssets:FindFirstChild("VFX")
+	if not (vfxFolder and vfxFolder:IsA("Folder")) then
+		return nil
+	end
+
+	local bossFolder = vfxFolder:FindFirstChild(VFX_FOLDER_NAME)
+	if not (bossFolder and bossFolder:IsA("Folder")) then
+		return nil
+	end
+
+	local effectFolder = bossFolder:FindFirstChild(EAT_CHICKEN_VFX_NAME)
+	if not (effectFolder and effectFolder:IsA("Folder")) then
+		return nil
+	end
+
+	local chickenLeg = effectFolder:FindFirstChild(CHICKEN_LEG_VFX_NAME)
+	if chickenLeg and chickenLeg:IsA("Model") then
+		return chickenLeg
+	end
+
+	return nil
+end
+
+local function resolveChickenVisualScale(scaleMultiplier: number?): number
+	return math.max(0.1, (tonumber(scaleMultiplier) or 1) * CHICKEN_VISUAL_SCALE_FACTOR)
+end
+
+local function destroyChickenMeat(chickenModel: Model)
+	for _, descendant in ipairs(chickenModel:GetDescendants()) do
+		if descendant.Name == CHICKEN_MEAT_NAME then
+			descendant:Destroy()
+		end
+	end
+end
+
+local function resolveBoneProjectileHitboxGeometry(scaleMultiplier: number?): (Vector3?, CFrame?)
+	local chickenLegSource = resolveChickenLegModel()
+	if chickenLegSource == nil then
+		return nil, nil
+	end
+
+	local chickenClone = chickenLegSource:Clone()
+	local scaleOk = pcall(function()
+		chickenClone:ScaleTo(resolveChickenVisualScale(scaleMultiplier))
+	end)
+	if not scaleOk then
+		chickenClone:Destroy()
+		return nil, nil
+	end
+
+	destroyChickenMeat(chickenClone)
+	local boundsCFrame, boundsSize = chickenClone:GetBoundingBox()
+	local boundsOffset = chickenClone:GetPivot():ToObjectSpace(boundsCFrame)
+	chickenClone:Destroy()
+
+	if boundsSize.X <= 0.001 or boundsSize.Y <= 0.001 or boundsSize.Z <= 0.001 then
+		return nil, nil
+	end
+
+	return boundsSize, boundsOffset
 end
 
 local function resolveRootPart(model: Model?): BasePart?
@@ -171,6 +257,84 @@ local function rotatePlanarDirection(forwardDirection: Vector3, yawDegrees: numb
 	return forwardDirection
 end
 
+local function resolveHeldChickenCFrame(handPart: BasePart, yawOffset: number): CFrame
+	return handPart.CFrame * CFrame.Angles(0, yawOffset, 0) * HOLD_ROTATION_OFFSET
+end
+
+local function resolveProjectileLaunchCFrame(bossModel: Model, index: number): CFrame?
+	local handName = if index <= PROJECTILES_PER_HAND then "LeftHand" else "RightHand"
+	local handPart = resolveHandPart(bossModel, handName)
+	if handPart == nil or handPart.Parent == nil then
+		return nil
+	end
+
+	return resolveHeldChickenCFrame(handPart, math.rad(resolveProjectileBaseYawDegrees(index)))
+end
+
+local function quantizeSeedComponent(value: number): number
+	return math.floor((value * 100) + if value >= 0 then 0.5 else -0.5)
+end
+
+local function mixSeed(seed: number, value: number): number
+	return (seed * 1103515245 + value + 12345) % 2147483647
+end
+
+local function buildProjectileSpinSeed(index: number, startPosition: Vector3, endPosition: Vector3): number
+	local seed = mixSeed(17, index)
+	seed = mixSeed(seed, quantizeSeedComponent(startPosition.X))
+	seed = mixSeed(seed, quantizeSeedComponent(startPosition.Y))
+	seed = mixSeed(seed, quantizeSeedComponent(startPosition.Z))
+	seed = mixSeed(seed, quantizeSeedComponent(endPosition.X))
+	seed = mixSeed(seed, quantizeSeedComponent(endPosition.Y))
+	seed = mixSeed(seed, quantizeSeedComponent(endPosition.Z))
+	return math.max(1, seed)
+end
+
+local function resolveSignedSpinRadiansPerSecond(
+	randomGenerator: Random,
+	minDegreesPerSecond: number,
+	maxDegreesPerSecond: number
+): number
+	local speedDegreesPerSecond = randomGenerator:NextNumber(minDegreesPerSecond, maxDegreesPerSecond)
+	local directionSign = if randomGenerator:NextInteger(0, 1) == 0 then -1 else 1
+	return math.rad(speedDegreesPerSecond * directionSign)
+end
+
+local function resolveProjectileSpinMotion(index: number, startPosition: Vector3, endPosition: Vector3): { [string]: number }
+	local randomGenerator = Random.new(buildProjectileSpinSeed(index, startPosition, endPosition))
+	return {
+		primarySpinRadiansPerSecond = resolveSignedSpinRadiansPerSecond(
+			randomGenerator,
+			CHICKEN_PRIMARY_SPIN_MIN_DEGREES_PER_SECOND,
+			CHICKEN_PRIMARY_SPIN_MAX_DEGREES_PER_SECOND
+		),
+		secondarySpinRadiansPerSecond = resolveSignedSpinRadiansPerSecond(
+			randomGenerator,
+			CHICKEN_SECONDARY_SPIN_MIN_DEGREES_PER_SECOND,
+			CHICKEN_SECONDARY_SPIN_MAX_DEGREES_PER_SECOND
+		),
+		primaryPhaseRadians = math.rad(randomGenerator:NextNumber(0, 360)),
+		secondaryPhaseRadians = math.rad(randomGenerator:NextNumber(0, 360)),
+	}
+end
+
+local function resolveProjectileSpinCFrame(
+	motion: { [string]: any },
+	elapsedFlightSeconds: number,
+	spinBlendAlpha: number
+): CFrame
+	local spinWeight = math.clamp(spinBlendAlpha, 0, 1)
+	local primarySpinAngle = (
+		(tonumber(motion.primarySpinRadiansPerSecond) or 0) * math.max(0, elapsedFlightSeconds)
+		+ (tonumber(motion.primaryPhaseRadians) or 0)
+	) * spinWeight
+	local secondarySpinAngle = (
+		(tonumber(motion.secondarySpinRadiansPerSecond) or 0) * math.max(0, elapsedFlightSeconds)
+		+ (tonumber(motion.secondaryPhaseRadians) or 0)
+	) * spinWeight
+	return CFrame.Angles(primarySpinAngle, 0, 0) * CFrame.Angles(0, 0, secondarySpinAngle)
+end
+
 local function buildProjectilePlans(
 	context,
 	bossModel: Model,
@@ -197,10 +361,16 @@ local function buildProjectilePlans(
 			* randomGenerator:NextNumber(SHOTGUN_MIN_SPEED_SCALAR, SHOTGUN_MAX_SPEED_SCALAR)
 		local endPlanarPosition = startPosition + (projectileDirection * projectileDistance)
 		local endPosition = Vector3.new(endPlanarPosition.X, endHeight, endPlanarPosition.Z)
+		local spinMotion = resolveProjectileSpinMotion(index, startPosition, endPosition)
 		table.insert(plans, {
 			index = index,
 			startPosition = startPosition,
 			endPosition = endPosition,
+			launchCFrame = resolveProjectileLaunchCFrame(bossModel, index),
+			primaryPhaseRadians = spinMotion.primaryPhaseRadians,
+			primarySpinRadiansPerSecond = spinMotion.primarySpinRadiansPerSecond,
+			secondaryPhaseRadians = spinMotion.secondaryPhaseRadians,
+			secondarySpinRadiansPerSecond = spinMotion.secondarySpinRadiansPerSecond,
 			travelDuration = CombatProjectileUtil.ResolveTravelDuration(
 				startPosition,
 				endPosition,
@@ -210,6 +380,20 @@ local function buildProjectilePlans(
 	end
 
 	return plans
+end
+
+local function buildPresentationProjectilePlans(projectilePlans: { { [string]: any } }): { { [string]: any } }
+	local presentationPlans = {}
+	for _, plan in ipairs(projectilePlans) do
+		table.insert(presentationPlans, {
+			index = plan.index,
+			startPosition = plan.startPosition,
+			endPosition = plan.endPosition,
+			travelDuration = plan.travelDuration,
+		})
+	end
+
+	return presentationPlans
 end
 
 local function getProjectilePosition(plan: { [string]: any }, startedAt: number): Vector3
@@ -225,6 +409,44 @@ local function getProjectilePosition(plan: { [string]: any }, startedAt: number)
 		startedAt = startedAt,
 		travelDuration = math.max(0.001, tonumber(plan.travelDuration) or 0),
 	})
+end
+
+local function getProjectileAlpha(plan: { [string]: any }, startedAt: number): number
+	return math.clamp((os.clock() - startedAt) / math.max(0.001, tonumber(plan.travelDuration) or 0), 0, 1)
+end
+
+local function getProjectileVisualCFrame(plan: { [string]: any }, startedAt: number): CFrame?
+	local startPosition = plan.startPosition
+	local endPosition = plan.endPosition
+	if typeof(startPosition) ~= "Vector3" or typeof(endPosition) ~= "Vector3" then
+		return nil
+	end
+
+	local alpha = getProjectileAlpha(plan, startedAt)
+	local elapsedFlightSeconds = math.max(0, os.clock() - startedAt)
+	local thrownCFrame = CombatProjectileUtil.ResolveProjectileCFrame(startPosition, endPosition, alpha)
+		* FLIGHT_ROTATION_OFFSET
+	local launchCFrame = plan.launchCFrame
+	if typeof(launchCFrame) == "CFrame" then
+		local blendAlpha = math.clamp(alpha / CHICKEN_RELEASE_BLEND_ALPHA, 0, 1)
+		return launchCFrame:Lerp(thrownCFrame, blendAlpha)
+			* resolveProjectileSpinCFrame(plan, elapsedFlightSeconds, blendAlpha)
+	end
+
+	return thrownCFrame * resolveProjectileSpinCFrame(plan, elapsedFlightSeconds, 1)
+end
+
+local function getProjectileHitboxCFrame(
+	plan: { [string]: any },
+	startedAt: number,
+	boundsOffset: CFrame
+): CFrame?
+	local visualCFrame = getProjectileVisualCFrame(plan, startedAt)
+	if visualCFrame == nil then
+		return nil
+	end
+
+	return visualCFrame * boundsOffset
 end
 
 local function buildKnockbackDirection(
@@ -295,6 +517,13 @@ function EatChicken.StartCast(context)
 	local recoveryEndsAt = nil :: number?
 	local projectileSpeedStudsPerSecond =
 		BASE_PROJECTILE_SPEED_STUDS_PER_SECOND * CombatProjectileUtil.ResolveBasicProjectileSpeedScalar()
+	local bossDefinition = context.bossDefinition
+	local boneHitboxSize, boneHitboxOffset = resolveBoneProjectileHitboxGeometry(
+		if bossDefinition then bossDefinition.scaleMultiplier else 1
+	)
+	if boneHitboxSize == nil or boneHitboxOffset == nil then
+		warn("[EatChicken] Missing ChickenLeg bone bounds; falling back to radius projectile hitboxes.")
+	end
 	local shotgunRandom = Random.new()
 
 	local function disconnectStoppedConnection()
@@ -397,7 +626,7 @@ function EatChicken.StartCast(context)
 		projectileStartedAt = os.clock()
 
 		context.EmitPresentation("throwBones", {
-			projectiles = projectilePlans,
+			projectiles = buildPresentationProjectilePlans(projectilePlans),
 			projectileSpeed = projectileSpeedStudsPerSecond,
 			scaleMultiplier = context.bossDefinition.scaleMultiplier,
 		})
@@ -406,58 +635,71 @@ function EatChicken.StartCast(context)
 		for _, plan in ipairs(projectilePlans) do
 			longestTravelDuration = math.max(longestTravelDuration, tonumber(plan.travelDuration) or 0)
 			local hitPlayersForProjectile = {}
-
-			local hitbox
-			hitbox = CombatProjectileUtil.CreateTrackingHitbox({
+			local hitboxOptions: { [string]: any } = {
 				debugVisibilityAttribute = "BossHitboxesVisible",
 				hitboxOwner = bossModel,
-				getPosition = function()
+				duration = plan.travelDuration,
+				maxParts = PROJECTILE_MAX_PARTS,
+			}
+
+			if boneHitboxSize ~= nil and boneHitboxOffset ~= nil then
+				hitboxOptions.getCFrame = function()
+					if cancelled then
+						return nil
+					end
+
+					return getProjectileHitboxCFrame(plan, projectileStartedAt, boneHitboxOffset)
+				end
+				hitboxOptions.size = boneHitboxSize
+			else
+				hitboxOptions.getPosition = function()
 					if cancelled then
 						return nil
 					end
 
 					return getProjectilePosition(plan, projectileStartedAt)
-				end,
-				radius = PROJECTILE_RADIUS,
-				duration = plan.travelDuration,
-				maxParts = PROJECTILE_MAX_PARTS,
-				onHit = function(targetModel: Model)
-					local targetInfo = CombatMoveUtil.ResolveDamageTarget(targetModel)
-					if targetInfo == nil then
-						return
-					end
+				end
+				hitboxOptions.radius = FALLBACK_PROJECTILE_RADIUS
+			end
 
-					local player = targetInfo.player
-					if player == nil or hitPlayersForProjectile[player] == true then
-						return
-					end
+			local hitbox
+			hitboxOptions.onHit = function(targetModel: Model)
+				local targetInfo = CombatMoveUtil.ResolveDamageTarget(targetModel)
+				if targetInfo == nil then
+					return
+				end
 
-					hitPlayersForProjectile[player] = true
-					targetInfo.humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE))
+				local player = targetInfo.player
+				if player == nil or hitPlayersForProjectile[player] == true then
+					return
+				end
 
-					Knockback(targetInfo.character, "Default", {
-						Direction = buildKnockbackDirection(
-							getProjectilePosition(plan, projectileStartedAt),
-							bossRootPart,
-							targetInfo.rootPart
-						),
-						Duration = KNOCKBACK_DURATION,
-						RagdollDuration = RAGDOLL_DURATION,
-						Stun = STUN_DURATION,
-						IFrames = IFRAME_DURATION,
-						AntiStun = ANTI_STUN_DURATION,
-						GroundMode = "DeterministicMap",
-					})
-				end,
-				onDestroy = function()
-					for activeIndex, activeHitbox in ipairs(activeHitboxes) do
-						if activeHitbox == hitbox then
-							table.remove(activeHitboxes, activeIndex)
-							break
-						end
+				hitPlayersForProjectile[player] = true
+				targetInfo.humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, DAMAGE))
+
+				Knockback(targetInfo.character, "Default", {
+					Direction = buildKnockbackDirection(
+						getProjectilePosition(plan, projectileStartedAt),
+						bossRootPart,
+						targetInfo.rootPart
+					),
+					Duration = KNOCKBACK_DURATION,
+					RagdollDuration = RAGDOLL_DURATION,
+					Stun = STUN_DURATION,
+					IFrames = IFRAME_DURATION,
+					AntiStun = ANTI_STUN_DURATION,
+					GroundMode = "DeterministicMap",
+				})
+			end
+			hitboxOptions.onDestroy = function()
+				for activeIndex, activeHitbox in ipairs(activeHitboxes) do
+					if activeHitbox == hitbox then
+						table.remove(activeHitboxes, activeIndex)
+						break
 					end
-				end,
-			})
+				end
+			end
+			hitbox = CombatProjectileUtil.CreateTrackingHitbox(hitboxOptions)
 			table.insert(activeHitboxes, hitbox)
 		end
 

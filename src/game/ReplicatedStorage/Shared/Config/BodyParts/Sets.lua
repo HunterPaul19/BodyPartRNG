@@ -1533,12 +1533,12 @@ local Sets = {
 		},
 	},
 
-	massive_geezer_recolorable = {
-		id = "massive_geezer_recolorable",
+	massive_geezer = {
+		id = "massive_geezer",
 		displayName = "Massive Geezer",
-		sourceModelName = "Massive Geezer RECOLORABLE",
+		sourceModelName = "Massive Geezer",
 		assetGroup = "ImportedBoss",
-		assetModel = "massive_geezer_recolorable",
+		assetModel = "massive_geezer",
 		rollEnabled = false,
 		applyPlayerClothing = false,
 		rollDisplay = {
@@ -1551,12 +1551,12 @@ local Sets = {
 			fontWeight = Enum.FontWeight.Heavy,
 		},
 		piecesByRegion = {
-			Head = "massive_geezer_recolorable_head",
-			Torso = "massive_geezer_recolorable_torso",
-			LeftArm = "massive_geezer_recolorable_left_arm",
-			RightArm = "massive_geezer_recolorable_right_arm",
-			LeftLeg = "massive_geezer_recolorable_left_leg",
-			RightLeg = "massive_geezer_recolorable_right_leg",
+			Head = "massive_geezer_head",
+			Torso = "massive_geezer_torso",
+			LeftArm = "massive_geezer_left_arm",
+			RightArm = "massive_geezer_right_arm",
+			LeftLeg = "massive_geezer_left_leg",
+			RightLeg = "massive_geezer_right_leg",
 		},
 		strength = 7200,
 		health = 55000,

@@ -827,6 +827,146 @@ local rawOrdered: { RawAuraConfigEntry } = {
 			passiveIncomePerSecondBonus = 90,
 		},
 	},
+	{
+		id = "flame_guard_general",
+		setId = "flame_guard_general",
+		label = "Flame Guard General",
+		sortOrder = 550,
+		assetModelName = "Flame Guard General",
+		iconName = "Frost Guard",
+		bonuses = {
+			luckBonus = 0.86,
+			rollSpeedBonus = 0.43,
+			moneyMultiplier = 2.06,
+			passiveIncomePerSecondBonus = 125,
+		},
+	},
+	{
+		id = "captain_squid",
+		setId = "captain_squid",
+		label = "Captain Squid",
+		sortOrder = 560,
+		assetModelName = "Captain Squid",
+		iconName = "Squid",
+		bonuses = {
+			luckBonus = 0.95,
+			rollSpeedBonus = 0.475,
+			moneyMultiplier = 2.18,
+			passiveIncomePerSecondBonus = 150,
+		},
+	},
+	{
+		id = "merfin_the_great",
+		setId = "merfin_the_great",
+		label = "Merfin the Great",
+		sortOrder = 570,
+		assetModelName = "Merfin the Great",
+		iconName = "Alien",
+		bonuses = {
+			luckBonus = 1.05,
+			rollSpeedBonus = 0.525,
+			moneyMultiplier = 2.32,
+			passiveIncomePerSecondBonus = 175,
+		},
+	},
+	{
+		id = "oinan_thickhoof",
+		setId = "oinan_thickhoof",
+		label = "Oinan Thickhoof",
+		sortOrder = 580,
+		assetModelName = "Oinan Thickhoof",
+		iconName = "Werewolf",
+		bonuses = {
+			luckBonus = 1.17,
+			rollSpeedBonus = 0.585,
+			moneyMultiplier = 2.48,
+			passiveIncomePerSecondBonus = 225,
+		},
+	},
+	{
+		id = "magma_fiend",
+		setId = "magma_fiend",
+		label = "Magma Fiend",
+		sortOrder = 590,
+		assetModelName = "Magma Fiend",
+		iconName = "ElementalCrystalGolem",
+		bonuses = {
+			luckBonus = 1.3,
+			rollSpeedBonus = 0.65,
+			moneyMultiplier = 2.66,
+			passiveIncomePerSecondBonus = 275,
+		},
+	},
+	{
+		id = "broccoli_bro",
+		setId = "broccoli_bro",
+		label = "Broccoli Bro",
+		sortOrder = 600,
+		assetModelName = "Broccoli Bro",
+		iconName = "BananaBro",
+		bonuses = {
+			luckBonus = 1.45,
+			rollSpeedBonus = 0.725,
+			moneyMultiplier = 2.86,
+			passiveIncomePerSecondBonus = 350,
+		},
+	},
+	{
+		id = "destroyer_3000",
+		setId = "destroyer_3000",
+		label = "Destroyer 3000",
+		sortOrder = 610,
+		assetModelName = "Mech Armoured Mobile Suit Biped Colourable",
+		iconName = "GiantMech",
+		bonuses = {
+			luckBonus = 1.62,
+			rollSpeedBonus = 0.81,
+			moneyMultiplier = 3.08,
+			passiveIncomePerSecondBonus = 450,
+		},
+	},
+	{
+		id = "agrynoth",
+		setId = "agrynoth",
+		label = "Agrynoth",
+		sortOrder = 620,
+		assetModelName = "Agrynoth",
+		iconName = "TheRulk",
+		bonuses = {
+			luckBonus = 1.82,
+			rollSpeedBonus = 0.91,
+			moneyMultiplier = 3.34,
+			passiveIncomePerSecondBonus = 600,
+		},
+	},
+	{
+		id = "massive_geezer",
+		setId = "massive_geezer",
+		label = "Massive Geezer",
+		sortOrder = 630,
+		assetModelName = "Massive Geezer RECOLORABLE",
+		iconName = "AbsoluteUnit",
+		bonuses = {
+			luckBonus = 2.05,
+			rollSpeedBonus = 1.025,
+			moneyMultiplier = 3.65,
+			passiveIncomePerSecondBonus = 850,
+		},
+	},
+	{
+		id = "cat_mech_elite",
+		setId = "cat_mech_elite",
+		label = "Cat Mech Elite",
+		sortOrder = 640,
+		assetModelName = "Cat Mech Elite",
+		iconName = "CatMech",
+		bonuses = {
+			luckBonus = 2.3,
+			rollSpeedBonus = 1.15,
+			moneyMultiplier = 4,
+			passiveIncomePerSecondBonus = 1200,
+		},
+	},
 }
 
 local function buildDescription(label: string): string
@@ -984,7 +1124,6 @@ local function validateAndBuild(): ({ [string]: AuraConfigEntry }, { AuraConfigE
 	local bySetId: { [string]: AuraConfigEntry } = {}
 	local ordered: { AuraConfigEntry } = {}
 	local seenAssetModelNames = {}
-	local seenIconNames = {}
 	local aurasFolder = getAurasFolder()
 	local auraIconsFolder = getAuraIconsFolder()
 	local auraModelsByName = {}
@@ -1020,12 +1159,6 @@ local function validateAndBuild(): ({ [string]: AuraConfigEntry }, { AuraConfigE
 			table.insert(errors, string.format('Duplicate aura asset model "%s".', rawEntry.assetModelName))
 		else
 			seenAssetModelNames[rawEntry.assetModelName] = true
-		end
-
-		if seenIconNames[rawEntry.iconName] then
-			table.insert(errors, string.format('Duplicate aura icon "%s".', rawEntry.iconName))
-		else
-			seenIconNames[rawEntry.iconName] = true
 		end
 
 		local setConfig = BodyPartsCatalog.GetSet(rawEntry.setId)

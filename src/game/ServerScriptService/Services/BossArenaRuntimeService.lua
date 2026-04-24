@@ -4,6 +4,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TeleportService = game:GetService("TeleportService")
+local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 
 local BossArenaArrivalService = require(script.Parent.BossArenaArrivalService)
@@ -30,12 +31,19 @@ local LEASH_RADIUS_ATTRIBUTE_NAME = "BossLeashRadius"
 local PLAYER_SPAWN_VERTICAL_OFFSET = 4
 local PLAYER_SPAWN_RING_SIZE = 6
 local PLAYER_SPAWN_RING_RADIUS = 8
+local BOSS_INTRO_COUNTDOWN_SECONDS = 10
+local BOSS_INTRO_RISE_SECONDS = 2
+local BOSS_INTRO_UNDERGROUND_PADDING = 1
 local BOSS_ATTACK_SPAWN_DELAY_SECONDS = 5
 local BOSS_ENCOUNTER_DURATION_SECONDS = 180
 local BOSS_TIMEOUT_RETURN_ROUTE_ID = "return_to_boss_lobby"
 local BOSS_VICTORY_RETURN_DELAY_SECONDS = 10
 local CHARACTER_PLACEMENT_RETRY_COUNT = 20
 local CHARACTER_PLACEMENT_RETRY_INTERVAL_SECONDS = 0.1
+local BOSS_REWARD_DAMAGE_CONTRIBUTION_RATIO = 0.15
+local DAMAGE_LEADERSTAT_NAME = "Damage"
+local BOSS_INVULNERABLE_ATTRIBUTE = "BossM1Invulnerable"
+local BOSS_HITBOX_COLLIDER_NAME = "BossHitboxCollider"
 
 type CastState = {
 	castId: string,
@@ -63,6 +71,13 @@ type BossTimerState = {
 	durationSeconds: number,
 }
 
+type BossHitConfirmedPayload = {
+	bossId: string,
+	damage: number,
+	attackerUserId: number,
+	serverTime: number,
+}
+
 type EncounterState = {
 	payload: any,
 	bossId: string,
@@ -84,6 +99,8 @@ type EncounterState = {
 	rosterUserIds: { [number]: boolean },
 	rosterOrder: { number },
 	placedCharacters: { [number]: Model? },
+	damageByUserId: { [number]: number },
+	rewardEligibleDamageThreshold: number,
 	state: string,
 	currentTargetUserId: number?,
 	lastRetargetAt: number,
@@ -97,6 +114,12 @@ type EncounterState = {
 	timerStartedAtServerTime: number,
 	timerEndsAtServerTime: number,
 	timerPhase: string,
+	introFinalCFrame: CFrame?,
+	introRiseTween: Tween?,
+	introRiseCFrameValue: CFrameValue?,
+	introRiseCFrameConnection: RBXScriptConnection?,
+	introRiseCompletedConnection: RBXScriptConnection?,
+	introRiseAnchorStates: { [BasePart]: boolean }?,
 	rewardsGranted: boolean,
 	returnCountdownEndsAt: number?,
 	returnCountdownStartedAtServerTime: number?,
@@ -124,6 +147,7 @@ local BossArenaRuntimeService = {
 	_encounterStateListeners = {} :: { [(string?) -> ()]: boolean },
 	_bossHealthStateListeners = {} :: { [(BossHealthState?) -> ()]: boolean },
 	_bossTimerStateListeners = {} :: { [(BossTimerState?) -> ()]: boolean },
+	_bossHitConfirmedListeners = {} :: { [(BossHitConfirmedPayload) -> ()]: boolean },
 	_movePresentationListeners = {} :: { [(any) -> ()]: boolean },
 }
 
@@ -302,6 +326,39 @@ local function applyBossBodyCollisionGroup(bossModel: Model)
 	end
 end
 
+local function createBossHitboxCollider(bossModel: Model, bossRootPart: BasePart): BasePart
+	local existingCollider = bossModel:FindFirstChild(BOSS_HITBOX_COLLIDER_NAME)
+	if existingCollider then
+		existingCollider:Destroy()
+	end
+
+	local boundingCFrame, boundingSize = bossModel:GetBoundingBox()
+	local collider = Instance.new("Part")
+	collider.Name = BOSS_HITBOX_COLLIDER_NAME
+	collider.Size = Vector3.new(
+		math.max(0.1, boundingSize.X),
+		math.max(0.1, boundingSize.Y),
+		math.max(0.1, boundingSize.Z)
+	)
+	collider.CFrame = boundingCFrame
+	collider.Transparency = 1
+	collider.Anchored = false
+	collider.CanCollide = false
+	collider.CanTouch = false
+	collider.CanQuery = true
+	collider.Massless = true
+	collider.CollisionGroup = CombatConstants.COLLISION_GROUPS.BossBody
+	collider.Parent = bossModel
+
+	local weld = Instance.new("WeldConstraint")
+	weld.Name = "BossHitboxColliderWeld"
+	weld.Part0 = bossRootPart
+	weld.Part1 = collider
+	weld.Parent = collider
+
+	return collider
+end
+
 local function chooseWeightedMove(validMoves: { { move: any, context: any, effectiveWeight: number } }, rng: Random)
 	local totalWeight = 0
 	for _, entry in ipairs(validMoves) do
@@ -368,6 +425,59 @@ local function getPlayerByUserId(userId: number?): Player?
 	end
 
 	return nil
+end
+
+local function getOrCreateLeaderstats(player: Player): Folder
+	local existing = player:FindFirstChild("leaderstats")
+	if existing and existing:IsA("Folder") then
+		return existing
+	end
+	if existing then
+		existing:Destroy()
+	end
+
+	local folder = Instance.new("Folder")
+	folder.Name = "leaderstats"
+	folder.Parent = player
+	return folder
+end
+
+local function getOrCreateDamageLeaderstat(player: Player): IntValue
+	local leaderstats = getOrCreateLeaderstats(player)
+	local existing = leaderstats:FindFirstChild(DAMAGE_LEADERSTAT_NAME)
+	if existing and existing:IsA("IntValue") then
+		return existing
+	end
+	if existing then
+		existing:Destroy()
+	end
+
+	local value = Instance.new("IntValue")
+	value.Name = DAMAGE_LEADERSTAT_NAME
+	value.Value = 0
+	value.Parent = leaderstats
+	return value
+end
+
+local function setDamageLeaderstat(player: Player, damageAmount: number)
+	local damageValue = getOrCreateDamageLeaderstat(player)
+	local resolvedDamage = math.max(0, math.floor(tonumber(damageAmount) or 0))
+	if damageValue.Value ~= resolvedDamage then
+		damageValue.Value = resolvedDamage
+	end
+end
+
+function BossArenaRuntimeService:_syncDamageLeaderstats(encounter: EncounterState?)
+	if encounter == nil then
+		return
+	end
+
+	for userId in pairs(encounter.rosterUserIds) do
+		local player = getPlayerByUserId(userId)
+		if player then
+			setDamageLeaderstat(player, encounter.damageByUserId[userId] or 0)
+		end
+	end
 end
 
 local function buildSyntheticQueuedUserIds(requestingPlayer: Player?): { number }
@@ -484,6 +594,41 @@ local function getFeetAlignedBossSpawnCFrame(spawnCFrame: CFrame, humanoid: Huma
 	return withPosition(spawnCFrame, spawnCFrame.Position + Vector3.new(0, standingHeight, 0))
 end
 
+local function getUndergroundBossIntroCFrame(bossModel: Model, finalCFrame: CFrame): CFrame
+	local _, boundingSize = bossModel:GetBoundingBox()
+	local undergroundOffset = math.max(1, boundingSize.Y + BOSS_INTRO_UNDERGROUND_PADDING)
+	return withPosition(finalCFrame, finalCFrame.Position - Vector3.new(0, undergroundOffset, 0))
+end
+
+local function anchorBossModelForIntro(bossModel: Model): { [BasePart]: boolean }
+	local anchorStates = {}
+
+	for _, descendant in ipairs(bossModel:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			anchorStates[descendant] = descendant.Anchored
+			descendant.Anchored = true
+			descendant.AssemblyLinearVelocity = Vector3.zero
+			descendant.AssemblyAngularVelocity = Vector3.zero
+		end
+	end
+
+	return anchorStates
+end
+
+local function restoreBossAnchorStates(anchorStates: { [BasePart]: boolean }?)
+	if anchorStates == nil then
+		return
+	end
+
+	for part, wasAnchored in pairs(anchorStates) do
+		if part.Parent ~= nil then
+			part.Anchored = wasAnchored
+			part.AssemblyLinearVelocity = Vector3.zero
+			part.AssemblyAngularVelocity = Vector3.zero
+		end
+	end
+end
+
 local function collectArenaFloorRaycastRoots(arenaModel: Model): { Instance }
 	local roots = {}
 	for _, childName in ipairs({ "Visuals", "Map", "Floor", "Floors", "Ground" }) do
@@ -528,6 +673,9 @@ function BossArenaRuntimeService:_buildBossHealthState(encounter: EncounterState
 	if encounter == nil then
 		return nil
 	end
+	if encounter.timerPhase ~= "fight" and encounter.timerPhase ~= "return" then
+		return nil
+	end
 
 	local bossModel = encounter.bossModel
 	local bossHumanoid = encounter.bossHumanoid
@@ -557,6 +705,17 @@ function BossArenaRuntimeService:_buildBossTimerState(encounter: EncounterState?
 		return nil
 	end
 	if encounter.timedOut == true then
+		return nil
+	end
+	if encounter.timerPhase == "intro" then
+		return {
+			phase = "intro",
+			startsAtServerTime = encounter.timerStartedAtServerTime,
+			endsAtServerTime = encounter.timerEndsAtServerTime,
+			durationSeconds = BOSS_INTRO_COUNTDOWN_SECONDS,
+		}
+	end
+	if encounter.timerPhase == "intro_rise" then
 		return nil
 	end
 	if encounter.timerPhase == "return" then
@@ -646,6 +805,21 @@ function BossArenaRuntimeService:_notifyBossTimerStateChanged()
 	end
 end
 
+function BossArenaRuntimeService:_notifyBossHitConfirmed(hitPayload: BossHitConfirmedPayload)
+	local callbacks = {}
+
+	for callback in pairs(self._bossHitConfirmedListeners) do
+		table.insert(callbacks, callback)
+	end
+
+	for _, callback in ipairs(callbacks) do
+		local ok, err = pcall(callback, hitPayload)
+		if not ok then
+			warnWithPrefix(string.format("Boss hit callback failed: %s", tostring(err)))
+		end
+	end
+end
+
 function BossArenaRuntimeService:_bindBossHealthSignals(encounter: EncounterState)
 	disconnectConnections(encounter.bossHealthConnections)
 
@@ -673,6 +847,129 @@ function BossArenaRuntimeService:_bindBossHealthSignals(encounter: EncounterStat
 	end))
 end
 
+function BossArenaRuntimeService:_cleanupBossIntroRiseMotion(encounter: EncounterState, restoreAnchors: boolean)
+	if encounter.introRiseTween ~= nil then
+		encounter.introRiseTween:Cancel()
+		encounter.introRiseTween = nil
+	end
+	if encounter.introRiseCFrameConnection ~= nil then
+		encounter.introRiseCFrameConnection:Disconnect()
+		encounter.introRiseCFrameConnection = nil
+	end
+	if encounter.introRiseCompletedConnection ~= nil then
+		encounter.introRiseCompletedConnection:Disconnect()
+		encounter.introRiseCompletedConnection = nil
+	end
+	if encounter.introRiseCFrameValue ~= nil then
+		encounter.introRiseCFrameValue:Destroy()
+		encounter.introRiseCFrameValue = nil
+	end
+	if restoreAnchors then
+		restoreBossAnchorStates(encounter.introRiseAnchorStates)
+		encounter.introRiseAnchorStates = nil
+	end
+end
+
+function BossArenaRuntimeService:_activateBossFight(encounter: EncounterState)
+	if self._encounter ~= encounter then
+		return
+	end
+	if encounter.timerPhase ~= "intro_rise" then
+		return
+	end
+
+	self:_cleanupBossIntroRiseMotion(encounter, true)
+
+	local finalCFrame = encounter.introFinalCFrame
+	if finalCFrame ~= nil and encounter.bossModel.Parent ~= nil then
+		encounter.bossModel:PivotTo(finalCFrame)
+	end
+
+	local activatedAt = os.clock()
+	local activatedAtServerTime = Workspace:GetServerTimeNow()
+	encounter.timerPhase = "fight"
+	encounter.spawnedAt = activatedAt
+	encounter.timerStartedAt = activatedAt
+	encounter.timerEndsAt = activatedAt + BOSS_ENCOUNTER_DURATION_SECONDS
+	encounter.timerStartedAtServerTime = activatedAtServerTime
+	encounter.timerEndsAtServerTime = activatedAtServerTime + BOSS_ENCOUNTER_DURATION_SECONDS
+	encounter.nextAbilityAvailableAt = activatedAt + BOSS_ATTACK_SPAWN_DELAY_SECONDS
+	encounter.lastRetargetAt = 0
+	encounter.lastMoveCommandAt = 0
+	encounter.currentTargetUserId = nil
+
+	encounter.bossModel:SetAttribute(BOSS_INVULNERABLE_ATTRIBUTE, false)
+	encounter.bossHumanoid.WalkSpeed = encounter.bossDefinition.walkSpeed
+	encounter.bossHumanoid.AutoRotate = true
+	self:_setServerNetworkOwnership(encounter.bossModel)
+	if encounter.animationController then
+		encounter.animationController:SetLocomotionSuppressed(false)
+	end
+	self:_setState(encounter, "Idle")
+
+	self:_notifyBossHealthStateChanged()
+	self:_notifyBossTimerStateChanged()
+	self:_notifyEncounterStateChanged()
+
+	print(string.format(
+		"[BossArenaRuntimeService] Boss '%s' intro complete; fight timer started for %d second(s).",
+		encounter.bossId,
+		BOSS_ENCOUNTER_DURATION_SECONDS
+	))
+end
+
+function BossArenaRuntimeService:_beginBossIntroRise(encounter: EncounterState)
+	if self._encounter ~= encounter then
+		return
+	end
+	if encounter.timerPhase ~= "intro" then
+		return
+	end
+
+	local finalCFrame = encounter.introFinalCFrame
+	if finalCFrame == nil or encounter.bossModel.Parent == nil then
+		encounter.timerPhase = "intro_rise"
+		self:_activateBossFight(encounter)
+		return
+	end
+
+	encounter.timerPhase = "intro_rise"
+	self:_setState(encounter, "IntroRise")
+	self:_notifyBossTimerStateChanged()
+	self:_notifyEncounterStateChanged()
+
+	local cframeValue = Instance.new("CFrameValue")
+	cframeValue.Value = encounter.bossModel:GetPivot()
+	encounter.introRiseCFrameValue = cframeValue
+	encounter.introRiseCFrameConnection = cframeValue:GetPropertyChangedSignal("Value"):Connect(function()
+		if self._encounter ~= encounter or encounter.bossModel.Parent == nil then
+			return
+		end
+
+		encounter.bossModel:PivotTo(cframeValue.Value)
+	end)
+
+	local tween = TweenService:Create(
+		cframeValue,
+		TweenInfo.new(BOSS_INTRO_RISE_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{
+			Value = finalCFrame,
+		}
+	)
+	encounter.introRiseTween = tween
+	encounter.introRiseCompletedConnection = tween.Completed:Connect(function(playbackState: Enum.PlaybackState)
+		if self._encounter ~= encounter then
+			return
+		end
+		if playbackState ~= Enum.PlaybackState.Completed then
+			return
+		end
+
+		self:_activateBossFight(encounter)
+	end)
+	tween:Play()
+end
+
 function BossArenaRuntimeService:_destroyLingeringArtifacts()
 	local lingeringBoss = Workspace:FindFirstChild(ACTIVE_BOSS_MODEL_NAME)
 	if lingeringBoss then
@@ -687,6 +984,7 @@ end
 
 function BossArenaRuntimeService:_cleanupEncounterAssets(encounter: EncounterState)
 	self:_cancelActiveCast(encounter)
+	self:_cleanupBossIntroRiseMotion(encounter, true)
 	disconnectConnections(encounter.bossHealthConnections)
 
 	if encounter.animationController then
@@ -1084,16 +1382,21 @@ function BossArenaRuntimeService:_spawnBossEncounter(payload: any)
 
 	local bossSpawnCFrame = getFeetAlignedBossSpawnCFrame(bossSpawn.CFrame, bossHumanoid, bossRootPart)
 	bossModel:PivotTo(bossSpawnCFrame)
+	createBossHitboxCollider(bossModel, bossRootPart)
+	local bossIntroSpawnCFrame = getUndergroundBossIntroCFrame(bossModel, bossSpawnCFrame)
+	local introRiseAnchorStates = anchorBossModelForIntro(bossModel)
+	bossModel:PivotTo(bossIntroSpawnCFrame)
 	applyBossBaseHealth(bossHumanoid, bossDefinition.baseHealth)
 	applyBossHealthScaling(bossHumanoid, encounterScaling.healthMultiplier)
 
-	bossHumanoid.WalkSpeed = bossDefinition.walkSpeed
-	bossHumanoid.AutoRotate = true
-	self:_setServerNetworkOwnership(bossModel)
+	bossModel:SetAttribute(BOSS_INVULNERABLE_ATTRIBUTE, true)
+	bossHumanoid.WalkSpeed = 0
+	bossHumanoid.AutoRotate = false
 
 	local animationController = BossAnimationController.Attach(bossModel, bossHumanoid, {
 		scaleMultiplier = bossDefinition.scaleMultiplier,
 	})
+	animationController:SetLocomotionSuppressed(true)
 
 	local spawnedAt = os.clock()
 	local timerStartedAtServerTime = Workspace:GetServerTimeNow()
@@ -1118,19 +1421,27 @@ function BossArenaRuntimeService:_spawnBossEncounter(payload: any)
 		rosterUserIds = buildRosterUserIdSet(payload),
 		rosterOrder = table.clone(payload.queuedUserIds),
 		placedCharacters = {},
+		damageByUserId = {},
+		rewardEligibleDamageThreshold = math.max(0, bossHumanoid.MaxHealth * BOSS_REWARD_DAMAGE_CONTRIBUTION_RATIO),
 		state = "Spawning",
 		currentTargetUserId = nil,
 		lastRetargetAt = 0,
 		lastMoveCommandAt = 0,
-		nextAbilityAvailableAt = spawnedAt + BOSS_ATTACK_SPAWN_DELAY_SECONDS,
+		nextAbilityAvailableAt = math.huge,
 		cooldowns = {},
 		rng = Random.new(),
 		spawnedAt = spawnedAt,
 		timerStartedAt = spawnedAt,
-		timerEndsAt = spawnedAt + BOSS_ENCOUNTER_DURATION_SECONDS,
+		timerEndsAt = spawnedAt + BOSS_INTRO_COUNTDOWN_SECONDS,
 		timerStartedAtServerTime = timerStartedAtServerTime,
-		timerEndsAtServerTime = timerStartedAtServerTime + BOSS_ENCOUNTER_DURATION_SECONDS,
-		timerPhase = "fight",
+		timerEndsAtServerTime = timerStartedAtServerTime + BOSS_INTRO_COUNTDOWN_SECONDS,
+		timerPhase = "intro",
+		introFinalCFrame = bossSpawnCFrame,
+		introRiseTween = nil,
+		introRiseCFrameValue = nil,
+		introRiseCFrameConnection = nil,
+		introRiseCompletedConnection = nil,
+		introRiseAnchorStates = introRiseAnchorStates,
 		rewardsGranted = false,
 		returnCountdownEndsAt = nil,
 		returnCountdownStartedAtServerTime = nil,
@@ -1140,12 +1451,13 @@ function BossArenaRuntimeService:_spawnBossEncounter(payload: any)
 		bossHealthConnections = {},
 	}
 	self:_bindBossHealthSignals(self._encounter)
+	self:_syncDamageLeaderstats(self._encounter)
 
 	self:_positionQueuedPlayersIfNeeded(self._encounter)
-	self:_setState(self._encounter, "Idle")
+	self:_setState(self._encounter, "Intro")
 
 	print(string.format(
-		"[BossArenaRuntimeService] Spawned boss '%s' in arena '%s' from BossSpawn '%s' at %.2fx with aggro %.1f and leash %.1f.",
+		"[BossArenaRuntimeService] Spawned boss '%s' in arena '%s' from BossSpawn '%s' at %.2fx with aggro %.1f and leash %.1f; intro countdown started.",
 		bossId,
 		arenaId,
 		bossSpawn:GetFullName(),
@@ -1795,6 +2107,7 @@ function BossArenaRuntimeService:_heartbeat()
 		return
 	end
 
+	self:_syncDamageLeaderstats(encounter)
 	self:_positionQueuedPlayersIfNeeded(encounter)
 
 	if encounter.arenaModel.Parent == nil then
@@ -1803,6 +2116,15 @@ function BossArenaRuntimeService:_heartbeat()
 	end
 	if encounter.bossModel.Parent == nil then
 		self:_clearEncounter("Active boss model was removed from Workspace.")
+		return
+	end
+	if encounter.timerPhase == "intro" then
+		if os.clock() >= encounter.timerEndsAt then
+			self:_beginBossIntroRise(encounter)
+		end
+		return
+	end
+	if encounter.timerPhase == "intro_rise" then
 		return
 	end
 	if encounter.timerPhase == "return" then
@@ -1853,6 +2175,14 @@ function BossArenaRuntimeService:OnPlayerAdded(player: Player)
 
 	self:_bindPlayerCharacterPlacement(player)
 	self:_tryInitializeEncounterFromPlayer(player)
+	task.defer(function()
+		local encounter = self._encounter
+		if encounter then
+			self:_syncDamageLeaderstats(encounter)
+		elseif player.Parent == Players then
+			setDamageLeaderstat(player, 0)
+		end
+	end)
 end
 
 function BossArenaRuntimeService:OnPlayerRemoving(player: Player)
@@ -1895,6 +2225,79 @@ function BossArenaRuntimeService:GetActiveBossModel(): Model?
 	end
 
 	return bossModel
+end
+
+function BossArenaRuntimeService:IsActiveBossDamageable(): boolean
+	local encounter = self._encounter
+	if encounter == nil or encounter.timedOut == true then
+		return false
+	end
+	if encounter.timerPhase ~= "fight" then
+		return false
+	end
+
+	local bossModel = encounter.bossModel
+	local bossHumanoid = encounter.bossHumanoid
+	if bossModel.Parent == nil or bossHumanoid.Parent == nil then
+		return false
+	end
+	if bossModel:GetAttribute(BOSS_INVULNERABLE_ATTRIBUTE) == true then
+		return false
+	end
+
+	return bossHumanoid.Health > 0
+end
+
+function BossArenaRuntimeService:ApplyPlayerDamageToActiveBoss(player: Player, damageAmount: number): number
+	local encounter = self._encounter
+	if encounter == nil or encounter.rosterUserIds[player.UserId] ~= true then
+		return 0
+	end
+	if not self:IsActiveBossDamageable() then
+		return 0
+	end
+
+	local bossModel = encounter.bossModel
+	local bossHumanoid = encounter.bossHumanoid
+	if bossModel.Parent == nil or bossHumanoid.Parent == nil then
+		return 0
+	end
+
+	local previousHealth = math.max(0, tonumber(bossHumanoid.Health) or 0)
+	local resolvedDamage = math.max(0, tonumber(damageAmount) or 0)
+	local requestedDamage = math.min(resolvedDamage, previousHealth)
+	if requestedDamage <= 0 then
+		return 0
+	end
+
+	local previousTotalDamage = encounter.damageByUserId[player.UserId] or 0
+	encounter.damageByUserId[player.UserId] = previousTotalDamage + requestedDamage
+	setDamageLeaderstat(player, encounter.damageByUserId[player.UserId])
+
+	bossHumanoid:TakeDamage(requestedDamage)
+
+	local currentHealth = math.max(0, tonumber(bossHumanoid.Health) or 0)
+	local creditedDamage = math.clamp(previousHealth - currentHealth, 0, requestedDamage)
+	if creditedDamage <= 0 then
+		encounter.damageByUserId[player.UserId] = previousTotalDamage
+		setDamageLeaderstat(player, previousTotalDamage)
+		return 0
+	end
+
+	if creditedDamage ~= requestedDamage then
+		local totalDamage = previousTotalDamage + creditedDamage
+		encounter.damageByUserId[player.UserId] = totalDamage
+		setDamageLeaderstat(player, totalDamage)
+	end
+
+	self:_notifyBossHitConfirmed({
+		bossId = encounter.bossId,
+		damage = creditedDamage,
+		attackerUserId = player.UserId,
+		serverTime = Workspace:GetServerTimeNow(),
+	})
+
+	return creditedDamage
 end
 
 function BossArenaRuntimeService:GetBossHealthState(): BossHealthState?
@@ -1993,6 +2396,15 @@ function BossArenaRuntimeService:ConnectBossTimerStateChanged(callback: (BossTim
 
 	return function()
 		self._bossTimerStateListeners[callback] = nil
+	end
+end
+
+function BossArenaRuntimeService:ConnectBossHitConfirmed(callback: (BossHitConfirmedPayload) -> ()): () -> ()
+	assert(type(callback) == "function", "Boss hit callback must be a function.")
+	self._bossHitConfirmedListeners[callback] = true
+
+	return function()
+		self._bossHitConfirmedListeners[callback] = nil
 	end
 end
 

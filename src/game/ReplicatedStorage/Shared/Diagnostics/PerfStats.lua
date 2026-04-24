@@ -5,6 +5,7 @@ local PerfStats = {}
 
 local WARN_COOLDOWN_SECONDS = 5
 local MAX_SERIALIZE_DEPTH = 4
+local PAYLOAD_ESTIMATE_SAMPLE_INTERVAL = 10
 
 local THRESHOLDS = table.freeze({
 	BodyPartVisualsApply = { ms = 25 },
@@ -20,6 +21,7 @@ local THRESHOLDS = table.freeze({
 })
 
 local lastWarnAtByLabel: { [string]: number } = {}
+local payloadEstimateCountByLabel: { [string]: number } = {}
 
 local function toSafeValue(value: any, depth: number, seen: { [any]: boolean }): any
 	if depth >= MAX_SERIALIZE_DEPTH then
@@ -107,6 +109,17 @@ local function shouldWarn(label: string, elapsedMs: number, payloadBytes: number
 	return false
 end
 
+local function shouldEstimatePayloadBytes(label: string): boolean
+	local thresholds = THRESHOLDS[label]
+	if not (thresholds and thresholds.bytes) then
+		return false
+	end
+
+	local count = (payloadEstimateCountByLabel[label] or 0) + 1
+	payloadEstimateCountByLabel[label] = count
+	return count == 1 or count % PAYLOAD_ESTIMATE_SAMPLE_INTERVAL == 0
+end
+
 function PerfStats.Begin(): number
 	return os.clock()
 end
@@ -126,7 +139,7 @@ end
 function PerfStats.Measure(label: string, startedAt: number, metadata: { payload: any?, detail: string? }?): (number, number?)
 	local elapsedMs = (os.clock() - startedAt) * 1000
 	local payloadBytes = nil
-	if metadata and metadata.payload ~= nil then
+	if metadata and metadata.payload ~= nil and shouldEstimatePayloadBytes(label) then
 		payloadBytes = PerfStats.EstimatePayloadBytes(metadata.payload)
 	end
 

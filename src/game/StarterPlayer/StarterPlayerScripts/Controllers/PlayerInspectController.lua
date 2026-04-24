@@ -6,6 +6,7 @@ local UserInputService = game:GetService("UserInputService")
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
+local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local AuraPresentation = require(ReplicatedStorage.Shared.UI.AuraPresentation)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
@@ -1151,6 +1152,10 @@ function PlayerInspectController:_cacheUi(playerGui: PlayerGui)
 end
 
 function PlayerInspectController:OnStart()
+	if not PlaceProfile.IsFeatureEnabled("player_inspect") then
+		return
+	end
+
 	self:_ensureState()
 
 	local playerGui = LOCAL_PLAYER:WaitForChild("PlayerGui")

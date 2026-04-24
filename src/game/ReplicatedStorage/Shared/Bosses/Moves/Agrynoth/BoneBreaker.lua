@@ -31,6 +31,9 @@ local HAND_PART_NAME = "LeftHand"
 local HAND_GRIP_ATTACHMENT_NAME = "HandGripAttachment"
 local GROUND_RAYCAST_LIFT = 10
 local GROUND_RAYCAST_DEPTH = 260
+local EXPLOSION_HITBOX_HEIGHT = 24
+local EXPLOSION_HITBOX_DURATION_SECONDS = 0.12
+local MAX_EXPLOSION_HITBOX_PARTS = 128
 
 local HIT_SEQUENCE = table.freeze({
 	table.freeze({ radius = 14, damage = 260 }),
@@ -569,27 +572,57 @@ local function isAlivePlayerCharacter(character: Model?): boolean
 	return character ~= nil and character.Parent ~= nil and humanoid ~= nil and humanoid.Health > 0
 end
 
-local function applyAoeDamage(context, origin: Vector3, radius: number, damage: number)
-	local damagedCharacters = {}
+local function resolveExplosionHitboxCFrame(floorCFrame: CFrame): CFrame
+	return CFrame.new(floorCFrame.Position + Vector3.new(0, EXPLOSION_HITBOX_HEIGHT * 0.5, 0))
+end
 
-	for _, player in ipairs(Players:GetPlayers()) do
-		local character = player.Character
-		local humanoid = resolveHumanoid(character)
-		local rootPart = resolveRootPart(character)
-		if character == nil or humanoid == nil or humanoid.Health <= 0 or rootPart == nil then
-			continue
-		end
-		if damagedCharacters[character] == true then
-			continue
-		end
+local function resolveExplosionHitboxSize(radius: number): Vector3
+	local diameter = math.max(0, radius * 2)
+	return Vector3.new(diameter, EXPLOSION_HITBOX_HEIGHT, diameter)
+end
 
-		local offset = rootPart.Position - origin
-		local planarDistance = Vector3.new(offset.X, 0, offset.Z).Magnitude
-		if planarDistance <= radius then
-			damagedCharacters[character] = true
-			humanoid:TakeDamage(CombatMoveUtil.ResolveScaledBossDamage(context, damage))
-		end
+local function spawnExplosionHitbox(
+	context,
+	floorCFrame: CFrame,
+	radius: number,
+	damage: number,
+	guaranteedCharacter: Model?,
+	onDestroy: ((any) -> ())?
+)
+	local bossModel = context.bossModel
+	if bossModel == nil or bossModel.Parent == nil then
+		return nil
 	end
+
+	local hitTargets = {}
+	local resolvedDamage = CombatMoveUtil.ResolveScaledBossDamage(context, damage)
+	if guaranteedCharacter ~= nil and guaranteedCharacter.Parent ~= nil then
+		CombatMoveUtil.DamageOnce(hitTargets, guaranteedCharacter, resolvedDamage)
+	end
+
+	local hitbox
+	hitbox = Hitbox.new({
+		DebugVisibilityAttribute = "BossHitboxesVisible",
+		Character = bossModel,
+		HitboxCFrame = resolveExplosionHitboxCFrame(floorCFrame),
+		HitboxSize = resolveExplosionHitboxSize(radius),
+		HitboxType = "SpacialQuery",
+		Time = EXPLOSION_HITBOX_DURATION_SECONDS,
+		MaxParts = MAX_EXPLOSION_HITBOX_PARTS,
+	}, {
+		HitTarget = function(targetModel: Model)
+			CombatMoveUtil.DamageOnce(hitTargets, targetModel, resolvedDamage)
+		end,
+		HitboxDestroy = function()
+			if onDestroy then
+				onDestroy(hitbox)
+			end
+			hitbox = nil
+			hitTargets = {}
+		end,
+	})
+
+	return hitbox
 end
 
 function BoneBreaker.CanUse(context)
@@ -661,6 +694,7 @@ function BoneBreaker.StartCast(context)
 	local stoppedConnection = nil :: RBXScriptConnection?
 	local captiveState = nil
 	local activeGrabHitbox = nil
+	local activeExplosionHitboxes = {}
 	local grabbed = false
 	local hitIndex = 0
 	local slamSequence = 0
@@ -683,6 +717,22 @@ function BoneBreaker.StartCast(context)
 		activeGrabHitbox = nil
 	end
 
+	local function removeExplosionHitbox(hitbox)
+		local index = table.find(activeExplosionHitboxes, hitbox)
+		if index then
+			table.remove(activeExplosionHitboxes, index)
+		end
+	end
+
+	local function destroyExplosionHitboxes()
+		while #activeExplosionHitboxes > 0 do
+			local hitbox = table.remove(activeExplosionHitboxes)
+			if hitbox ~= nil then
+				hitbox:Destroy()
+			end
+		end
+	end
+
 	local function releaseCaptiveAndClear(restoreNetworkOwner: boolean)
 		local releasedTarget = releaseTarget(captiveState, restoreNetworkOwner)
 		captiveState = nil
@@ -697,6 +747,7 @@ function BoneBreaker.StartCast(context)
 		completed = true
 		context.EmitPresentation("stop")
 		destroyGrabHitbox()
+		destroyExplosionHitboxes()
 		releaseCaptiveAndClear(true)
 		recoveryEndsAt = os.clock() + (tonumber(context.move and context.move.recoverySeconds) or 0)
 	end
@@ -710,6 +761,7 @@ function BoneBreaker.StartCast(context)
 		context.EmitPresentation("stop")
 		disconnectStoppedConnection()
 		destroyGrabHitbox()
+		destroyExplosionHitboxes()
 		releaseCaptiveAndClear(restoreNetworkOwner)
 
 		if stopAnimation then
@@ -734,7 +786,18 @@ function BoneBreaker.StartCast(context)
 			return
 		end
 
-		applyAoeDamage(context, floorCFrame.Position, hitSpec.radius, hitSpec.damage)
+		local hitbox = spawnExplosionHitbox(
+			context,
+			floorCFrame,
+			hitSpec.radius,
+			hitSpec.damage,
+			captiveState.character,
+			removeExplosionHitbox
+		)
+		if hitbox ~= nil then
+			table.insert(activeExplosionHitboxes, hitbox)
+		end
+
 		context.EmitPresentation("impact", {
 			hitIndex = math.min(nextHitIndex, #HIT_SEQUENCE),
 			floorCFrame = floorCFrame,

@@ -64,28 +64,26 @@ function Handler:_chargeOinanCharge(record: ActiveRecord, event: PresentationEve
 	local payload = event.payload
 	local scaleMultiplier = math.max(0.1, tonumber(payload and payload.scaleMultiplier) or 1)
 	local durationSeconds = math.max(0.1, tonumber(payload and payload.durationSeconds) or 2)
-	local startCFrame = if typeof(payload) == "table" and typeof(payload.startCFrame) == "CFrame"
-		then payload.startCFrame
-		else bossRootPart.CFrame
 	local effectInstance = effectSource:Clone()
-	if effectInstance:IsA("Model") then
-		effectInstance:ScaleTo(scaleMultiplier)
-		self:prepareMovingEffectModel(effectInstance)
-		effectInstance:PivotTo(startCFrame)
-	elseif effectInstance:IsA("BasePart") then
-		effectInstance.Size *= scaleMultiplier
-		self:prepareMovingEffectPart(effectInstance)
-		effectInstance.CFrame = startCFrame
-	elseif effectInstance:IsA("PVInstance") then
-		effectInstance:PivotTo(startCFrame)
-	else
-		self:warnWithPrefix("Bull Charge RootPart VFX instance cannot be pivoted.")
+	if not effectInstance:IsA("Model") then
+		self:warnWithPrefix("Bull Charge RootPart VFX instance must be a Model to attach to the boss RootPart.")
 		effectInstance:Destroy()
 		self:_cleanupRecord(record)
 		return
 	end
 
-	effectInstance.Parent = self:_ensureCastFolder(record)
+	local castFolder = self:_ensureCastFolder(record)
+	effectInstance:ScaleTo(scaleMultiplier)
+	self:prepareAttachedEffectModel(effectInstance)
+	effectInstance.Parent = castFolder
+	record.rootModel = effectInstance
+
+	if not self:attachEffectModel(effectInstance, bossRootPart) then
+		self:warnWithPrefix("Bull Charge RootPart VFX model is missing BasePart configuration.")
+		self:_cleanupRecord(record)
+		return
+	end
+
 	clearChargeSoundDelays(effectInstance)
 	self:playAllSounds(effectInstance, scaleMultiplier)
 	self:emitEffectInstance(effectInstance, durationSeconds + 0.5)
@@ -96,6 +94,9 @@ Handler.moduleIds = {
 }
 Handler.actions = {
 	charge = Handler._chargeOinanCharge,
+}
+Handler.requiredParentFields = {
+	"rootModel",
 }
 Handler.requiresHandle = false
 

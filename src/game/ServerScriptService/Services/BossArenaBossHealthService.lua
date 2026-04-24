@@ -8,6 +8,7 @@ local REMOTES_FOLDER_NAME = "Remotes"
 local BOSS_ARENA_FOLDER_NAME = "BossArena"
 local GET_HEALTH_STATE_REMOTE_NAME = "GetBossHealthState"
 local HEALTH_STATE_CHANGED_REMOTE_NAME = "BossHealthStateChanged"
+local BOSS_HIT_CONFIRMED_REMOTE_NAME = "BossHitConfirmed"
 local ACTIVE_PROFILE_ID = "boss_arena"
 
 type BossHealthState = {
@@ -16,14 +17,23 @@ type BossHealthState = {
 	maxHealth: number,
 }
 
+type BossHitConfirmedPayload = {
+	bossId: string,
+	damage: number,
+	attackerUserId: number,
+	serverTime: number,
+}
+
 local remotesFolder: Folder? = nil
 local bossArenaFolder: Folder? = nil
 local getHealthStateRemote: RemoteFunction? = nil
 local healthStateChangedRemote: RemoteEvent? = nil
+local bossHitConfirmedRemote: RemoteEvent? = nil
 
 local BossArenaBossHealthService = {
 	_started = false,
 	_disconnectHealthListener = nil :: (() -> ())?,
+	_disconnectHitConfirmedListener = nil :: (() -> ())?,
 }
 
 local function isEnabledForPlace(): boolean
@@ -117,12 +127,42 @@ local function ensureHealthStateChangedRemote(): RemoteEvent
 	return remote
 end
 
+local function ensureBossHitConfirmedRemote(): RemoteEvent
+	local folder = ensureBossArenaFolder()
+	if bossHitConfirmedRemote and bossHitConfirmedRemote.Parent == folder then
+		return bossHitConfirmedRemote
+	end
+
+	local existing = folder:FindFirstChild(BOSS_HIT_CONFIRMED_REMOTE_NAME)
+	if existing and existing:IsA("RemoteEvent") then
+		bossHitConfirmedRemote = existing
+		return existing
+	end
+	if existing then
+		existing:Destroy()
+	end
+
+	local remote = Instance.new("RemoteEvent")
+	remote.Name = BOSS_HIT_CONFIRMED_REMOTE_NAME
+	remote.Parent = folder
+	bossHitConfirmedRemote = remote
+	return remote
+end
+
 local function broadcastHealthStateChanged()
 	local healthState = BossArenaRuntimeService:GetBossHealthState()
 	local remote = ensureHealthStateChangedRemote()
 
 	for _, player in ipairs(Players:GetPlayers()) do
 		remote:FireClient(player, healthState)
+	end
+end
+
+local function broadcastBossHitConfirmed(hitPayload: BossHitConfirmedPayload)
+	local remote = ensureBossHitConfirmedRemote()
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		remote:FireClient(player, hitPayload)
 	end
 end
 
@@ -138,6 +178,7 @@ function BossArenaBossHealthService:OnStart()
 
 	local getHealthState = ensureGetHealthStateRemote()
 	ensureHealthStateChangedRemote()
+	ensureBossHitConfirmedRemote()
 
 	getHealthState.OnServerInvoke = function(_player: Player): BossHealthState?
 		return BossArenaRuntimeService:GetBossHealthState()
@@ -145,6 +186,9 @@ function BossArenaBossHealthService:OnStart()
 
 	self._disconnectHealthListener = BossArenaRuntimeService:ConnectBossHealthStateChanged(function()
 		broadcastHealthStateChanged()
+	end)
+	self._disconnectHitConfirmedListener = BossArenaRuntimeService:ConnectBossHitConfirmed(function(hitPayload)
+		broadcastBossHitConfirmed(hitPayload)
 	end)
 
 	broadcastHealthStateChanged()

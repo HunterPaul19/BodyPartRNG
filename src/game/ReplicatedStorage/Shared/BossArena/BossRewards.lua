@@ -134,8 +134,8 @@ local PROFILE_SPECS = {
 		allowedRarities = { "Elite", "Apex" },
 	},
 	{
-		bossId = "Massive Geezer RECOLORABLE",
-		bossSetId = "massive_geezer_recolorable",
+		bossId = "Massive Geezer",
+		bossSetId = "massive_geezer",
 		lootFloorId = "Elite+",
 		allowedRarities = { "Elite", "Apex" },
 	},

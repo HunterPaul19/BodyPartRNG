@@ -3,6 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
+local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local StateUtil = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Utilities.StateUtil)
 
@@ -10,7 +11,7 @@ local ANIMATION_FADE_SECONDS = 0.08
 local ANIMATION_FOLDER_NAME = "OinanThickhoof"
 local ANIMATION_NAME = "Roar"
 local ROAR_MARKER_NAME = "Roar"
-local HITBOX_SCALE = 1.5
+local HITBOX_SCALE = 4.5
 local HITBOX_RADIUS = 50 * HITBOX_SCALE
 local HITBOX_HEIGHT = 100 * HITBOX_SCALE
 local HITBOX_DURATION_SECONDS = 0.12

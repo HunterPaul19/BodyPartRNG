@@ -6,6 +6,7 @@ local UserInputService = game:GetService("UserInputService")
 
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local PerfStats = require(ReplicatedStorage.Shared.Diagnostics.PerfStats)
+local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local TitleUtil = require(ReplicatedStorage.Shared.Titles.TitleUtil)
 local LOCAL_PLAYER = Players.LocalPlayer
 local THUMBNAIL_TYPE = Enum.ThumbnailType.HeadShot
@@ -13,6 +14,8 @@ local THUMBNAIL_SIZE = Enum.ThumbnailSize.Size420x420
 local LEADERBOARD_OPEN_POSITION = UDim2.fromScale(0.5, 0.5)
 local LEADERBOARD_CLOSED_POSITION = UDim2.fromScale(1.5, 0.5)
 local PANEL_TWEEN_INFO = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local BOSS_ARENA_PROFILE_ID = "boss_arena"
+local DAMAGE_LEADERSTAT_NAME = "Damage"
 
 local LeaderboardController = {}
 
@@ -28,6 +31,10 @@ local function getRichTitlePrefix(player: Player): string
 end
 
 local function formatRollCount(value: number): string
+	return NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0)))
+end
+
+local function formatWholeNumber(value: number): string
 	return NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0)))
 end
 
@@ -97,6 +104,10 @@ function LeaderboardController:_ensureState()
 	self._rowFramesByUserId = {}
 end
 
+function LeaderboardController:_isBossArenaMode(): boolean
+	return PlaceProfile.GetActiveProfile().id == BOSS_ARENA_PROFILE_ID
+end
+
 function LeaderboardController:_scheduleRefresh(delaySeconds: number?)
 	local delayTime = math.max(0, tonumber(delaySeconds) or 0)
 	local deadline = os.clock() + delayTime
@@ -148,6 +159,28 @@ function LeaderboardController:_getMoneyText(player: Player): string
 	return "0"
 end
 
+function LeaderboardController:_getDamageCount(player: Player): number
+	local stats = player:FindFirstChild("leaderstats")
+	if not stats then
+		return 0
+	end
+
+	local damage = stats:FindFirstChild(DAMAGE_LEADERSTAT_NAME)
+	if damage and (damage:IsA("IntValue") or damage:IsA("NumberValue")) then
+		return math.max(0, math.floor(damage.Value))
+	end
+
+	return 0
+end
+
+function LeaderboardController:_getSortValue(player: Player): number
+	if self:_isBossArenaMode() then
+		return self:_getDamageCount(player)
+	end
+
+	return self:_getRollCount(player)
+end
+
 function LeaderboardController:_getSortedPlayers(): { Player }
 	local entries = {}
 
@@ -155,13 +188,13 @@ function LeaderboardController:_getSortedPlayers(): { Player }
 		table.insert(entries, {
 			player = player,
 			name = player.Name,
-			rolls = self:_getRollCount(player),
+			sortValue = self:_getSortValue(player),
 		})
 	end
 
 	table.sort(entries, function(a, b)
-		if a.rolls ~= b.rolls then
-			return a.rolls > b.rolls
+		if a.sortValue ~= b.sortValue then
+			return a.sortValue > b.sortValue
 		end
 
 		local aName = string.lower(a.name)
@@ -195,12 +228,17 @@ function LeaderboardController:_configureRow(row: Frame, player: Player, order: 
 
 	local rollsLabel = row:FindFirstChild("Rolls")
 	if rollsLabel and rollsLabel:IsA("TextLabel") then
-		rollsLabel.Text = formatRollCount(self:_getRollCount(player))
+		rollsLabel.Visible = not self:_isBossArenaMode()
+		if rollsLabel.Visible then
+			rollsLabel.Text = formatRollCount(self:_getRollCount(player))
+		end
 	end
 
 	local moneyLabel = row:FindFirstChild("Money")
 	if moneyLabel and moneyLabel:IsA("TextLabel") then
-		moneyLabel.Text = self:_getMoneyText(player)
+		moneyLabel.Text = if self:_isBossArenaMode()
+			then formatWholeNumber(self:_getDamageCount(player))
+			else self:_getMoneyText(player)
 	end
 
 	local toggle = row:FindFirstChild("Toggle")
@@ -285,9 +323,32 @@ function LeaderboardController:_watchMoneyValue(moneyValue: StringValue, playerC
 	end))
 end
 
+function LeaderboardController:_watchDamageValue(damageValue: IntValue | NumberValue, playerConnections: { RBXScriptConnection })
+	table.insert(playerConnections, damageValue:GetPropertyChangedSignal("Value"):Connect(function()
+		self:_scheduleRefresh()
+	end))
+end
+
 function LeaderboardController:_watchLeaderstats(player: Player, playerConnections: { RBXScriptConnection })
 	local function bindLeaderstats(stats: Instance)
 		if not stats:IsA("Folder") or stats.Name ~= "leaderstats" then
+			return
+		end
+
+		if self:_isBossArenaMode() then
+			local damage = stats:FindFirstChild(DAMAGE_LEADERSTAT_NAME)
+			if damage and (damage:IsA("IntValue") or damage:IsA("NumberValue")) then
+				self:_watchDamageValue(damage, playerConnections)
+			end
+
+			table.insert(playerConnections, stats.ChildAdded:Connect(function(child)
+				if child.Name == DAMAGE_LEADERSTAT_NAME and (child:IsA("IntValue") or child:IsA("NumberValue")) then
+					self:_watchDamageValue(child, playerConnections)
+					self:_scheduleRefresh()
+				end
+			end))
+
+			self:_scheduleRefresh()
 			return
 		end
 
@@ -351,6 +412,10 @@ function LeaderboardController:_getSelectedRollCount(): string
 	local selectedPlayer = self._selectedPlayer
 	if not selectedPlayer then
 		return "0"
+	end
+
+	if self:_isBossArenaMode() then
+		return formatWholeNumber(self:_getDamageCount(selectedPlayer))
 	end
 
 	return formatRollCount(self:_getRollCount(selectedPlayer))
@@ -448,6 +513,9 @@ function LeaderboardController:_syncSelectedPlayerInfo()
 	ui.displayNameLabel.RichText = true
 	ui.displayNameLabel.Text = getRichDisplayName(selectedPlayer)
 	ui.usernameLabel.Text = "@" .. selectedPlayer.Name
+	if ui.rollInfoTitle and ui.rollInfoTitle:IsA("TextLabel") then
+		ui.rollInfoTitle.Text = if self:_isBossArenaMode() then "Damage" else "Rolls"
+	end
 	ui.rollInfoContext.Text = self:_getSelectedRollCount()
 	if ui.titleInfoTitle and ui.titleInfoTitle:IsA("TextLabel") then
 		ui.titleInfoTitle.Text = "Premium"
@@ -537,6 +605,30 @@ function LeaderboardController:_togglePanel()
 	self:_setPanelOpen(not self._panelOpen)
 end
 
+function LeaderboardController:_applyProfileModeUi()
+	local ui = self._ui
+	if not ui then
+		return
+	end
+
+	local isBossArenaMode = self:_isBossArenaMode()
+	if ui.headerRollsLabel and ui.headerRollsLabel:IsA("TextLabel") then
+		ui.headerRollsLabel.Visible = not isBossArenaMode
+	end
+	if ui.headerMoneyLabel and ui.headerMoneyLabel:IsA("TextLabel") then
+		ui.headerMoneyLabel.Text = if isBossArenaMode then "Damage" else "Money"
+	end
+	if ui.rollInfoTitle and ui.rollInfoTitle:IsA("TextLabel") then
+		ui.rollInfoTitle.Text = if isBossArenaMode then "Damage" else "Rolls"
+	end
+
+	local template = self._template
+	local templateRolls = if template then template:FindFirstChild("Rolls") else nil
+	if templateRolls and templateRolls:IsA("TextLabel") then
+		templateRolls.Visible = not isBossArenaMode
+	end
+end
+
 function LeaderboardController:_cacheUi(playerGui: PlayerGui)
 	local mainInterface = playerGui:WaitForChild("MainInterface", 30)
 	if not (mainInterface and mainInterface:IsA("ScreenGui")) then
@@ -552,8 +644,16 @@ function LeaderboardController:_cacheUi(playerGui: PlayerGui)
 	local scrollingFrame = inner:WaitForChild("ScrollingFrame", 30)
 	local template = scrollingFrame:WaitForChild("Template", 30)
 	local playerInfo = inner:WaitForChild("PlayerInfo", 30)
+	local topFrame = inner:WaitForChild("TopFrame", 30)
+	local rollInfo = playerInfo:WaitForChild("RollInfo", 30)
 
-	if not (scrollingFrame:IsA("ScrollingFrame") and template:IsA("Frame") and playerInfo:IsA("Frame")) then
+	if not (
+		scrollingFrame:IsA("ScrollingFrame")
+		and template:IsA("Frame")
+		and playerInfo:IsA("Frame")
+		and topFrame:IsA("Frame")
+		and rollInfo:IsA("Frame")
+	) then
 		error("Leaderboard UI hierarchy is missing required instances.")
 	end
 
@@ -564,10 +664,13 @@ function LeaderboardController:_cacheUi(playerGui: PlayerGui)
 	self._ui = {
 		displayNameLabel = playerInfo:WaitForChild("DisplayName"),
 		usernameLabel = playerInfo:WaitForChild("Username"),
-		rollInfoContext = playerInfo:WaitForChild("RollInfo"):WaitForChild("Context"),
+		rollInfoTitle = rollInfo:WaitForChild("Title"),
+		rollInfoContext = rollInfo:WaitForChild("Context"),
 		titleInfoTitle = playerInfo:WaitForChild("TitleInfo"):WaitForChild("Title"),
 		titleInfoContext = playerInfo:WaitForChild("TitleInfo"):WaitForChild("Context"),
-		rotateButton = inner:WaitForChild("TopFrame"):WaitForChild("RotateButton"),
+		headerRollsLabel = topFrame:WaitForChild("Rolls"),
+		headerMoneyLabel = topFrame:WaitForChild("Money"),
+		rotateButton = topFrame:WaitForChild("RotateButton"),
 		friendButton = playerInfo:WaitForChild("AddFriendButton"),
 		blockButton = playerInfo:WaitForChild("BlockButton"),
 		closeButton = playerInfo:WaitForChild("CloseButton"),
@@ -578,6 +681,7 @@ function LeaderboardController:_cacheUi(playerGui: PlayerGui)
 	self._template.Visible = false
 	self._playerInfo.Visible = false
 	self._ui.playerIconImage.Visible = true
+	self:_applyProfileModeUi()
 	self:_syncCollapseState()
 end
 

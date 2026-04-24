@@ -2558,6 +2558,8 @@ function BodyPartService:OnStart()
 	end
 
 	DataService.EquippedAuraChanged:Connect(function(player: Player)
+		BodyPartService:NotifyClient(player)
+		notifyLoadoutChanged(player)
 		requestAuraReapply(player, "equipped_aura_changed")
 	end)
 	PotionService.StateChanged:Connect(function(player: Player, bonuses: PotionRuntimeBonuses.RuntimeBonuses?)

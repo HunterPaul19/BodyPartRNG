@@ -99,6 +99,10 @@ local function buildEffectText(config: PotionConfig.PotionConfigEntry): string
 	if tonumber(config.luckBonus) and config.luckBonus > 0 then
 		return string.format("Effect: +%s Luck", formatDecimal(config.luckBonus))
 	end
+	local luckMultiplier = tonumber(config.luckMultiplier)
+	if luckMultiplier and luckMultiplier > 1 then
+		return string.format("Effect: x%s Luck", formatDecimal(luckMultiplier))
+	end
 	if tonumber(config.rollSpeedBonus) and config.rollSpeedBonus > 0 then
 		return string.format("Effect: +%s Roll Speed", formatDecimal(config.rollSpeedBonus))
 	end

@@ -2,12 +2,12 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local BossConfigFactory = require(ReplicatedStorage.Shared.Bosses.ConfigFactory)
 local BossMoveTags = require(ReplicatedStorage.Shared.Bosses.MoveTags)
-local AcidBreath = require(ReplicatedStorage.Shared.Bosses.Moves.MassiveGeezerRecolorable.AcidBreath)
-local BodySlam = require(ReplicatedStorage.Shared.Bosses.Moves.MassiveGeezerRecolorable.BodySlam)
-local EatChicken = require(ReplicatedStorage.Shared.Bosses.Moves.MassiveGeezerRecolorable.EatChicken)
+local AcidBreath = require(ReplicatedStorage.Shared.Bosses.Moves.MassiveGeezer.AcidBreath)
+local BodySlam = require(ReplicatedStorage.Shared.Bosses.Moves.MassiveGeezer.BodySlam)
+local EatChicken = require(ReplicatedStorage.Shared.Bosses.Moves.MassiveGeezer.EatChicken)
 
 return BossConfigFactory.Create({
-	bossId = "Massive Geezer RECOLORABLE",
+	bossId = "Massive Geezer",
 	arenaId = "Spire",
 	recommendedCombatScore = 8500,
 	baseHealth = 600000,
@@ -26,7 +26,7 @@ return BossConfigFactory.Create({
 			label = "Body Slam",
 			tags = { BossMoveTags.CloseSingle },
 			module = BodySlam,
-			moduleId = "Moves.MassiveGeezerRecolorable.BodySlam",
+			moduleId = "Moves.MassiveGeezer.BodySlam",
 			cooldownSeconds = 6.8,
 			weight = 2,
 			rootDuringCast = true,
@@ -37,7 +37,7 @@ return BossConfigFactory.Create({
 			label = "Acid Breath",
 			tags = { BossMoveTags.RangedSingle },
 			module = AcidBreath,
-			moduleId = "Moves.MassiveGeezerRecolorable.AcidBreath",
+			moduleId = "Moves.MassiveGeezer.AcidBreath",
 			cooldownSeconds = 9.5,
 			weight = 1,
 			rootDuringCast = true,
@@ -48,7 +48,7 @@ return BossConfigFactory.Create({
 			label = "Eat Chicken",
 			tags = { BossMoveTags.AOE },
 			module = EatChicken,
-			moduleId = "Moves.MassiveGeezerRecolorable.EatChicken",
+			moduleId = "Moves.MassiveGeezer.EatChicken",
 			cooldownSeconds = 13.0,
 			weight = 0.75,
 			rootDuringCast = true,

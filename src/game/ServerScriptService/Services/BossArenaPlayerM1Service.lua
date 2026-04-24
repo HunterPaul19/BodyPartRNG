@@ -386,6 +386,10 @@ function BossArenaPlayerM1Service:_spawnHitboxForSwing(player: Player, swingId: 
 		clearSwingState(player)
 		return
 	end
+	if not BossArenaRuntimeService:IsActiveBossDamageable() then
+		clearSwingState(player)
+		return
+	end
 
 	local hitboxSize, forwardOffset = resolveHitboxSizeAndForwardOffset(character, rootPart)
 	local damagedTarget = false
@@ -411,6 +415,9 @@ function BossArenaPlayerM1Service:_spawnHitboxForSwing(player: Player, swingId: 
 
 			local targetHumanoid = nil :: Humanoid?
 			if targetModel == bossModel then
+				if not BossArenaRuntimeService:IsActiveBossDamageable() then
+					return
+				end
 				if bossModel:GetAttribute(BOSS_INVULNERABLE_ATTRIBUTE) == true then
 					return
 				end
@@ -424,8 +431,16 @@ function BossArenaPlayerM1Service:_spawnHitboxForSwing(player: Player, swingId: 
 				return
 			end
 
+			local damage = resolvePlayerM1Damage(player)
+			if targetModel == bossModel then
+				if BossArenaRuntimeService:ApplyPlayerDamageToActiveBoss(player, damage) <= 0 then
+					return
+				end
+			else
+				targetHumanoid:TakeDamage(damage)
+			end
+
 			damagedTarget = true
-			targetHumanoid:TakeDamage(resolvePlayerM1Damage(player))
 		end,
 		HitboxDestroy = function()
 			if activeSwingByPlayer[player] == swingState then
@@ -465,6 +480,9 @@ function BossArenaPlayerM1Service:_handleRequest(player: Player, predictedAnimat
 	local bossHumanoid = resolveHumanoid(bossModel)
 	if bossModel == nil or bossHumanoid == nil or bossHumanoid.Health <= 0 then
 		return buildFailureResponse("NO_ACTIVE_BOSS")
+	end
+	if not BossArenaRuntimeService:IsActiveBossDamageable() then
+		return buildFailureResponse("BOSS_INACTIVE")
 	end
 
 	local character = player.Character

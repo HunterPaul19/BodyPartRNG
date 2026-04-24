@@ -5,6 +5,8 @@ local Workspace = game:GetService("Workspace")
 local Signal = require(ReplicatedStorage.Common.Signal)
 local PotionRuntimeBonuses = require(ReplicatedStorage.Shared.Character.PotionRuntimeBonuses)
 local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
+local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
+local BossArenaArrivalService = require(script.Parent.BossArenaArrivalService)
 local DataService = require(script.Parent.DataService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 
@@ -16,6 +18,7 @@ local TOGGLE_FAVORITE_REMOTE_NAME = "ToggleFavoriteOwnedPotion"
 local SELL_POTION_REMOTE_NAME = "SellOwnedPotion"
 local UPDATED_REMOTE_NAME = "PotionUpdated"
 local EXPIRY_POLL_INTERVAL = 0.25
+local BOSS_ARENA_PROFILE_ID = "boss_arena"
 
 type ActivePotionEntry = {
 	potionId: string,
@@ -239,6 +242,49 @@ local function clearExpiredPotionsForPlayer(player: Player): boolean
 	return normalizeRuntimeStateForPlayer(player)
 end
 
+local function buildRemainingByPotionIdFromSnapshot(snapshot: any): { [string]: number }?
+	if typeof(snapshot) ~= "table" then
+		return nil
+	end
+
+	local capturedAtUnix = math.max(0, math.floor(tonumber(snapshot.capturedAtUnix) or 0))
+	if capturedAtUnix <= 0 then
+		return nil
+	end
+
+	local elapsedSeconds = math.max(0, os.time() - capturedAtUnix)
+	local activeByPotionId = {}
+	if typeof(snapshot.activeByPotionId) == "table" then
+		for potionId, remainingSeconds in pairs(snapshot.activeByPotionId) do
+			local normalizedPotionId = PotionConfig.NormalizeId(potionId)
+			local config = PotionConfig.Get(normalizedPotionId)
+			local resolvedRemainingSeconds = math.max(0, math.floor(tonumber(remainingSeconds) or 0) - elapsedSeconds)
+			if normalizedPotionId and config and resolvedRemainingSeconds > 0 then
+				activeByPotionId[normalizedPotionId] = math.max(
+					resolvedRemainingSeconds,
+					tonumber(activeByPotionId[normalizedPotionId]) or 0
+				)
+			end
+		end
+	end
+
+	return if next(activeByPotionId) ~= nil then activeByPotionId else nil
+end
+
+local function getPotionSnapshotFromArrivalPayload(player: Player): any?
+	if PlaceProfile.GetActiveProfile().id ~= BOSS_ARENA_PROFILE_ID then
+		return nil
+	end
+
+	local payload = BossArenaArrivalService:GetArrivalPayload(player)
+	local potionEffectsByUserId = if payload then payload.potionEffectsByUserId else nil
+	if typeof(potionEffectsByUserId) ~= "table" then
+		return nil
+	end
+
+	return potionEffectsByUserId[tostring(player.UserId)]
+end
+
 function PotionService:GetRuntimeBonuses(player: Player)
 	local bonuses = PotionRuntimeBonuses.CreateEmpty()
 
@@ -264,6 +310,45 @@ end
 function PotionService:NotifyClient(player: Player, message: string?)
 	ensureUpdatedRemote():FireClient(player, self:GetPotionState(player, message))
 	self.StateChanged:Fire(player, self:GetRuntimeBonuses(player))
+end
+
+function PotionService:BuildTeleportSnapshot(player: Player): any?
+	local activeByPotionId = {}
+	local now = getServerTimeNow()
+
+	for potionId, expiresAt in pairs(buildNormalizedActiveByPotionId(runtimeActiveByPlayer[player], now)) do
+		local remainingSeconds = math.max(0, math.ceil(expiresAt - now))
+		if remainingSeconds > 0 then
+			activeByPotionId[potionId] = remainingSeconds
+		end
+	end
+
+	if next(activeByPotionId) == nil then
+		return nil
+	end
+
+	return {
+		capturedAtUnix = os.time(),
+		activeByPotionId = activeByPotionId,
+	}
+end
+
+function PotionService:ApplyTeleportSnapshot(player: Player, snapshot: any): boolean
+	local remainingByPotionId = buildRemainingByPotionIdFromSnapshot(snapshot)
+	if remainingByPotionId == nil then
+		return false
+	end
+
+	local now = getServerTimeNow()
+	local activeByPotionId = {}
+	for potionId, remainingSeconds in pairs(remainingByPotionId) do
+		activeByPotionId[potionId] = now + remainingSeconds
+	end
+
+	setRuntimeState(player, buildNormalizedActiveByPotionId(activeByPotionId, now))
+	DataService:SetPotionActiveRemainingMap(player, remainingByPotionId)
+	self:NotifyClient(player)
+	return true
 end
 
 function PotionService:GrantPotionUses(player: Player, potionId: string, amount: number): (boolean, string)
@@ -527,7 +612,11 @@ function PotionService:OnStart()
 			end
 		end
 		setRuntimeState(player, buildNormalizedActiveByPotionId(activeByPotionId, now))
-		PotionService:NotifyClient(player)
+
+		local appliedTeleportSnapshot = PotionService:ApplyTeleportSnapshot(player, getPotionSnapshotFromArrivalPayload(player))
+		if not appliedTeleportSnapshot then
+			PotionService:NotifyClient(player)
+		end
 	end)
 
 	DataService.PlayerDataRemoving:Connect(function(player: Player)
