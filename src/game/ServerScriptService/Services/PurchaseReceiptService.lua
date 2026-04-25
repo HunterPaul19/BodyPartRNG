@@ -25,6 +25,8 @@ local MARKETPLACE_UPDATED_REMOTE_NAME = "Updated"
 local PASS_OWNERSHIP_CACHE_TTL_SECONDS = 300
 local PASS_OWNERSHIP_RETRY_BACKOFF_SECONDS = 30
 local PASS_VALIDATION_CACHE_TTL_SECONDS = 300
+local MARKETPLACE_ENTITLEMENT_REPAIR_UPDATE_TYPE = "MarketplaceEntitlementRepair"
+local PASS_PROMPT_RETRY_DELAYS_SECONDS = { 1, 3, 8, 15 }
 
 local PurchaseReceipt = {}
 
@@ -62,6 +64,7 @@ local cachedPassOwnershipByUserId: {
 		},
 	},
 } = {}
+local pendingPassPromptRetriesByUserId: { [number]: { [string]: any } } = {}
 
 local function ensureRemotesFolder(): Folder
 	if remotesFolder and remotesFolder.Parent == ReplicatedStorage then
@@ -278,6 +281,10 @@ local function getOwnedPassOfferMap(player: Player)
 	return ownedPasses
 end
 
+local function freezeMapPayload(source: { [string]: boolean })
+	return table.freeze(table.clone(source))
+end
+
 local function hasPermanentOwnershipInState(state: any, offer: any): boolean
 	if typeof(state) ~= "table" or typeof(offer) ~= "table" then
 		return false
@@ -312,6 +319,29 @@ local function cachePassOwnership(userId: number, offerKey: string, isOwned: boo
 	}
 end
 
+local function clearCachedPassOwnership(userId: number, offerKey: string?)
+	local resolvedUserId = math.max(0, math.floor(tonumber(userId) or 0))
+	if resolvedUserId <= 0 then
+		return
+	end
+
+	local ownershipByOfferKey = cachedPassOwnershipByUserId[resolvedUserId]
+	if ownershipByOfferKey == nil then
+		return
+	end
+
+	local resolvedOfferKey = normalizeString(offerKey)
+	if resolvedOfferKey == "" then
+		cachedPassOwnershipByUserId[resolvedUserId] = nil
+		return
+	end
+
+	ownershipByOfferKey[resolvedOfferKey] = nil
+	if next(ownershipByOfferKey) == nil then
+		cachedPassOwnershipByUserId[resolvedUserId] = nil
+	end
+end
+
 local function getCachedPassOwnership(userId: number, offerKey: string): (boolean?, boolean)
 	local resolvedUserId = math.max(0, math.floor(tonumber(userId) or 0))
 	local resolvedOfferKey = normalizeString(offerKey)
@@ -329,7 +359,7 @@ local function getCachedPassOwnership(userId: number, offerKey: string): (boolea
 	return cachedEntry.isOwned == true, now < cachedEntry.nextRetryAt
 end
 
-local function queryGamePassOwnership(userId: number, offer: any): (boolean?, string?)
+local function queryGamePassOwnership(userId: number, offer: any, options: any?): (boolean?, string?)
 	if typeof(offer) ~= "table" then
 		return nil, "Marketplace offer is missing."
 	end
@@ -339,8 +369,9 @@ local function queryGamePassOwnership(userId: number, offer: any): (boolean?, st
 		return nil, "Marketplace offer is not a pass."
 	end
 
+	local forceRefresh = typeof(options) == "table" and options.forceRefresh == true
 	local cachedOwnership, canReuseCachedOwnership = getCachedPassOwnership(userId, offer.offerKey)
-	if canReuseCachedOwnership then
+	if not forceRefresh and canReuseCachedOwnership then
 		return cachedOwnership == true, nil
 	end
 
@@ -620,23 +651,25 @@ local function isPlayerLoaded(player: Player): boolean
 	return DataService:Get(player) ~= nil
 end
 
-local function resolvePassOwnership(player: Player, offer: any, options: any?): boolean
+local function resolvePassOwnership(player: Player, offer: any, options: any?): (boolean, boolean)
 	if typeof(offer) ~= "table" then
-		return false
+		return false, false
 	end
 
 	local sale = offer.selfPurchase
 	if typeof(sale) ~= "table" or sale.saleKind ~= "pass" or typeof(sale.robloxId) ~= "number" then
-		return getOwnedOffers(player)[offer.offerKey] == true
+		return getOwnedOffers(player)[offer.offerKey] == true, true
 	end
 
 	local forceRefresh = typeof(options) == "table" and options.forceRefresh == true
 	local cachedOwnership, hasReusableCache = getCachedPassOwnership(player.UserId, offer.offerKey)
 	if not forceRefresh and hasReusableCache then
-		return cachedOwnership == true or getOwnedOffers(player)[offer.offerKey] == true
+		return cachedOwnership == true or getOwnedOffers(player)[offer.offerKey] == true, true
 	end
 
-	local has, queryError = queryGamePassOwnership(player.UserId, offer)
+	local has, queryError = queryGamePassOwnership(player.UserId, offer, {
+		forceRefresh = forceRefresh,
+	})
 	if has == true then
 		local context = makePurchaseContext(offer, sale, {
 			source = "join",
@@ -644,7 +677,7 @@ local function resolvePassOwnership(player: Player, offer: any, options: any?): 
 			recipientUserId = player.UserId,
 		})
 		context.isNew = markPurchaseRecorded(player, offer, sale, context)
-		return true
+		return true, true
 	end
 
 	if queryError ~= nil and string.find(string.lower(queryError), "toomanyrequests", 1, true) ~= nil then
@@ -657,7 +690,11 @@ local function resolvePassOwnership(player: Player, offer: any, options: any?): 
 		))
 	end
 
-	return getOwnedOffers(player)[offer.offerKey] == true
+	if queryError == nil then
+		return getOwnedOffers(player)[offer.offerKey] == true, true
+	end
+
+	return getOwnedOffers(player)[offer.offerKey] == true, false
 end
 
 local function ownsOffer(player: Player, offer: any, options: any?): boolean
@@ -670,7 +707,8 @@ local function ownsOffer(player: Player, offer: any, options: any?): boolean
 	end
 
 	if offer.kind == "pass" and typeof(options) == "table" and options.allowPassRefresh == true then
-		return resolvePassOwnership(player, offer, options)
+		local ownsPass = resolvePassOwnership(player, offer, options)
+		return ownsPass == true
 	end
 
 	return false
@@ -755,15 +793,33 @@ local function promptPassPurchase(player: Player, robloxId: number): (boolean, s
 end
 
 local function filterPassOwnedKeys(player: Player)
-	return table.freeze(getOwnedPassOfferMap(player))
+	return freezeMapPayload(getOwnedPassOfferMap(player))
 end
 
+local stopPendingPassPromptRetry
+
 local function emitOwnedEvents(player: Player)
+	for offerKey in pairs(getOwnedOffers(player)) do
+		stopPendingPassPromptRetry(player, offerKey)
+	end
+
 	PurchaseReceipt.OwnedPassesReady:Fire(player, filterPassOwnedKeys(player))
-	PurchaseReceipt.OwnedEntitlementsReady:Fire(player, table.freeze(getOwnedOffers(player)))
+	PurchaseReceipt.OwnedEntitlementsReady:Fire(player, freezeMapPayload(getOwnedOffers(player)))
 
 	if marketplaceUpdatedRemote then
 		marketplaceUpdatedRemote:FireClient(player)
+	end
+end
+
+stopPendingPassPromptRetry = function(player: Player, offerKey: string)
+	local userRetries = pendingPassPromptRetriesByUserId[player.UserId]
+	if userRetries == nil then
+		return
+	end
+
+	userRetries[offerKey] = nil
+	if next(userRetries) == nil then
+		pendingPassPromptRetriesByUserId[player.UserId] = nil
 	end
 end
 
@@ -772,19 +828,28 @@ local function reconcileOwnedOffersOnJoin(player: Player)
 		return
 	end
 
+	rebuildOwnedOfferCache(player)
+
+	local verifiedOwnershipByKey = {}
 	for _, offer in pairs(MarketplaceCatalog.Offers) do
 		if offer.kind == "pass" then
-			resolvePassOwnership(player, offer, {
+			local _, isVerified = resolvePassOwnership(player, offer, {
 				forceRefresh = true,
 			})
+			verifiedOwnershipByKey[offer.offerKey] = isVerified == true
 		end
 	end
 
 	local owned = getOwnedOffers(player)
 	for _, offer in pairs(MarketplaceCatalog.Offers) do
+		if offer.kind == "pass" and owned[offer.offerKey] ~= true and verifiedOwnershipByKey[offer.offerKey] ~= true then
+			continue
+		end
+
 		local _, _ = callHandler(offer, "reconcileOnJoin", player, {
 			offerKey = offer.offerKey,
 			isOwned = owned[offer.offerKey] == true,
+			ownershipVerified = if offer.kind == "pass" then verifiedOwnershipByKey[offer.offerKey] == true else true,
 		})
 	end
 
@@ -823,6 +888,96 @@ local function processEntitlementGrant(player: Player, offer: any, sale: any, co
 
 	sendPurchaseThanks(player, offer.offerKey, context.source, context.purchaseKind)
 	return true, nil
+end
+
+local function processPassPromptGrant(player: Player, offer: any, sale: any): (boolean, string?)
+	if typeof(player) ~= "Instance" or not player:IsA("Player") or player.Parent ~= Players then
+		return true, nil
+	end
+	if typeof(sale) ~= "table" then
+		return false, "Pass sale data is missing."
+	end
+	if not isPlayerLoaded(player) then
+		return false, "Player data is not loaded."
+	end
+
+	clearCachedPassOwnership(player.UserId, offer.offerKey)
+	local context = makePurchaseContext(offer, sale, {
+		source = "prompt",
+		purchaseKind = "self",
+		senderUserId = player.UserId,
+		recipientUserId = player.UserId,
+	})
+	local granted, err = processEntitlementGrant(player, offer, sale, context)
+	if not granted then
+		return false, err
+	end
+
+	emitOwnedEvents(player)
+	return true, nil
+end
+
+local function schedulePassPromptGrantRetry(player: Player, offer: any, sale: any, reason: string?)
+	if typeof(player) ~= "Instance" or not player:IsA("Player") then
+		return
+	end
+
+	local userRetries = pendingPassPromptRetriesByUserId[player.UserId]
+	if userRetries == nil then
+		userRetries = {}
+		pendingPassPromptRetriesByUserId[player.UserId] = userRetries
+	end
+
+	local retryToken = {}
+	userRetries[offer.offerKey] = retryToken
+
+	if reason and reason ~= "" then
+		warn(string.format("[PurchaseReceipt] Scheduling pass prompt retry for '%s': %s", tostring(offer.offerKey), reason))
+	end
+
+	for attempt, delaySeconds in ipairs(PASS_PROMPT_RETRY_DELAYS_SECONDS) do
+		task.delay(delaySeconds, function()
+			local currentRetries = pendingPassPromptRetriesByUserId[player.UserId]
+			if currentRetries == nil or currentRetries[offer.offerKey] ~= retryToken then
+				return
+			end
+			if player.Parent ~= Players then
+				stopPendingPassPromptRetry(player, offer.offerKey)
+				return
+			end
+			if not isPlayerLoaded(player) then
+				if attempt == #PASS_PROMPT_RETRY_DELAYS_SECONDS then
+					warn(string.format(
+						"[PurchaseReceipt] Pass prompt retry exhausted for '%s' userId=%d: Player data is not loaded.",
+						tostring(offer.offerKey),
+						player.UserId
+					))
+					stopPendingPassPromptRetry(player, offer.offerKey)
+				end
+				return
+			end
+			if getOwnedOffers(player)[offer.offerKey] == true then
+				stopPendingPassPromptRetry(player, offer.offerKey)
+				return
+			end
+
+			local granted, err = processPassPromptGrant(player, offer, sale)
+			if granted then
+				stopPendingPassPromptRetry(player, offer.offerKey)
+				return
+			end
+
+			if attempt == #PASS_PROMPT_RETRY_DELAYS_SECONDS then
+				warn(string.format(
+					"[PurchaseReceipt] Pass prompt retry exhausted for '%s' userId=%d: %s",
+					tostring(offer.offerKey),
+					player.UserId,
+					tostring(err or "unknown error")
+				))
+				stopPendingPassPromptRetry(player, offer.offerKey)
+			end
+		end)
+	end
 end
 
 local function processGiftDelivery(player: Player, giftRecord: any)
@@ -902,6 +1057,90 @@ local function processMarketplaceGiftUpdate(player: Player, data: any)
 		createdAt = math.max(0, math.floor(tonumber(gift.createdAt or data.sendTime) or 0)),
 		deliveredAt = 0,
 	})
+end
+
+local function makeRepairPayload(adminPlayer: Player, targetUserId: number, offerKey: string, reason: string)
+	return {
+		repairId = string.format(
+			"support:%d:%d:%s:%d",
+			adminPlayer.UserId,
+			targetUserId,
+			offerKey,
+			os.time()
+		),
+		offerKey = offerKey,
+		reason = reason,
+		adminUserId = adminPlayer.UserId,
+		createdAt = os.time(),
+	}
+end
+
+local function applyEntitlementRepair(player: Player, repairPayload: any): (boolean, string?, any?)
+	if typeof(repairPayload) ~= "table" then
+		return false, "Repair payload must be a table.", nil
+	end
+	if not isPlayerLoaded(player) then
+		return false, "Player data is not loaded.", nil
+	end
+
+	local offerKey = normalizeString(repairPayload.offerKey)
+	local offer = getOffer(offerKey)
+	if not offer then
+		return false, "That offer does not exist.", nil
+	end
+	if offer.grantMode == "repeatable" then
+		return false, "Repeatable products cannot be repaired as permanent entitlements.", nil
+	end
+
+	local sale = getSaleDefinition(offer, "self")
+	if typeof(sale) ~= "table" then
+		sale = {
+			saleKind = "support",
+			robloxId = 0,
+		}
+	end
+
+	local alreadyOwned = hasPermanentOwnershipInState(getMarketplaceState(player), offer)
+	local context = makePurchaseContext(offer, sale, {
+		source = "support_repair",
+		purchaseKind = "support",
+		purchaseId = normalizeString(repairPayload.repairId),
+		senderUserId = math.max(0, math.floor(tonumber(repairPayload.adminUserId) or 0)),
+		recipientUserId = player.UserId,
+	})
+	context.reason = normalizeString(repairPayload.reason)
+
+	local granted, err = processEntitlementGrant(player, offer, sale, context)
+	if not granted then
+		return false, err or "Failed to repair entitlement.", nil
+	end
+
+	emitOwnedEvents(player)
+	return true, nil, {
+		offerKey = offer.offerKey,
+		alreadyOwned = alreadyOwned,
+		isNew = context.isNew == true,
+	}
+end
+
+local function processMarketplaceEntitlementRepairUpdate(player: Player, data: any)
+	if
+		typeof(data) ~= "table"
+		or data.updateType ~= MARKETPLACE_ENTITLEMENT_REPAIR_UPDATE_TYPE
+		or typeof(data.data) ~= "table"
+	then
+		return
+	end
+
+	local repaired, err = applyEntitlementRepair(player, data.data)
+	if not repaired then
+		warn(string.format(
+			"[PurchaseReceipt] Entitlement repair failed for %s(%d): %s",
+			player.Name,
+			player.UserId,
+			tostring(err or "unknown error")
+		))
+	end
 end
 
 local function processProductReceipt(receiptInfo)
@@ -1012,7 +1251,7 @@ end
 
 local function onPromptGamePassFinished(a, b, c)
 	local player, gamePassId, wasPurchased = unpackPromptGamePassArgs(a, b, c)
-	if not player or not gamePassId or not wasPurchased or not isPlayerLoaded(player) then
+	if not player or not gamePassId or not wasPurchased then
 		return
 	end
 
@@ -1023,21 +1262,16 @@ local function onPromptGamePassFinished(a, b, c)
 	end
 
 	local sale = offer.selfPurchase
-	local context = makePurchaseContext(offer, sale, {
-		source = "prompt",
-		purchaseKind = "self",
-		senderUserId = player.UserId,
-		recipientUserId = player.UserId,
-	})
-	local granted, err = processEntitlementGrant(player, offer, sale, context)
+	clearCachedPassOwnership(player.UserId, offer.offerKey)
+
+	local granted, err = processPassPromptGrant(player, offer, sale)
 	if not granted then
 		if err then
 			warn(string.format("[PurchaseReceipt] Pass prompt grant failed for '%s': %s", tostring(offer.offerKey), tostring(err)))
 		end
+		schedulePassPromptGrantRetry(player, offer, sale, err)
 		return
 	end
-
-	emitOwnedEvents(player)
 end
 
 function PurchaseReceipt:OnStart()
@@ -1132,6 +1366,10 @@ function PurchaseReceipt:OnStart()
 	end
 	DataService.GlobalUpdateProcessed:Connect(function(player: Player, _profile: any, data: any)
 		processMarketplaceGiftUpdate(player, data)
+		processMarketplaceEntitlementRepairUpdate(player, data)
+	end)
+	DataService.PlayerDataLoaded:Connect(function(player: Player)
+		reconcileOwnedOffersOnJoin(player)
 	end)
 end
 
@@ -1335,6 +1573,126 @@ function PurchaseReceipt:PromptGiftPurchase(player: Player, offerKey: string, re
 
 	StatsService:RecordPurchasePrompt(player, offerKey)
 	return true, "Gift purchase prompt opened."
+end
+
+function PurchaseReceipt:RepairEntitlementForUser(adminPlayer: Player, targetUserId: number, offerKey: string?, reason: string?)
+	if typeof(adminPlayer) ~= "Instance" or not adminPlayer:IsA("Player") then
+		return {
+			ok = false,
+			code = "BAD_REQUEST",
+			message = "A valid admin player is required.",
+			data = {},
+		}
+	end
+
+	local resolvedTargetUserId = math.floor(tonumber(targetUserId) or 0)
+	if resolvedTargetUserId <= 0 then
+		return {
+			ok = false,
+			code = "BAD_REQUEST",
+			message = "A valid target userId is required.",
+			data = {},
+		}
+	end
+
+	local resolvedOfferKey = normalizeString(offerKey)
+	if resolvedOfferKey == "" then
+		resolvedOfferKey = "vip_plus"
+	end
+
+	local offer = getOffer(resolvedOfferKey)
+	if not offer then
+		return {
+			ok = false,
+			code = "UNKNOWN_OFFER",
+			message = "That offer does not exist.",
+			data = {},
+		}
+	end
+	if offer.grantMode == "repeatable" then
+		return {
+			ok = false,
+			code = "REPEATABLE_OFFER",
+			message = "Repeatable products cannot be repaired as permanent entitlements.",
+			data = {
+				offerKey = resolvedOfferKey,
+			},
+		}
+	end
+
+	if offer.kind == "pass" then
+		clearCachedPassOwnership(resolvedTargetUserId, offer.offerKey)
+		local ownsPass, ownershipError = queryGamePassOwnership(resolvedTargetUserId, offer, {
+			forceRefresh = true,
+		})
+		if ownsPass ~= true or ownershipError ~= nil then
+			return {
+				ok = false,
+				code = "PASS_NOT_OWNED",
+				message = ownershipError
+					or string.format("Roblox does not report that user %d owns %s.", resolvedTargetUserId, getOfferDisplayName(offer.offerKey)),
+				data = {
+					offerKey = offer.offerKey,
+					userId = resolvedTargetUserId,
+				},
+			}
+		end
+	end
+
+	local repairPayload = makeRepairPayload(
+		adminPlayer,
+		resolvedTargetUserId,
+		offer.offerKey,
+		normalizeString(reason) ~= "" and normalizeString(reason) or "support_repair"
+	)
+	local targetPlayer = Players:GetPlayerByUserId(resolvedTargetUserId)
+	if targetPlayer and isPlayerLoaded(targetPlayer) then
+		local repaired, repairError, repairData = applyEntitlementRepair(targetPlayer, repairPayload)
+		if not repaired then
+			return {
+				ok = false,
+				code = "REPAIR_FAILED",
+				message = repairError or "Failed to repair entitlement.",
+				data = {
+					offerKey = offer.offerKey,
+					userId = resolvedTargetUserId,
+				},
+			}
+		end
+
+		return {
+			ok = true,
+			code = "OK",
+			message = string.format("Repaired %s for %s.", getOfferDisplayName(offer.offerKey), targetPlayer.Name),
+			data = repairData or {},
+		}
+	end
+
+	local queued, queueError = pcall(function()
+		DataService:SendGlobalUpdate(adminPlayer, resolvedTargetUserId, MARKETPLACE_ENTITLEMENT_REPAIR_UPDATE_TYPE, repairPayload)
+	end)
+	if not queued then
+		return {
+			ok = false,
+			code = "QUEUE_FAILED",
+			message = tostring(queueError),
+			data = {
+				offerKey = offer.offerKey,
+				userId = resolvedTargetUserId,
+			},
+		}
+	end
+
+	return {
+		ok = true,
+		code = "QUEUED",
+		message = string.format("Queued %s repair for user %d.", getOfferDisplayName(offer.offerKey), resolvedTargetUserId),
+		data = {
+			offerKey = offer.offerKey,
+			userId = resolvedTargetUserId,
+			repairId = repairPayload.repairId,
+		},
+	}
 end
 
 function PurchaseReceipt:PromptPassPurchase(player: Player, passIdOrKey: any): (boolean, string?)

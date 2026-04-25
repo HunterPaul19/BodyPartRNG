@@ -33,6 +33,18 @@ local ACTION_CONFIGS: { [string]: ActionConfig } = {
 		limit = 3,
 		windowSeconds = 1,
 	},
+	["remote.boss_arena.abandon"] = {
+		limit = 1,
+		windowSeconds = 2,
+	},
+	["remote.boss_arena.results_ready"] = {
+		limit = 3,
+		windowSeconds = 1,
+	},
+	["remote.boss_arena.results_return"] = {
+		limit = 1,
+		windowSeconds = 2,
+	},
 	["remote.appraisal.get_state"] = {
 		limit = 2,
 		windowSeconds = 1,

@@ -14,6 +14,7 @@ type RewardGrantEntry = {
 	displayName: string,
 	setId: string,
 	displayRarity: string,
+	displayOddsDenominator: number,
 	isBossPart: boolean,
 }
 
@@ -94,20 +95,43 @@ local function chooseWeightedSetFromPool(randomSource: Random, pool: { any }): a
 	end)
 end
 
-local function rollRewardRarity(randomSource: Random, floorPreset: BossRewards.LootFloorPreset): string?
-	local threshold = randomSource:NextNumber()
+local function rollRewardRarity(
+	randomSource: Random,
+	floorPreset: BossRewards.LootFloorPreset,
+	poolsByRarity: { [string]: { any } }
+): string?
+	local eligibleEntries = {}
+	local totalProbability = 0
+
+	for _, entry in ipairs(floorPreset.tierOddsOrdered) do
+		local rarityPool = poolsByRarity[entry.displayRarity]
+		local probability = math.max(0, tonumber(entry.probability) or 0)
+		if rarityPool ~= nil and #rarityPool > 0 and probability > 0 then
+			totalProbability += probability
+			table.insert(eligibleEntries, {
+				displayRarity = entry.displayRarity,
+				probability = probability,
+			})
+		end
+	end
+
+	if totalProbability <= 0 then
+		return nil
+	end
+
+	local threshold = randomSource:NextNumber() * totalProbability
 	local cumulativeProbability = 0
 	local lastEntry = nil
 
-	for _, entry in ipairs(floorPreset.tierOddsOrdered) do
+	for _, entry in ipairs(eligibleEntries) do
 		lastEntry = entry
-		cumulativeProbability += math.max(0, tonumber(entry.probability) or 0)
+		cumulativeProbability += entry.probability
 		if threshold <= cumulativeProbability then
 			return entry.displayRarity
 		end
 	end
 
-	if lastEntry ~= nil and cumulativeProbability >= 1 then
+	if lastEntry ~= nil then
 		return lastEntry.displayRarity
 	end
 
@@ -210,6 +234,7 @@ local function buildRewardEntryFromSetPiece(piece: any, setId: string, isBossPar
 		displayName = tostring(piece.displayName or piece.id),
 		setId = setId,
 		displayRarity = tostring(setConfig.rollDisplay.rarity or "Basic"),
+		displayOddsDenominator = math.max(1, math.floor(tonumber(setConfig.rollDisplay.chance) or 1)),
 		isBossPart = isBossPart,
 	}
 end
@@ -226,8 +251,17 @@ local function rollRewardEntry(
 		return buildRewardEntryFromSetPiece(bossPiece, profile.bossSetId, true)
 	end
 
-	local selectedRarity = rollRewardRarity(randomSource, floorPreset)
+	local selectedRarity = rollRewardRarity(randomSource, floorPreset, poolsByRarity)
 	if selectedRarity == nil then
+		local warnKey = string.format("%s:%s:no-eligible-rarity", profile.bossId, floorPreset.id)
+		if warnedMissingPools[warnKey] ~= true then
+			warnedMissingPools[warnKey] = true
+			warnWithPrefix(string.format(
+				"Boss '%s' has no eligible reward rarity pools for loot floor '%s' after filtering.",
+				profile.bossId,
+				floorPreset.id
+			))
+		end
 		return nil
 	end
 

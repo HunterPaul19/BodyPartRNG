@@ -250,7 +250,8 @@ function AppraisalController:_buildPreviewPresentationForRegion(region: string)
 		record = ownedRecord,
 		entry = entry,
 		piece = piece,
-		scale = entry.scale,
+		visualScale = entry.scale,
+		displayScale = ownedRecord and ownedRecord.sizeMultiplier or nil,
 	})
 end
 
@@ -303,7 +304,7 @@ function AppraisalController:_getSelectedAppraisalRiskMessage(): string?
 	local mutationId = MutationConfig.NormalizeId(ownedRecord.mutationId or ownedRecord.mutation)
 	local hasRiskyMutation = mutationId ~= DEFAULT_MUTATION_ID
 
-	local sizeScale = tonumber(selectedEntry.scale) or tonumber(ownedRecord.sizeMultiplier) or 1
+	local sizeScale = tonumber(ownedRecord.sizeMultiplier) or tonumber(selectedEntry.scale) or 1
 	local sizeEntry = SizeConfig.GetByScale(sizeScale)
 	local sizeId = if sizeEntry then sizeEntry.id else SizeConfig.NormalizeId(ownedRecord.sizeId)
 	local hasRiskySize = HIGH_SIZE_IDS[sizeId] == true

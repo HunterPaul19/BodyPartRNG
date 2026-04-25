@@ -67,7 +67,7 @@ local FILTER_ROW_POP_TWEEN = TweenInfo.new(0.14, Enum.EasingStyle.Back, Enum.Eas
 local FILTER_ROW_POP_START_SCALE = 0.9
 local SLOT_OVERLAY_Z_INDEX = 10
 local SELL_WARNING_Z_INDEX = 20
-local AUTO_SIZE_DESCRIPTION_TEXT = "Makes all of your body parts normal size"
+local AUTO_SIZE_DESCRIPTION_TEXT = "Uses rolled body part sizes visually"
 
 local FILTER_BUTTON_TO_REGION = {
 	Heads = "Head",
@@ -76,6 +76,12 @@ local FILTER_BUTTON_TO_REGION = {
 	RightArms = "RightArm",
 	LeftLegs = "LeftLeg",
 	RightLegs = "RightLeg",
+}
+
+local INVENTORY_ITEM_TYPE_ORDER = {
+	bodyPart = 1,
+	aura = 2,
+	potion = 3,
 }
 
 local REGION_TO_LABEL = BodyPartPresentation.RegionToLabel
@@ -188,6 +194,8 @@ type InventoryRecordView = {
 	mutationCoverTexture: string?,
 	previewScale: number?,
 	appearanceUserId: number?,
+	applyPlayerClothing: boolean?,
+	applyPlayerBodyColors: boolean?,
 	sizeTagStyle: any?,
 	iconTexture: string?,
 	preferIconOverViewport: boolean?,
@@ -848,9 +856,10 @@ function InventoryController:_resolvePreviewModel()
 		record = previewBodyPartContext.ownedRecord,
 		entry = previewBodyPartContext.entry,
 		piece = previewBodyPartContext.piece,
-		scale = if previewBodyPartContext.entry and typeof(previewBodyPartContext.entry.scale) == "number"
+		visualScale = if previewBodyPartContext.entry and typeof(previewBodyPartContext.entry.scale) == "number"
 			then previewBodyPartContext.entry.scale
 			else previewBodyPartContext.ownedRecord and previewBodyPartContext.ownedRecord.sizeMultiplier or 1,
+		displayScale = previewBodyPartContext.ownedRecord and previewBodyPartContext.ownedRecord.sizeMultiplier or nil,
 	})
 end
 
@@ -1263,6 +1272,8 @@ function InventoryController:_buildCardPayloadForRecord(recordView: InventoryRec
 		region = recordView.region,
 		previewScale = recordView.previewScale,
 		appearanceUserId = recordView.appearanceUserId,
+		applyPlayerClothing = recordView.applyPlayerClothing,
+		applyPlayerBodyColors = recordView.applyPlayerBodyColors,
 		favoriteVisible = recordView.isFavorite,
 		equippedVisible = self:_isRecordViewEquipped(recordView),
 		cardAccentColor = recordView.cardAccentColor,
@@ -1309,6 +1320,101 @@ function InventoryController:_populateRowButtonByOwnedId(ownedId: string, isSele
 	self:_populateRowButtonForRecord(recordView, isSelected)
 end
 
+local function compareInventoryRecordViews(a: InventoryRecordView, b: InventoryRecordView): boolean
+	if a.isFavorite ~= b.isFavorite then
+		return a.isFavorite == true
+	end
+
+	if a.itemType ~= b.itemType then
+		return (INVENTORY_ITEM_TYPE_ORDER[a.itemType] or math.huge) < (INVENTORY_ITEM_TYPE_ORDER[b.itemType] or math.huge)
+	end
+
+	if a.itemType == "aura" and b.itemType == "aura" then
+		local sortOrderA = a.auraConfig and a.auraConfig.sortOrder or math.huge
+		local sortOrderB = b.auraConfig and b.auraConfig.sortOrder or math.huge
+		if sortOrderA ~= sortOrderB then
+			return sortOrderA < sortOrderB
+		end
+		local serialA = tonumber((a.record :: any).serialNumber) or math.huge
+		local serialB = tonumber((b.record :: any).serialNumber) or math.huge
+		if serialA ~= serialB then
+			return serialA < serialB
+		end
+		return a.ownedId < b.ownedId
+	end
+
+	if a.itemType == "potion" and b.itemType == "potion" then
+		local sortOrderA = a.potionConfig and a.potionConfig.sortOrder or math.huge
+		local sortOrderB = b.potionConfig and b.potionConfig.sortOrder or math.huge
+		if sortOrderA ~= sortOrderB then
+			return sortOrderA < sortOrderB
+		end
+		return a.ownedId < b.ownedId
+	end
+
+	local passiveIncomeA = getRecordPassiveIncomePerSecond(a.record, a.piece)
+	local passiveIncomeB = getRecordPassiveIncomePerSecond(b.record, b.piece)
+	if passiveIncomeA ~= passiveIncomeB then
+		return passiveIncomeA > passiveIncomeB
+	end
+	if a.piece.displayName ~= b.piece.displayName then
+		return a.piece.displayName < b.piece.displayName
+	end
+	return a.ownedId < b.ownedId
+end
+
+function InventoryController:_buildBodyPartRecordView(ownedId: string, record: OwnedBodyPartRecord): InventoryRecordView?
+	if typeof(record) ~= "table" then
+		return nil
+	end
+
+	local piece = record.pieceId and BodyPartsCatalog.GetPiece(record.pieceId)
+	if not piece then
+		return nil
+	end
+
+	local setConfig = BodyPartsCatalog.GetSetForPiece(piece.id)
+	local rarityStyle = BodyPartPresentation.ResolveBodyPartRarityStyle({
+		record = record,
+		piece = piece,
+		setConfig = setConfig,
+	}) or {}
+	local searchText = string.lower(
+		string.format(
+			"%s %s",
+			tostring(piece.displayName or ""),
+			tostring(setConfig and setConfig.displayName or "")
+		)
+	)
+
+	return {
+		ownedId = ownedId,
+		itemType = "bodyPart",
+		record = record,
+		piece = piece,
+		region = piece.region,
+		setConfig = setConfig,
+		auraConfig = nil,
+		potionConfig = nil,
+		bundleModel = BodyPartsCatalog.ResolveBundleModel(piece.id),
+		nameText = BodyPartPresentation.FormatInventoryNameText(piece.displayName, record),
+		usageText = formatMoneyPerSecond(getRecordPassiveIncomePerSecond(record, piece)),
+		isFavorite = record.isFavorite == true,
+		searchText = searchText,
+		cardAccentColor = rarityStyle.accentColor,
+		baseFillColor = rarityStyle.baseFillColor,
+		selectedFillColor = rarityStyle.selectedFillColor,
+		mutationCoverTexture = resolveMutationCoverTexture(record),
+		previewScale = record.sizeMultiplier or 1,
+		appearanceUserId = LOCAL_PLAYER and LOCAL_PLAYER.UserId or nil,
+		applyPlayerClothing = setConfig == nil or setConfig.applyPlayerClothing ~= false,
+		applyPlayerBodyColors = setConfig == nil or setConfig.applyPlayerBodyColors ~= false,
+		sizeTagStyle = resolveSizeTagStyle(record.sizeMultiplier, record.sizeId),
+		iconTexture = nil,
+		preferIconOverViewport = false,
+	}
+end
+
 function InventoryController:_getInventoryRecords(): { InventoryRecordView }
 	local cacheEntry: InventoryRecordsCacheEntry? = self._inventoryRecordsCache
 	if not self._inventoryRecordsDirty and cacheEntry then
@@ -1316,60 +1422,12 @@ function InventoryController:_getInventoryRecords(): { InventoryRecordView }
 	end
 
 	local records = {}
-	local itemTypeOrder = {
-		bodyPart = 1,
-		aura = 2,
-		potion = 3,
-	}
 
 	for ownedId, record in pairs(self:_getOwnedLookup()) do
-		if typeof(record) ~= "table" then
-			continue
+		local recordView = self:_buildBodyPartRecordView(ownedId, record)
+		if recordView then
+			table.insert(records, recordView)
 		end
-
-		local piece = record.pieceId and BodyPartsCatalog.GetPiece(record.pieceId)
-		if not piece then
-			continue
-		end
-
-		local setConfig = BodyPartsCatalog.GetSetForPiece(piece.id)
-		local rarityStyle = BodyPartPresentation.ResolveBodyPartRarityStyle({
-			record = record,
-			piece = piece,
-			setConfig = setConfig,
-		}) or {}
-		local searchText = string.lower(
-			string.format(
-				"%s %s",
-				tostring(piece.displayName or ""),
-				tostring(setConfig and setConfig.displayName or "")
-			)
-		)
-
-		table.insert(records, {
-			ownedId = ownedId,
-			itemType = "bodyPart",
-			record = record,
-			piece = piece,
-			region = piece.region,
-			setConfig = setConfig,
-			auraConfig = nil,
-			potionConfig = nil,
-			bundleModel = BodyPartsCatalog.ResolveBundleModel(piece.id),
-			nameText = BodyPartPresentation.FormatInventoryNameText(piece.displayName, record),
-			usageText = formatMoneyPerSecond(getRecordPassiveIncomePerSecond(record, piece)),
-			isFavorite = record.isFavorite == true,
-			searchText = searchText,
-			cardAccentColor = rarityStyle.accentColor,
-			baseFillColor = rarityStyle.baseFillColor,
-			selectedFillColor = rarityStyle.selectedFillColor,
-			mutationCoverTexture = resolveMutationCoverTexture(record),
-			previewScale = record.sizeMultiplier or 1,
-			appearanceUserId = LOCAL_PLAYER and LOCAL_PLAYER.UserId or nil,
-			sizeTagStyle = resolveSizeTagStyle(record.sizeMultiplier, record.sizeId),
-			iconTexture = nil,
-			preferIconOverViewport = false,
-		})
 	end
 
 	for ownedId, record in pairs(self:_getOwnedAuraLookup()) do
@@ -1483,48 +1541,7 @@ function InventoryController:_getInventoryRecords(): { InventoryRecordView }
 		})
 	end
 
-	table.sort(records, function(a, b)
-		if a.isFavorite ~= b.isFavorite then
-			return a.isFavorite == true
-		end
-
-		if a.itemType ~= b.itemType then
-			return (itemTypeOrder[a.itemType] or math.huge) < (itemTypeOrder[b.itemType] or math.huge)
-		end
-
-		if a.itemType == "aura" and b.itemType == "aura" then
-			local sortOrderA = a.auraConfig and a.auraConfig.sortOrder or math.huge
-			local sortOrderB = b.auraConfig and b.auraConfig.sortOrder or math.huge
-			if sortOrderA ~= sortOrderB then
-				return sortOrderA < sortOrderB
-			end
-			local serialA = tonumber((a.record :: any).serialNumber) or math.huge
-			local serialB = tonumber((b.record :: any).serialNumber) or math.huge
-			if serialA ~= serialB then
-				return serialA < serialB
-			end
-			return a.ownedId < b.ownedId
-		end
-
-		if a.itemType == "potion" and b.itemType == "potion" then
-			local sortOrderA = a.potionConfig and a.potionConfig.sortOrder or math.huge
-			local sortOrderB = b.potionConfig and b.potionConfig.sortOrder or math.huge
-			if sortOrderA ~= sortOrderB then
-				return sortOrderA < sortOrderB
-			end
-			return a.ownedId < b.ownedId
-		end
-
-		local passiveIncomeA = getRecordPassiveIncomePerSecond(a.record, a.piece)
-		local passiveIncomeB = getRecordPassiveIncomePerSecond(b.record, b.piece)
-		if passiveIncomeA ~= passiveIncomeB then
-			return passiveIncomeA > passiveIncomeB
-		end
-		if a.piece.displayName ~= b.piece.displayName then
-			return a.piece.displayName < b.piece.displayName
-		end
-		return a.ownedId < b.ownedId
-	end)
+	table.sort(records, compareInventoryRecordViews)
 
 	self._inventoryRecordsCache = {
 		records = records,
@@ -1958,10 +1975,6 @@ function InventoryController:_getResolvedAutoSizeEnabled(overrideEnabled: boolea
 	return self:_getAutoSizeEnabled()
 end
 
-function InventoryController:_getResolvedNormalSizeEnabled(overrideAutoSizeEnabled: boolean?): boolean
-	return not self:_getResolvedAutoSizeEnabled(overrideAutoSizeEnabled)
-end
-
 function InventoryController:_setAutoSizeButtonVisualState(isEnabled: boolean, shouldAnimate: boolean?)
 	local entries = self._autoSizeButtonVisualEntries
 	if typeof(entries) ~= "table" or #entries == 0 then
@@ -2027,10 +2040,10 @@ function InventoryController:_syncAutoSizeButton(overrideEnabled: boolean?, shou
 		return
 	end
 
-	local isEnabled = self:_getResolvedNormalSizeEnabled(overrideEnabled)
+	local isEnabled = self:_getResolvedAutoSizeEnabled(overrideEnabled)
 	label.RichText = true
 	label.Text = string.format(
-		"<b>Normal Size [%s]</b> <br /> %s",
+		"<b>Auto Scale [%s]</b> <br /> %s",
 		if isEnabled then "ON" else "OFF",
 		self._autoSizeDescriptionText
 	)
@@ -2044,22 +2057,22 @@ function InventoryController:_toggleAutoSize()
 
 	local ok, result = pcall(function()
 		return self._remotes.setAutoSizeEnabled:InvokeServer({
-			enabled = not self:_getAutoSizeEnabled(),
+			enabled = not self:_getResolvedAutoSizeEnabled(),
 		})
 	end)
 
 	if not ok then
-		warn(string.format("[InventoryController] Failed to toggle auto size: %s", tostring(result)))
+		warn(string.format("[InventoryController] Failed to toggle auto scale: %s", tostring(result)))
 		return
 	end
 
 	if typeof(result) ~= "table" then
-		warn("[InventoryController] Auto size toggle returned an invalid response.")
+		warn("[InventoryController] Auto scale toggle returned an invalid response.")
 		return
 	end
 
 	if result.ok ~= true then
-		warn(string.format("[InventoryController] Failed to toggle auto size: %s", tostring(result.message)))
+		warn(string.format("[InventoryController] Failed to toggle auto scale: %s", tostring(result.message)))
 		if typeof(result.state) == "table" then
 			self:_applyLoadoutState(result.state)
 			self:_syncAutoSizeButton(result.state.autoSizeEnabled == true, false)
@@ -2072,12 +2085,13 @@ function InventoryController:_toggleAutoSize()
 	if typeof(result.state) == "table" then
 		self:_applyLoadoutState(result.state)
 		self:_syncAutoSizeButton(result.state.autoSizeEnabled == true, true)
-		ToggleSoundUtil.PlayToggle(self:_getResolvedNormalSizeEnabled(result.state.autoSizeEnabled == true))
+		ToggleSoundUtil.PlayToggle(self:_getResolvedAutoSizeEnabled(result.state.autoSizeEnabled == true))
 		return
 	end
 
-	self:_syncAutoSizeButton(not self:_getResolvedAutoSizeEnabled(), true)
-	ToggleSoundUtil.PlayToggle(self:_getResolvedNormalSizeEnabled(not self:_getResolvedAutoSizeEnabled()))
+	local nextAutoSizeEnabled = not self:_getResolvedAutoSizeEnabled()
+	self:_syncAutoSizeButton(nextAutoSizeEnabled, true)
+	ToggleSoundUtil.PlayToggle(nextAutoSizeEnabled)
 end
 
 function InventoryController:_equipBestLoadout()
@@ -2377,11 +2391,12 @@ function InventoryController:_syncPreview()
 	local renderKey = if previewModel == nil
 		then "none"
 		else string.format(
-			"%s|%s|%s|%s|%s|%s|%s",
+			"%s|%s|%s|%s|%s|%s|%s|%s",
 			tostring(previewModel.itemType),
 			tostring(previewModel.ownedId or ""),
 			tostring(previewModel.pieceId or previewModel.auraId or previewModel.potionId or ""),
 			tostring(previewModel.region or ""),
+			tostring(previewModel.previewScale or ""),
 			tostring(previewModel.sizeText or previewModel.rarityText or ""),
 			tostring(previewModel.applyPlayerClothing),
 			tostring(previewModel.applyPlayerBodyColors)
@@ -2946,7 +2961,82 @@ function InventoryController:_flushScheduledBodyPartRefresh()
 	self:_syncBodyPartDependentUi()
 end
 
-function InventoryController:_scheduleBodyPartRefresh()
+function InventoryController:_applyOwnedBodyPartRecordPathUpdate(ownedId: string): boolean
+	if self._inventoryRecordsDirty or not self._inventoryRecordsCache then
+		return false
+	end
+
+	local ownedRecord = self:_getOwnedLookup()[ownedId]
+	local records = self._inventoryRecordsCache.records
+	local existingIndex = nil
+	for index, recordView in ipairs(records) do
+		if recordView.ownedId == ownedId then
+			existingIndex = index
+			break
+		end
+	end
+
+	if typeof(ownedRecord) ~= "table" then
+		if existingIndex then
+			table.remove(records, existingIndex)
+		end
+		self._recordViewsByOwnedId[ownedId] = nil
+		self:_destroyRow(ownedId)
+		if self._selectedOwnedId == ownedId then
+			self._selectedOwnedId = nil
+		end
+		if self._previewState and self._previewState.ownedId == ownedId then
+			self._previewState = nil
+		end
+	else
+		local recordView = self:_buildBodyPartRecordView(ownedId, ownedRecord)
+		if not recordView then
+			return false
+		end
+		if existingIndex then
+			records[existingIndex] = recordView
+		else
+			table.insert(records, recordView)
+		end
+		table.sort(records, compareInventoryRecordViews)
+		self._recordViewsByOwnedId[ownedId] = recordView
+	end
+
+	self:_syncBodyPartDependentUi()
+	return true
+end
+
+function InventoryController:_tryApplyBodyPartPathUpdate(action: string?, path: any): boolean
+	if typeof(path) ~= "table" or path[1] ~= BODY_PARTS_DATA_KEY then
+		return false
+	end
+
+	local section = path[2]
+	if section == "discoveredPieceIds" or section == "nextOwnedId" then
+		return true
+	end
+
+	if section == "ownedById" and (action == "SetValue" or action == "SetValues") then
+		local ownedId = path[3]
+		if typeof(ownedId) ~= "string" or ownedId == "" then
+			return false
+		end
+
+		if not FrameController:IsOpen(WINDOW_NAME) then
+			return true
+		end
+
+		return self:_applyOwnedBodyPartRecordPathUpdate(ownedId)
+	end
+
+	return false
+end
+
+function InventoryController:_scheduleBodyPartRefresh(action: string?, path: any)
+	if self:_tryApplyBodyPartPathUpdate(action, path) then
+		return
+	end
+
 	self:_markInventoryRecordsDirty()
 	if not FrameController:IsOpen(WINDOW_NAME) or self._bodyPartRefreshScheduled then
 		return
@@ -3016,7 +3106,7 @@ function InventoryController:_applyLoadoutState(state: BodyPartClientState?)
 	self:_syncSlotButtons()
 	if self._loadoutState and self._loadoutState.autoSizeEnabled ~= nil then
 		local autoSizeEnabled = self._loadoutState.autoSizeEnabled == true
-		local isEnabled = self:_getResolvedNormalSizeEnabled(autoSizeEnabled)
+		local isEnabled = self:_getResolvedAutoSizeEnabled(autoSizeEnabled)
 		local shouldAnimate = self._autoSizeStateHydrated
 			and self._autoSizeVisualState ~= nil
 			and self._autoSizeVisualState ~= isEnabled
@@ -3721,12 +3811,6 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		powerLabel = powerLabel,
 	}
 	self._powerLabelNativeText = powerLabel.Text
-	if self._ui.autoSizeLabel and self._ui.autoSizeLabel:IsA("TextLabel") then
-		local descriptionText = string.match(self._ui.autoSizeLabel.Text, "<br%s*/?>%s*(.+)$")
-		if typeof(descriptionText) == "string" and descriptionText ~= "" then
-			self._autoSizeDescriptionText = descriptionText
-		end
-	end
 	self._autoSizeButtonVisualEntries = self:_captureAutoSizeButtonVisualEntries(autoSizeButton, autoSizeLabel)
 	self._previewLabelFontFaces = {
 		Bundle = self._ui.previewLabels.Bundle.FontFace,
@@ -3839,15 +3923,15 @@ function InventoryController:_ensureFullUi(playerGui: PlayerGui)
 			self:_syncPotionSellModal()
 		end)
 
-		DataController.DataUpdated:Connect(function(key)
+		DataController.DataUpdated:Connect(function(key, action, path)
 			if key == BODY_PARTS_DATA_KEY then
-				self:_scheduleBodyPartRefresh()
+				self:_scheduleBodyPartRefresh(action, path)
 				return
 			end
 
 			if key == AUTO_SIZE_ENABLED_KEY then
 				local autoSizeEnabled = self:_getResolvedAutoSizeEnabled()
-				local isEnabled = self:_getResolvedNormalSizeEnabled(autoSizeEnabled)
+				local isEnabled = self:_getResolvedAutoSizeEnabled(autoSizeEnabled)
 				local shouldAnimate = self._autoSizeStateHydrated
 					and self._autoSizeVisualState ~= nil
 					and self._autoSizeVisualState ~= isEnabled

@@ -37,9 +37,11 @@ local BossArenaM1Controller = {
 	_localCooldownEndsAt = nil :: number?,
 	_activeTrackStoppedConnection = nil :: RBXScriptConnection?,
 	_inputConnection = nil :: RBXScriptConnection?,
+	_mobileAttackConnection = nil :: RBXScriptConnection?,
 	_characterAddedConnection = nil :: RBXScriptConnection?,
 	_remotes = nil :: RemoteFunction?,
 	_cameraShaker = nil :: any,
+	_warnedMissingMobileAttackButton = false,
 }
 
 local function isEnabledForPlace(): boolean
@@ -56,6 +58,10 @@ local function resolveHumanoid(character: Model?): Humanoid?
 	end
 
 	return character:FindFirstChildOfClass("Humanoid")
+end
+
+local function normalizeAbilityName(value: string): string
+	return string.lower(string.match(value, "^%s*(.-)%s*$") or "")
 end
 
 local function resolveAnimationFolder(): Folder?
@@ -423,6 +429,10 @@ function BossArenaM1Controller:_requestAttack()
 	self:_playApprovedSwing(response)
 end
 
+function BossArenaM1Controller:RequestAttack()
+	self:_requestAttack()
+end
+
 function BossArenaM1Controller:_bindCharacterLifecycle()
 	if self._characterAddedConnection then
 		self._characterAddedConnection:Disconnect()
@@ -430,6 +440,62 @@ function BossArenaM1Controller:_bindCharacterLifecycle()
 
 	self._characterAddedConnection = LOCAL_PLAYER.CharacterAdded:Connect(function()
 		self:_clearActiveSwing(true)
+	end)
+end
+
+function BossArenaM1Controller:_resolveMobileAttackButton(): GuiButton?
+	local playerGui = LOCAL_PLAYER:WaitForChild("PlayerGui")
+	local mainInterface = playerGui:WaitForChild("MainInterface", 30)
+	if not (mainInterface and mainInterface:IsA("ScreenGui")) then
+		return nil
+	end
+
+	local combatHud = mainInterface:WaitForChild("CombatHUD", 30)
+	if not (combatHud and combatHud:IsA("Frame")) then
+		return nil
+	end
+
+	local mobileControls = combatHud:WaitForChild("MobileControls", 30)
+	if not (mobileControls and mobileControls:IsA("Frame")) then
+		return nil
+	end
+
+	for _, descendant in ipairs(mobileControls:GetDescendants()) do
+		if not descendant:IsA("GuiButton") then
+			continue
+		end
+
+		local abilityName = descendant:FindFirstChild("AbilityName")
+		if not (abilityName and abilityName:IsA("TextLabel")) then
+			continue
+		end
+
+		if normalizeAbilityName(abilityName.Text) == "attack" then
+			return descendant
+		end
+	end
+
+	return nil
+end
+
+function BossArenaM1Controller:_bindMobileAttackButton()
+	if self._mobileAttackConnection then
+		self._mobileAttackConnection:Disconnect()
+		self._mobileAttackConnection = nil
+	end
+
+	local attackButton = self:_resolveMobileAttackButton()
+	if attackButton == nil then
+		if self._warnedMissingMobileAttackButton ~= true then
+			self._warnedMissingMobileAttackButton = true
+			warnWithPrefix("CombatHUD.MobileControls attack button was not found; mobile attack input is unavailable.")
+		end
+		return
+	end
+
+	self._warnedMissingMobileAttackButton = false
+	self._mobileAttackConnection = attackButton.Activated:Connect(function()
+		self:RequestAttack()
 	end)
 end
 
@@ -445,6 +511,7 @@ function BossArenaM1Controller:OnStart()
 
 	self:_ensureCameraShaker()
 	self:_bindCharacterLifecycle()
+	self:_bindMobileAttackButton()
 
 	self._inputConnection = UserInputService.InputBegan:Connect(function(input: InputObject, gameProcessedEvent: boolean)
 		if gameProcessedEvent then
@@ -454,7 +521,7 @@ function BossArenaM1Controller:OnStart()
 			return
 		end
 
-		self:_requestAttack()
+		self:RequestAttack()
 	end)
 end
 

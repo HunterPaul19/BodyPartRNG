@@ -994,6 +994,39 @@ local function resolveEquippedStateScales(
 	return resolvedState, nil
 end
 
+local function resolveCanonicalEquippedStateScales(
+	player: Player,
+	equippedState: BodyPartLoadout.EquippedState
+): (BodyPartLoadout.EquippedState?, string?)
+	local ownedBodyParts = DataService:GetOwnedBodyParts(player)
+	local normalizedState = BodyPartLoadout.NormalizeEquippedState(equippedState, ownedBodyParts)
+	local resolvedState = BodyPartLoadout.CreateEmptyEquippedState()
+
+	for _, region in ipairs(BodyPartRegions.Order) do
+		local entry = normalizedState[region]
+		if entry then
+			local ownedRecord = ownedBodyParts[entry.ownedId]
+			if not ownedRecord then
+				return nil, string.format("You do not own the equipped body part '%s'.", tostring(entry.ownedId))
+			end
+
+			local piece = BodyPartsCatalog.GetPiece(ownedRecord.pieceId)
+			if not piece then
+				return nil, string.format("Unknown piece '%s'.", tostring(ownedRecord.pieceId))
+			end
+
+			resolvedState[region] = {
+				ownedId = entry.ownedId,
+				pieceId = piece.id,
+				region = piece.region,
+				scale = BodyPartRuntimeConfig.ClampScale(piece.id, tonumber(ownedRecord.sizeMultiplier) or entry.scale),
+			}
+		end
+	end
+
+	return resolvedState, nil
+end
+
 local function buildOwnedBodyPartCandidate(ownedId: string, ownedRecord: OwnedBodyParts.OwnedBodyPartRecord)
 	local piece = BodyPartsCatalog.GetPiece(ownedRecord.pieceId)
 	if not piece then
@@ -1252,6 +1285,8 @@ local function serializeInspectEntry(entry: BodyPartLoadout.LoadoutEntry, ownedR
 		displayOddsDenominator = if ownedRecord then ownedRecord.displayOddsDenominator else nil,
 		rarityDenominator = if ownedRecord then ownedRecord.rarityDenominator else nil,
 		mutation = if ownedRecord then ownedRecord.mutation else nil,
+		sizeId = if ownedRecord then ownedRecord.sizeId else nil,
+		sizeMultiplier = if ownedRecord then ownedRecord.sizeMultiplier else nil,
 		finalPassiveIncomePerSecond = if ownedRecord then ownedRecord.finalPassiveIncomePerSecond else nil,
 	}
 end
@@ -1759,7 +1794,13 @@ rollbackMutationState = function(player: Player, previousState: BodyPartLoadout.
 end
 
 persistSessionLoadout = function(player: Player, previousState: BodyPartLoadout.EquippedState, applyVisuals: boolean): (boolean, string?)
-	local ok, message = DataService:SetEquippedLoadout(player, SessionStore.GetEquipped(player))
+	local canonicalState, canonicalError = resolveCanonicalEquippedStateScales(player, SessionStore.GetEquipped(player))
+	if not canonicalState then
+		rollbackMutationState(player, previousState, applyVisuals)
+		return false, canonicalError or "Failed to resolve the equipped body part loadout."
+	end
+
+	local ok, message = DataService:SetEquippedLoadout(player, canonicalState)
 	if ok then
 		return true, nil
 	end
@@ -1771,6 +1812,12 @@ end
 local function getSanitizedPersistedLoadout(player: Player): (BodyPartLoadout.EquippedState, boolean, string?)
 	local persistedState = DataService:GetEquippedLoadout(player)
 	local sanitizedState = BodyPartLoadout.NormalizeEquippedState(persistedState, DataService:GetOwnedBodyParts(player))
+	local canonicalState, canonicalError = resolveCanonicalEquippedStateScales(player, sanitizedState)
+	if canonicalState then
+		sanitizedState = canonicalState
+	elseif canonicalError then
+		warn(string.format("[BodyPartService] Failed to canonicalize persisted loadout for %s: %s", player.Name, canonicalError))
+	end
 	local didChange = not BodyPartLoadout.AreEquippedStatesEqual(persistedState, sanitizedState)
 	if not didChange then
 		return sanitizedState, false, nil
@@ -1783,13 +1830,22 @@ end
 local function syncSessionLoadoutFromPersistedData(player: Player): (boolean, BodyPartLoadout.EquippedState)
 	local previousState = SessionStore.GetEquipped(player)
 	local restoredState, savedCleanedState, savedCleanedStateMessage = getSanitizedPersistedLoadout(player)
-	SessionStore.LoadPlayer(player, restoredState)
+	local visualState, visualStateError = resolveEquippedStateScales(player, restoredState, nil)
+	if not visualState then
+		warn(string.format(
+			"[BodyPartService] Failed to resolve visual loadout for %s: %s",
+			player.Name,
+			tostring(visualStateError)
+		))
+		visualState = BodyPartLoadout.CreateEmptyEquippedState()
+	end
+	SessionStore.LoadPlayer(player, visualState)
 
 	if savedCleanedState == false and savedCleanedStateMessage then
 		warn(string.format("[BodyPartService] Failed to clean persisted loadout for %s: %s", player.Name, savedCleanedStateMessage))
 	end
 
-	return not BodyPartLoadout.AreEquippedStatesEqual(previousState, restoredState), restoredState
+	return not BodyPartLoadout.AreEquippedStatesEqual(previousState, visualState), visualState
 end
 
 local function isCharacterCurrentForPlayer(player: Player, character: Model?): boolean
@@ -2371,7 +2427,7 @@ end
 
 local function handleSetAutoSizeEnabled(player: Player, payload: any)
 	if typeof(payload) ~= "table" then
-		return response(false, "Auto size payload must be a table.", BodyPartService:GetClientState(player))
+		return response(false, "Auto scale payload must be a table.", BodyPartService:GetClientState(player))
 	end
 
 	local nextAutoSizeEnabled = payload.enabled == true
@@ -2379,50 +2435,32 @@ local function handleSetAutoSizeEnabled(player: Player, payload: any)
 	local previousState = SessionStore.GetEquipped(player)
 
 	if previousAutoSizeEnabled ~= nextAutoSizeEnabled then
-		SessionStore.ClearAll(player)
-
-		for _, region in ipairs(BodyPartRegions.Order) do
-			local entry = previousState[region]
-			if entry then
-				local ok, equipMessage = equipOwnedBodyPartInternal(player, entry.ownedId, nil, {
-					applyVisuals = false,
-					persistLoadout = false,
-					recordStats = false,
-					notifyClient = false,
-					notifyLoadoutChanged = false,
-					autoSizeEnabled = nextAutoSizeEnabled,
-				})
-				if not ok then
-					restoreSessionState(player, previousState)
-					return response(false, equipMessage or "Failed to rebuild the equipped body part loadout.", BodyPartService:GetClientState(player))
-				end
-			end
+		local canonicalState, canonicalError = resolveCanonicalEquippedStateScales(player, previousState)
+		if not canonicalState then
+			return response(false, canonicalError or "Failed to resolve the equipped body part loadout.", BodyPartService:GetClientState(player))
 		end
+
+		local visualState, visualStateError = resolveEquippedStateScales(player, canonicalState, nextAutoSizeEnabled)
+		if not visualState then
+			return response(false, visualStateError or "Failed to resolve auto scale visuals.", BodyPartService:GetClientState(player))
+		end
+		SessionStore.Restore(player, visualState)
 
 		local success, applyMessage = rebuildCurrentVisualStateNow(player, "set_auto_size_enabled")
 		if not success then
 			rollbackVisualState(player, previousState)
-			return response(false, applyMessage or "Failed to apply auto size.", BodyPartService:GetClientState(player))
+			return response(false, applyMessage or "Failed to apply auto scale.", BodyPartService:GetClientState(player))
 		end
 	end
 
 	local ok, message = DataService:SetAutoSizeEnabled(player, nextAutoSizeEnabled)
 	if not ok then
 		rollbackVisualState(player, previousState)
-		return response(false, message or "Failed to update auto size.", BodyPartService:GetClientState(player))
-	end
-
-	local persisted, persistMessage = persistSessionLoadout(player, previousState, true)
-	if not persisted then
-		local reverted, revertMessage = DataService:SetAutoSizeEnabled(player, previousAutoSizeEnabled)
-		if not reverted then
-			warn(string.format("[BodyPartService] Failed to revert auto size for %s: %s", player.Name, tostring(revertMessage)))
-		end
-		return response(false, persistMessage or "Failed to save the equipped body part loadout.", BodyPartService:GetClientState(player))
+		return response(false, message or "Failed to update auto scale.", BodyPartService:GetClientState(player))
 	end
 
 	notifyLoadoutChanged(player)
-	return response(true, message or "Auto size updated.", BodyPartService:GetClientDeltaState(player, message))
+	return response(true, message or "Auto scale updated.", BodyPartService:GetClientDeltaState(player, message))
 end
 
 local function handleToggleFavorite(player: Player, payload: any)
@@ -2519,7 +2557,7 @@ function BodyPartService:OnStart()
 	setAutoSizeEnabledRemote.OnServerInvoke = function(player: Player, payload: any)
 		local allowed = RequestLimiter:Allow(player, "remote.body_parts.auto_size")
 		if not allowed then
-			return buildRateLimitResponse("You're toggling auto size too quickly.", BodyPartService:GetClientState(player))
+			return buildRateLimitResponse("You're toggling auto scale too quickly.", BodyPartService:GetClientState(player))
 		end
 
 		return handleSetAutoSizeEnabled(player, payload)

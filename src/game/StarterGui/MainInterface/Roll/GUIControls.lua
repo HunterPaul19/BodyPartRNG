@@ -14,6 +14,7 @@ GUIControls.CurrentRollResult = nil
 GUIControls.CurrentRollResultEquipped = false
 GUIControls.EquipDebounce = false
 GUIControls.EquipStatusToken = 0
+GUIControls.StatusRefreshToken = 0
 GUIControls.RollingStateRefreshPending = false
 GUIControls.RollPreviewSessionId = 0
 GUIControls.ActiveRollPreviewSessionId = nil
@@ -51,6 +52,7 @@ local SelectRollRegionRemote = RollingRemotes:WaitForChild("SelectRollRegion")
 local PerformRollRemote = RollingRemotes:WaitForChild("PerformRoll")
 local ToggleQuickRollRemote = RollingRemotes:WaitForChild("ToggleQuickRoll")
 local PromptQuickRollPurchaseRemote = RollingRemotes:WaitForChild("PromptQuickRollPurchase")
+local FinalizeAutoSellRollRemote = RollingRemotes:WaitForChild("FinalizeAutoSellRoll")
 local RollingUpdatedRemote = RollingRemotes:WaitForChild("RollingUpdated")
 local BODY_PARTS_FOLDER_NAME = "BodyParts"
 local EQUIP_REMOTE_NAME = "EquipOwnedBodyPart"
@@ -529,6 +531,8 @@ local function buildClientRollInfoFromPiece(piece, overrides)
 		Font = setConfig.rollDisplay.fontFace,
 		Weight = setConfig.rollDisplay.fontWeight,
 		Rarity = setConfig.rollDisplay.rarity,
+		ApplyPlayerClothing = setConfig.applyPlayerClothing ~= false,
+		ApplyPlayerBodyColors = setConfig.applyPlayerBodyColors ~= false,
 		PieceId = piece.id,
 		PieceDisplayName = piece.displayName,
 		SetId = setConfig.id,
@@ -601,6 +605,10 @@ local function renderRollInfo(rollInfo, sessionId)
 			rollInfo.Region,
 			appearanceSnapshot,
 			rollInfo.SizeMultiplier,
+			{
+				applyPlayerClothing = rollInfo.ApplyPlayerClothing,
+				applyPlayerBodyColors = rollInfo.ApplyPlayerBodyColors,
+			},
 			sessionId
 		)
 	else
@@ -703,13 +711,15 @@ end
 function GUIControls:SetAutoRollEnabled(enabled)
 	local shouldEnable = enabled == true and isPlayerInAutoRollGroup()
 	if GUIControls.AutoRoll == shouldEnable then
-		GUIControls:RefreshAutoRollButton()
+		GUIControls:InvalidateTemporaryStatus()
+		GUIControls:RefreshRollControls()
 		return
 	end
 
 	GUIControls.AutoRoll = shouldEnable
 	GUIControls.AutoRollLoopId += 1
-	GUIControls:RefreshAutoRollButton()
+	GUIControls:InvalidateTemporaryStatus()
+	GUIControls:RefreshRollControls()
 
 	if shouldEnable and not GUIControls.CurrentlyRolling and not Main.Visible then
 		local loopId = GUIControls.AutoRollLoopId
@@ -751,8 +761,13 @@ function GUIControls:PromptAutoRollGroupJoin()
 				return
 			end
 		end
-		GUIControls:RefreshAutoRollButton()
+		GUIControls:InvalidateTemporaryStatus()
+		GUIControls:RefreshRollControls()
 	end)
+end
+
+function GUIControls:InvalidateTemporaryStatus()
+	GUIControls.StatusRefreshToken += 1
 end
 
 function GUIControls:SetTemporaryStatus(message)
@@ -760,11 +775,13 @@ function GUIControls:SetTemporaryStatus(message)
 		return
 	end
 
+	GUIControls.StatusRefreshToken += 1
+	local statusRefreshToken = GUIControls.StatusRefreshToken
 	RollButton.Desc.TextColor3 = DEFAULT_ROLL_DESC_COLOR
 	RollButton.Desc.Text = message
 	task.delay(2, function()
-		if GUIControls.RollingState then
-			GUIControls:RefreshRollButton()
+		if statusRefreshToken == GUIControls.StatusRefreshToken and GUIControls.RollingState then
+			GUIControls:RefreshRollControls()
 		end
 	end)
 end
@@ -779,7 +796,9 @@ end
 function GUIControls:RefreshEquipButton()
 	local ownedRecord = GUIControls.CurrentRollResult and GUIControls.CurrentRollResult.ownedRecord
 	local hasOwnedResult = typeof(ownedRecord) == "table" and typeof(ownedRecord.ownedId) == "string" and ownedRecord.ownedId ~= ""
-	local shouldShow = Main.Visible and Main.SkipButton.Visible and Main.SubInfo.Visible and hasOwnedResult
+	local pendingAutoSellToken = GUIControls.CurrentRollResult and GUIControls.CurrentRollResult.pendingAutoSellToken
+	local hasPendingAutoSellResult = typeof(pendingAutoSellToken) == "string" and pendingAutoSellToken ~= ""
+	local shouldShow = Main.Visible and Main.SkipButton.Visible and Main.SubInfo.Visible and (hasOwnedResult or hasPendingAutoSellResult)
 	local isEnabled = shouldShow and (not GUIControls.EquipDebounce) and (not GUIControls.CurrentRollResultEquipped)
 
 	Main.EquipButton.Visible = shouldShow
@@ -798,7 +817,7 @@ function GUIControls:RefreshEquipButton()
 		return
 	end
 
-	GUIControls:SetEquipButtonText("Equip")
+	GUIControls:SetEquipButtonText(if hasPendingAutoSellResult then "Equip to Keep" else "Equip")
 	GUIControls:SetButtonVisualState(Main.EquipButton, false, isEnabled)
 	if shouldShow and not isEnabled then
 		GUIControls:SetButtonVisualState(Main.EquipButton, false, false)
@@ -830,18 +849,14 @@ function GUIControls:EquipCurrentRollResult()
 
 	local rollResult = GUIControls.CurrentRollResult
 	local ownedRecord = rollResult and rollResult.ownedRecord
-	if typeof(ownedRecord) ~= "table" or typeof(ownedRecord.ownedId) ~= "string" or ownedRecord.ownedId == "" then
+	local pendingAutoSellToken = rollResult and rollResult.pendingAutoSellToken
+	local hasPendingAutoSellResult = typeof(pendingAutoSellToken) == "string" and pendingAutoSellToken ~= ""
+	if not hasPendingAutoSellResult and (typeof(ownedRecord) ~= "table" or typeof(ownedRecord.ownedId) ~= "string" or ownedRecord.ownedId == "") then
 		GUIControls:ShowEquipStatus("Equip unavailable", 1.5)
 		return
 	end
 
-	local equipRemote = getEquipOwnedBodyPartRemote()
-	if not equipRemote then
-		GUIControls:ShowEquipStatus("Equip unavailable", 1.5)
-		return
-	end
-
-	local scale = tonumber(ownedRecord.sizeMultiplier)
+	local scale = tonumber(ownedRecord and ownedRecord.sizeMultiplier)
 		or tonumber(rollResult and rollResult.finalResult and rollResult.finalResult.SizeMultiplier)
 		or tonumber(rollResult and rollResult.sizeResult and rollResult.sizeResult.scale)
 		or 1
@@ -849,11 +864,29 @@ function GUIControls:EquipCurrentRollResult()
 	GUIControls.EquipDebounce = true
 	GUIControls:RefreshEquipButton()
 
-	local result = invokeRemote(equipRemote, {
-		ownedId = ownedRecord.ownedId,
-		scale = scale,
-		applyVisuals = true,
-	})
+	local result
+	if hasPendingAutoSellResult then
+		result = invokeRemote(FinalizeAutoSellRollRemote, {
+			token = pendingAutoSellToken,
+			keep = true,
+			equip = true,
+			scale = scale,
+		})
+	else
+		local equipRemote = getEquipOwnedBodyPartRemote()
+		if not equipRemote then
+			GUIControls.EquipDebounce = false
+			GUIControls:RefreshEquipButton()
+			GUIControls:ShowEquipStatus("Equip unavailable", 1.5)
+			return
+		end
+
+		result = invokeRemote(equipRemote, {
+			ownedId = ownedRecord.ownedId,
+			scale = scale,
+			applyVisuals = true,
+		})
+	end
 
 	GUIControls.EquipDebounce = false
 	if not result then
@@ -868,9 +901,14 @@ function GUIControls:EquipCurrentRollResult()
 		return
 	end
 
-	GUIControls.CurrentRollResultEquipped = true
-	GUIControls:RefreshEquipButton()
-	GUIControls:ShowEquipStatus(result.message or "Equipped", 1.5)
+	if typeof(result.state) == "table" then
+		GUIControls:ApplyRollingState(result.state)
+	end
+	if hasPendingAutoSellResult and typeof(rollResult) == "table" then
+		rollResult.pendingAutoSell = false
+		rollResult.pendingAutoSellToken = nil
+	end
+	GUIControls:HideRollResults()
 end
 
 function GUIControls:SuppressRollClickForInputFrame()
@@ -955,6 +993,13 @@ function GUIControls:RefreshRollButton()
 		LeftButton.Visible = #rollRegions > 1
 		RightButton.Visible = #rollRegions > 1
 	end
+end
+
+function GUIControls:RefreshRollControls()
+	if GUIControls.RollingState then
+		GUIControls:RefreshRollButton()
+	end
+
 	GUIControls:RefreshQuickRollButton()
 	GUIControls:RefreshAutoRollButton()
 end
@@ -990,10 +1035,11 @@ function GUIControls:ApplyRollingState(state)
 
 	GUIControls.RollingState = mergedState
 	GUIControls.RollingStateRefreshPending = false
+	GUIControls:InvalidateTemporaryStatus()
 	if shouldRebuildRollDropdown then
 		GUIControls:RebuildRollDropdown()
 	end
-	GUIControls:RefreshRollButton()
+	GUIControls:RefreshRollControls()
 	if shouldRebuildRollDropdown or GUIControls.IsDropdownOpen then
 		GUIControls:SetDropdownOpen(GUIControls.IsDropdownOpen)
 	end
@@ -1019,6 +1065,8 @@ function GUIControls:SelectRollType(rollTypeId)
 	end
 
 	GUIControls:ApplyRollingState(result.state)
+	GUIControls:InvalidateTemporaryStatus()
+	GUIControls:RefreshRollControls()
 	if interactionIdAtRequest == GUIControls.DropdownInteractionId then
 		GUIControls:SetDropdownOpen(false)
 	end
@@ -1039,6 +1087,8 @@ function GUIControls:SelectRollRegion(rollRegion)
 	end
 
 	GUIControls:ApplyRollingState(result.state)
+	GUIControls:InvalidateTemporaryStatus()
+	GUIControls:RefreshRollControls()
 	local currentRollRegion = getSelectedRollRegion(GUIControls.RollingState)
 	if previousRollRegion and currentRollRegion and previousRollRegion.id ~= currentRollRegion.id then
 		Notify.Show(string.format("Switched to rolling %s", getRollRegionNotificationLabel(currentRollRegion.id)))
@@ -1083,7 +1133,10 @@ function GUIControls:ToggleQuickRoll()
 		end
 		if not result.ok then
 			GUIControls:SetTemporaryStatus(result.message or "Failed to open the purchase prompt.")
+			return
 		end
+		GUIControls:InvalidateTemporaryStatus()
+		GUIControls:RefreshRollControls()
 		return
 	end
 
@@ -1100,6 +1153,8 @@ function GUIControls:ToggleQuickRoll()
 		return
 	end
 
+	GUIControls:InvalidateTemporaryStatus()
+	GUIControls:RefreshRollControls()
 	local updatedQuickRollState = getQuickRollState(GUIControls.RollingState)
 	if updatedQuickRollState.enabled ~= quickRollState.enabled then
 		ToggleSoundUtil.PlayToggle(updatedQuickRollState.enabled == true)
@@ -1320,6 +1375,7 @@ function GUIControls:HideRollResults()
 	GUIControls.EquipStatusToken += 1
 	restoreIdleRollUi()
 	GUIControls:RefreshEquipButton()
+	GUIControls:RefreshRollControls()
 	GUIControls:SetButtonCooldown()
 	if GUIControls.AutoRoll then
 		GUIControls:ScheduleNextAutoRoll(GUIControls:GetRollCooldownDuration())
@@ -1361,6 +1417,9 @@ function GUIControls:Roll(triggerSource)
 
 		if not rollResponse.ok or typeof(rollResponse.rollResult) ~= "table" then
 			local failureMessage = rollResponse.message or "Roll failed."
+			if typeof(rollResponse.state) == "table" then
+				GUIControls:ApplyRollingState(rollResponse.state)
+			end
 			if isInsufficientFundsMessage(failureMessage) then
 				if GUIControls.AutoRoll then
 					GUIControls:SetAutoRollEnabled(false)
@@ -1377,9 +1436,6 @@ function GUIControls:Roll(triggerSource)
 				GUIControls:SetTemporaryStatus(failureMessage)
 			else
 				GUIControls:SetTemporaryStatus(failureMessage)
-			end
-			if typeof(rollResponse.state) == "table" then
-				GUIControls:ApplyRollingState(rollResponse.state)
 			end
 			return
 		end
@@ -1406,6 +1462,7 @@ function GUIControls:Roll(triggerSource)
 				restoreIdleRollUi()
 			end
 			GUIControls:RefreshEquipButton()
+			GUIControls:RefreshRollControls()
 			GUIControls:SetButtonCooldown()
 			if GUIControls.AutoRoll then
 				GUIControls:ScheduleNextAutoRoll(GUIControls:GetRollCooldownDuration())
@@ -1437,6 +1494,7 @@ function GUIControls:Roll(triggerSource)
 			else
 				restoreIdleRollUi()
 				GUIControls:RefreshEquipButton()
+				GUIControls:RefreshRollControls()
 				GUIControls:SetButtonCooldown()
 				GUIControls:SetTemporaryStatus(rollResponse.message or "Roll complete.")
 			end
@@ -1530,8 +1588,7 @@ end)
 RollDropdownInner.Position = DropdownClosedPosition
 GUIControls:SetDropdownOpen(false)
 RollDropdownTemplate.Visible = false
-GUIControls:RefreshQuickRollButton()
-GUIControls:RefreshAutoRollButton()
+GUIControls:RefreshRollControls()
 GUIControls:LoadRollingState()
 
 return GUIControls

@@ -7,6 +7,7 @@ local Workspace = game:GetService("Workspace")
 local BossArenaRuntimeService = require(script.Parent.BossArenaRuntimeService)
 local BossAnimationController = require(script.Parent.Common.BossAnimationController)
 local BossArenaMovePresentationRelay = require(script.Parent.Common.BossArenaMovePresentationRelay)
+local BossPhysicsStabilizer = require(script.Parent.Common.BossPhysicsStabilizer)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 local BossEncounterScaling = require(ReplicatedStorage.Shared.BossArena.EncounterScaling)
 local Bosses = require(ReplicatedStorage.Shared.Bosses)
@@ -521,6 +522,7 @@ function BossArenaStudioTestSuiteService:_rehydrateSuiteFromWorkspace()
 
 		humanoid.WalkSpeed = 0
 		humanoid.AutoRotate = false
+		BossPhysicsStabilizer.Apply(child, humanoid, rootPart)
 		setServerNetworkOwnership(child)
 
 		table.insert(rehydratedRecords, {
@@ -702,7 +704,9 @@ function BossArenaStudioTestSuiteService:_spawnBossGrid(rootFolder: Folder)
 		bossHumanoid.Health = definition.baseHealth
 		bossHumanoid.WalkSpeed = 0
 		bossHumanoid.AutoRotate = false
+		BossPhysicsStabilizer.Apply(bossModel, bossHumanoid, bossRootPart)
 		bossModel:PivotTo(homeCFrame)
+		BossPhysicsStabilizer.Recover(bossModel, bossHumanoid)
 		bossModel:SetAttribute(BOSS_ID_ATTRIBUTE_NAME, definition.bossId)
 		bossModel:SetAttribute(HOME_CFRAME_ATTRIBUTE_NAME, homeCFrame)
 		bossModel.Parent = bossesContainer
@@ -808,6 +812,7 @@ end
 function BossArenaStudioTestSuiteService:_faceTarget(record: BossRecord, target: any?)
 	if target == nil or target.rootPart == nil or target.rootPart.Parent == nil then
 		record.bossModel:PivotTo(record.homeCFrame)
+		BossPhysicsStabilizer.Recover(record.bossModel, record.bossHumanoid)
 		return
 	end
 
@@ -816,12 +821,12 @@ function BossArenaStudioTestSuiteService:_faceTarget(record: BossRecord, target:
 	local lookTarget = Vector3.new(targetPosition.X, position.Y, targetPosition.Z)
 	if (lookTarget - position).Magnitude <= 0.001 then
 		record.bossModel:PivotTo(record.homeCFrame)
+		BossPhysicsStabilizer.Recover(record.bossModel, record.bossHumanoid)
 		return
 	end
 
 	record.bossModel:PivotTo(CFrame.lookAt(position, lookTarget))
-	record.bossRootPart.AssemblyLinearVelocity = Vector3.zero
-	record.bossRootPart.AssemblyAngularVelocity = Vector3.zero
+	BossPhysicsStabilizer.Recover(record.bossModel, record.bossHumanoid)
 end
 
 function BossArenaStudioTestSuiteService:_finishCast(record: BossRecord)
@@ -829,8 +834,7 @@ function BossArenaStudioTestSuiteService:_finishCast(record: BossRecord)
 	record.bossHumanoid.WalkSpeed = 0
 	record.bossHumanoid.AutoRotate = false
 	record.bossModel:PivotTo(record.homeCFrame)
-	record.bossRootPart.AssemblyLinearVelocity = Vector3.zero
-	record.bossRootPart.AssemblyAngularVelocity = Vector3.zero
+	BossPhysicsStabilizer.Recover(record.bossModel, record.bossHumanoid)
 
 	if record.animationController then
 		record.animationController:SetLocomotionSuppressed(false)
@@ -975,8 +979,7 @@ function BossArenaStudioTestSuiteService:_heartbeat()
 		self:_ensureRecordAnimationController(record)
 		record.bossHumanoid.WalkSpeed = 0
 		if record.activeCast == nil then
-			record.bossRootPart.AssemblyLinearVelocity = Vector3.zero
-			record.bossRootPart.AssemblyAngularVelocity = Vector3.zero
+			BossPhysicsStabilizer.ResetMotion(record.bossModel)
 		end
 		self:_updateCast(record)
 	end

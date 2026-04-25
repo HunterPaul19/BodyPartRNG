@@ -102,7 +102,7 @@ local FEATURE_TO_PRELOAD_CONTRIBUTIONS: { [string]: FeaturePreloadContribution }
 		gameAssetPaths = { "BodyParts", "Auras", "UI/AuraIcons", "UI/Index", "MutationVFX" },
 	},
 	boss_fight_flow = {
-		mainInterfaceRoots = { "BossHealthBar" },
+		mainInterfaceRoots = { "BossHealthBar", "CombatHUD" },
 		gameAssetPaths = { "Bosses", "BossArenas" },
 	},
 }

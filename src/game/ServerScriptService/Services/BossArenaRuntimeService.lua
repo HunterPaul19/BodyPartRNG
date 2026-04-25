@@ -10,6 +10,7 @@ local Workspace = game:GetService("Workspace")
 local BossArenaArrivalService = require(script.Parent.BossArenaArrivalService)
 local BossAnimationController = require(script.Parent.Common.BossAnimationController)
 local BossArenaRewardService = require(script.Parent.BossArenaRewardService)
+local BossPhysicsStabilizer = require(script.Parent.Common.BossPhysicsStabilizer)
 local BossArenas = require(ReplicatedStorage.Shared.BossArenas)
 local BossEncounterScaling = require(ReplicatedStorage.Shared.BossArena.EncounterScaling)
 local BossQueueTeleportPayload = require(ReplicatedStorage.Shared.BossQueue.TeleportPayload)
@@ -37,7 +38,7 @@ local BOSS_INTRO_UNDERGROUND_PADDING = 1
 local BOSS_ATTACK_SPAWN_DELAY_SECONDS = 5
 local BOSS_ENCOUNTER_DURATION_SECONDS = 180
 local BOSS_TIMEOUT_RETURN_ROUTE_ID = "return_to_boss_lobby"
-local BOSS_VICTORY_RETURN_DELAY_SECONDS = 10
+local BOSS_RESULTS_DURATION_SECONDS = 15
 local CHARACTER_PLACEMENT_RETRY_COUNT = 20
 local CHARACTER_PLACEMENT_RETRY_INTERVAL_SECONDS = 0.1
 local BOSS_REWARD_DAMAGE_CONTRIBUTION_RATIO = 0.15
@@ -76,6 +77,28 @@ type BossHitConfirmedPayload = {
 	damage: number,
 	attackerUserId: number,
 	serverTime: number,
+}
+
+type BossResultRewardEntry = {
+	pieceId: string,
+	displayName: string,
+	setId: string,
+	displayRarity: string,
+	displayOddsDenominator: number,
+	isBossPart: boolean,
+}
+
+type BossResultsState = {
+	outcome: string,
+	bossId: string,
+	damagePercent: number,
+	startsAtServerTime: number,
+	endsAtServerTime: number,
+	durationSeconds: number,
+	rewards: { BossResultRewardEntry },
+	readyCount: number,
+	capacity: number,
+	isReplayReady: boolean,
 }
 
 type EncounterState = {
@@ -124,6 +147,14 @@ type EncounterState = {
 	returnCountdownEndsAt: number?,
 	returnCountdownStartedAtServerTime: number?,
 	returnCountdownEndsAtServerTime: number?,
+	resultsOutcome: string?,
+	resultsStartedAt: number?,
+	resultsEndsAt: number?,
+	resultsStartedAtServerTime: number?,
+	resultsEndsAtServerTime: number?,
+	resultRewardsByUserId: { [number]: { BossResultRewardEntry } },
+	replayReadyUserIds: { [number]: boolean },
+	resultsCompleted: boolean,
 	timedOut: boolean,
 	activeCast: CastState?,
 	bossHealthConnections: { RBXScriptConnection },
@@ -145,8 +176,10 @@ local BossArenaRuntimeService = {
 	_playerCharacterConnections = {} :: { [Player]: RBXScriptConnection },
 	_characterPlacementTokens = {} :: { [Player]: number },
 	_encounterStateListeners = {} :: { [(string?) -> ()]: boolean },
+	_rosterStateListeners = {} :: { [() -> ()]: boolean },
 	_bossHealthStateListeners = {} :: { [(BossHealthState?) -> ()]: boolean },
 	_bossTimerStateListeners = {} :: { [(BossTimerState?) -> ()]: boolean },
+	_bossResultsStateListeners = {} :: { [() -> ()]: boolean },
 	_bossHitConfirmedListeners = {} :: { [(BossHitConfirmedPayload) -> ()]: boolean },
 	_movePresentationListeners = {} :: { [(any) -> ()]: boolean },
 }
@@ -306,6 +339,17 @@ local function applyBossHealthScaling(bossHumanoid: Humanoid, healthMultiplier: 
 	bossHumanoid.Health = math.clamp(scaledHealth, 0, scaledMaxHealth)
 end
 
+local function applyBossHealthRatio(bossHumanoid: Humanoid, ratio: number)
+	local resolvedRatio = math.max(0, tonumber(ratio) or 1)
+	local previousMaxHealth = math.max(1, tonumber(bossHumanoid.MaxHealth) or 1)
+	local previousHealth = math.max(0, tonumber(bossHumanoid.Health) or previousMaxHealth)
+	local scaledMaxHealth = math.max(1, math.round(previousMaxHealth * resolvedRatio))
+	local scaledHealth = math.clamp(math.round(previousHealth * resolvedRatio), 0, scaledMaxHealth)
+
+	bossHumanoid.MaxHealth = scaledMaxHealth
+	bossHumanoid.Health = scaledHealth
+end
+
 local function applyBossBaseHealth(bossHumanoid: Humanoid, baseHealth: number)
 	local resolvedBaseHealth = math.max(1, math.round(tonumber(baseHealth) or 1))
 	local previousMaxHealth = math.max(1, tonumber(bossHumanoid.MaxHealth) or 1)
@@ -425,6 +469,17 @@ local function getPlayerByUserId(userId: number?): Player?
 	end
 
 	return nil
+end
+
+local function countRosterMembers(encounter: EncounterState): number
+	local count = 0
+	for userId in pairs(encounter.rosterUserIds) do
+		if math.floor(tonumber(userId) or 0) > 0 then
+			count += 1
+		end
+	end
+
+	return count
 end
 
 local function getOrCreateLeaderstats(player: Player): Folder
@@ -669,6 +724,21 @@ function BossArenaRuntimeService:_notifyEncounterStateChanged()
 	end
 end
 
+function BossArenaRuntimeService:_notifyRosterStateChanged()
+	local callbacks = {}
+
+	for callback in pairs(self._rosterStateListeners) do
+		table.insert(callbacks, callback)
+	end
+
+	for _, callback in ipairs(callbacks) do
+		local ok, err = pcall(callback)
+		if not ok then
+			warnWithPrefix(string.format("Roster state callback failed: %s", tostring(err)))
+		end
+	end
+end
+
 function BossArenaRuntimeService:_buildBossHealthState(encounter: EncounterState?): BossHealthState?
 	if encounter == nil then
 		return nil
@@ -729,7 +799,7 @@ function BossArenaRuntimeService:_buildBossTimerState(encounter: EncounterState?
 			phase = "return",
 			startsAtServerTime = startsAtServerTime,
 			endsAtServerTime = endsAtServerTime,
-			durationSeconds = BOSS_VICTORY_RETURN_DELAY_SECONDS,
+			durationSeconds = BOSS_RESULTS_DURATION_SECONDS,
 		}
 	end
 	if encounter.bossModel.Parent == nil or encounter.bossHumanoid.Parent == nil then
@@ -747,30 +817,94 @@ function BossArenaRuntimeService:_buildBossTimerState(encounter: EncounterState?
 	}
 end
 
-function BossArenaRuntimeService:_beginVictoryReturnCountdown(encounter: EncounterState)
-	if encounter.timedOut == true or encounter.timerPhase == "return" then
+local function copyRewardEntry(entry: any): BossResultRewardEntry?
+	if typeof(entry) ~= "table" then
+		return nil
+	end
+
+	local pieceId = if typeof(entry.pieceId) == "string" then entry.pieceId else ""
+	local displayName = if typeof(entry.displayName) == "string" then entry.displayName else pieceId
+	local setId = if typeof(entry.setId) == "string" then entry.setId else ""
+	local displayRarity = if typeof(entry.displayRarity) == "string" then entry.displayRarity else "Basic"
+	local displayOddsDenominator = math.max(1, math.floor(tonumber(entry.displayOddsDenominator) or 1))
+
+	if pieceId == "" or displayName == "" then
+		return nil
+	end
+
+	return {
+		pieceId = pieceId,
+		displayName = displayName,
+		setId = setId,
+		displayRarity = displayRarity,
+		displayOddsDenominator = displayOddsDenominator,
+		isBossPart = entry.isBossPart == true,
+	}
+end
+
+local function copyRewardEntries(entries: any): { BossResultRewardEntry }
+	local copiedEntries = {}
+	if typeof(entries) ~= "table" then
+		return copiedEntries
+	end
+
+	for _, entry in ipairs(entries) do
+		local copiedEntry = copyRewardEntry(entry)
+		if copiedEntry ~= nil then
+			table.insert(copiedEntries, copiedEntry)
+		end
+	end
+
+	return copiedEntries
+end
+
+local function countReplayReadyPlayers(encounter: EncounterState): number
+	local count = 0
+	for userId in pairs(encounter.replayReadyUserIds) do
+		local resolvedUserId = math.floor(tonumber(userId) or 0)
+		if resolvedUserId > 0 and encounter.rosterUserIds[resolvedUserId] == true and getPlayerByUserId(resolvedUserId) ~= nil then
+			count += 1
+		end
+	end
+	return count
+end
+
+function BossArenaRuntimeService:_beginResults(encounter: EncounterState, outcome: string)
+	if encounter.timerPhase == "results" or encounter.resultsCompleted == true then
 		return
 	end
 
-	local countdownStartedAt = os.clock()
-	local countdownStartedAtServerTime = Workspace:GetServerTimeNow()
+	local normalizedOutcome = if outcome == "victory" then "victory" else "defeat"
+	local resultsStartedAt = os.clock()
+	local resultsStartedAtServerTime = Workspace:GetServerTimeNow()
 
-	encounter.timerPhase = "return"
-	encounter.returnCountdownEndsAt = countdownStartedAt + BOSS_VICTORY_RETURN_DELAY_SECONDS
-	encounter.returnCountdownStartedAtServerTime = countdownStartedAtServerTime
-	encounter.returnCountdownEndsAtServerTime = countdownStartedAtServerTime + BOSS_VICTORY_RETURN_DELAY_SECONDS
+	encounter.timerPhase = "results"
+	encounter.resultsOutcome = normalizedOutcome
+	encounter.resultsStartedAt = resultsStartedAt
+	encounter.resultsEndsAt = resultsStartedAt + BOSS_RESULTS_DURATION_SECONDS
+	encounter.resultsStartedAtServerTime = resultsStartedAtServerTime
+	encounter.resultsEndsAtServerTime = resultsStartedAtServerTime + BOSS_RESULTS_DURATION_SECONDS
+	encounter.replayReadyUserIds = {}
+	encounter.resultRewardsByUserId = {}
 
 	self:_cancelActiveCast(encounter)
 	encounter.currentTargetUserId = nil
-	self:_setState(encounter, "VictoryReturn")
-	if encounter.rewardsGranted ~= true then
+	self:_setState(encounter, "Results")
+	if normalizedOutcome == "victory" and encounter.rewardsGranted ~= true then
 		encounter.rewardsGranted = true
 		local rewardResults = BossArenaRewardService:GrantVictoryRewards(encounter)
 		if next(rewardResults) == nil then
 			warnWithPrefix(string.format("Boss '%s' victory granted no rewards.", encounter.bossId))
 		end
+		for userId, summary in pairs(rewardResults) do
+			encounter.resultRewardsByUserId[userId] = copyRewardEntries(summary.grants)
+		end
 	end
+
+	self:_notifyBossHealthStateChanged()
 	self:_notifyBossTimerStateChanged()
+	self:_notifyEncounterStateChanged()
+	self:_notifyBossResultsStateChanged()
 end
 
 function BossArenaRuntimeService:_notifyBossHealthStateChanged()
@@ -805,6 +939,21 @@ function BossArenaRuntimeService:_notifyBossTimerStateChanged()
 	end
 end
 
+function BossArenaRuntimeService:_notifyBossResultsStateChanged()
+	local callbacks = {}
+
+	for callback in pairs(self._bossResultsStateListeners) do
+		table.insert(callbacks, callback)
+	end
+
+	for _, callback in ipairs(callbacks) do
+		local ok, err = pcall(callback)
+		if not ok then
+			warnWithPrefix(string.format("Boss results callback failed: %s", tostring(err)))
+		end
+	end
+end
+
 function BossArenaRuntimeService:_notifyBossHitConfirmed(hitPayload: BossHitConfirmedPayload)
 	local callbacks = {}
 
@@ -825,7 +974,7 @@ function BossArenaRuntimeService:_bindBossHealthSignals(encounter: EncounterStat
 
 	table.insert(encounter.bossHealthConnections, encounter.bossHumanoid.HealthChanged:Connect(function()
 		if encounter.bossHumanoid.Health <= 0 then
-			self:_beginVictoryReturnCountdown(encounter)
+			self:_beginResults(encounter, "victory")
 		end
 		self:_notifyBossHealthStateChanged()
 		self:_notifyBossTimerStateChanged()
@@ -884,6 +1033,7 @@ function BossArenaRuntimeService:_activateBossFight(encounter: EncounterState)
 	if finalCFrame ~= nil and encounter.bossModel.Parent ~= nil then
 		encounter.bossModel:PivotTo(finalCFrame)
 	end
+	BossPhysicsStabilizer.Recover(encounter.bossModel, encounter.bossHumanoid)
 
 	local activatedAt = os.clock()
 	local activatedAtServerTime = Workspace:GetServerTimeNow()
@@ -1023,6 +1173,8 @@ function BossArenaRuntimeService:_clearEncounter(reason: string?)
 	self:_notifyBossHealthStateChanged()
 	self:_notifyBossTimerStateChanged()
 	self:_notifyEncounterStateChanged()
+	self:_notifyRosterStateChanged()
+	self:_notifyBossResultsStateChanged()
 end
 
 function BossArenaRuntimeService:_resolveBossSourceModel(bossId: string): Model
@@ -1136,6 +1288,7 @@ function BossArenaRuntimeService:_getAssignedPlayerSpawnCFrame(encounter: Encoun
 	if rosterIndex == nil then
 		rosterIndex = #encounter.rosterOrder + 1
 		table.insert(encounter.rosterOrder, userId)
+		self:_notifyRosterStateChanged()
 	end
 
 	local baseSpawnIndex = ((rosterIndex - 1) % playerSpawnCount) + 1
@@ -1379,13 +1532,16 @@ function BossArenaRuntimeService:_spawnBossEncounter(payload: any)
 	end
 
 	applyBossBodyCollisionGroup(bossModel)
+	BossPhysicsStabilizer.Apply(bossModel, bossHumanoid, bossRootPart)
 
 	local bossSpawnCFrame = getFeetAlignedBossSpawnCFrame(bossSpawn.CFrame, bossHumanoid, bossRootPart)
 	bossModel:PivotTo(bossSpawnCFrame)
+	BossPhysicsStabilizer.Recover(bossModel, bossHumanoid)
 	createBossHitboxCollider(bossModel, bossRootPart)
 	local bossIntroSpawnCFrame = getUndergroundBossIntroCFrame(bossModel, bossSpawnCFrame)
 	local introRiseAnchorStates = anchorBossModelForIntro(bossModel)
 	bossModel:PivotTo(bossIntroSpawnCFrame)
+	BossPhysicsStabilizer.ResetMotion(bossModel)
 	applyBossBaseHealth(bossHumanoid, bossDefinition.baseHealth)
 	applyBossHealthScaling(bossHumanoid, encounterScaling.healthMultiplier)
 
@@ -1446,6 +1602,14 @@ function BossArenaRuntimeService:_spawnBossEncounter(payload: any)
 		returnCountdownEndsAt = nil,
 		returnCountdownStartedAtServerTime = nil,
 		returnCountdownEndsAtServerTime = nil,
+		resultsOutcome = nil,
+		resultsStartedAt = nil,
+		resultsEndsAt = nil,
+		resultsStartedAtServerTime = nil,
+		resultsEndsAtServerTime = nil,
+		resultRewardsByUserId = {},
+		replayReadyUserIds = {},
+		resultsCompleted = false,
 		timedOut = false,
 		activeCast = nil,
 		bossHealthConnections = {},
@@ -1469,6 +1633,7 @@ function BossArenaRuntimeService:_spawnBossEncounter(payload: any)
 	self:_notifyBossHealthStateChanged()
 	self:_notifyBossTimerStateChanged()
 	self:_notifyEncounterStateChanged()
+	self:_notifyRosterStateChanged()
 end
 
 function BossArenaRuntimeService:_validatePlayerPayload(player: Player)
@@ -1480,6 +1645,9 @@ function BossArenaRuntimeService:_validatePlayerPayload(player: Player)
 	local encounter = self._encounter
 	if encounter == nil then
 		return payload
+	end
+	if encounter.timerPhase == "results" then
+		return nil
 	end
 
 	if payload.bossName ~= encounter.bossId or payload.arenaId ~= encounter.arenaId then
@@ -1494,8 +1662,12 @@ function BossArenaRuntimeService:_validatePlayerPayload(player: Player)
 		return nil
 	end
 
+	local wasRosterMember = encounter.rosterUserIds[player.UserId] == true
 	encounter.rosterUserIds[player.UserId] = true
 	self:_positionPlayerInArena(encounter, player)
+	if not wasRosterMember then
+		self:_notifyRosterStateChanged()
+	end
 	return payload
 end
 
@@ -1698,6 +1870,7 @@ function BossArenaRuntimeService:_finishActiveCast(encounter: EncounterState)
 
 	self:_stampCastEndTimers(encounter, activeCast, os.clock())
 	encounter.activeCast = nil
+	BossPhysicsStabilizer.Recover(encounter.bossModel, encounter.bossHumanoid)
 end
 
 function BossArenaRuntimeService:_cancelActiveCast(encounter: EncounterState)
@@ -1709,6 +1882,7 @@ function BossArenaRuntimeService:_cancelActiveCast(encounter: EncounterState)
 	self:_stampCastEndTimers(encounter, activeCast, os.clock())
 	encounter.activeCast = nil
 	invokeLifecycleCancel(activeCast.move.id, activeCast.lifecycleHandle)
+	BossPhysicsStabilizer.Recover(encounter.bossModel, encounter.bossHumanoid)
 end
 
 function BossArenaRuntimeService:_getMoveSelectionWeight(moveDefinition: any, context: any): number?
@@ -1783,6 +1957,7 @@ function BossArenaRuntimeService:_startCast(
 			encounter.bossRootPart,
 			resolveCastTargetRootPart(targetContext)
 		)
+		BossPhysicsStabilizer.Recover(encounter.bossModel, encounter.bossHumanoid)
 	end
 
 	local function emitPresentation(action: string, payload: { [string]: any }?)
@@ -2040,6 +2215,38 @@ function BossArenaRuntimeService:_getBossLobbyReturnPlaceId(): number
 	return math.max(0, math.floor(tonumber(route.placeId) or 0))
 end
 
+function BossArenaRuntimeService:_queuePlayersReturnToBossLobby(players: { Player }, reasonLabel: string): number
+	local destinationPlaceId = self:_getBossLobbyReturnPlaceId()
+	local returnPlayers = {}
+
+	for _, player in ipairs(players) do
+		if player.Parent == Players then
+			table.insert(returnPlayers, player)
+		end
+	end
+
+	if destinationPlaceId <= 0 then
+		warnWithPrefix(string.format("%s, but route '%s' is not configured.", reasonLabel, BOSS_TIMEOUT_RETURN_ROUTE_ID))
+	elseif #returnPlayers > 0 then
+		task.spawn(function()
+			local teleportOk, teleportError = pcall(function()
+				TeleportService:TeleportAsync(destinationPlaceId, returnPlayers)
+			end)
+			if not teleportOk then
+				warnWithPrefix(string.format(
+					"%s teleport to place %d failed for %d player(s): %s",
+					reasonLabel,
+					destinationPlaceId,
+					#returnPlayers,
+					tostring(teleportError)
+				))
+			end
+		end)
+	end
+
+	return #returnPlayers
+end
+
 function BossArenaRuntimeService:_queueRosterReturnToBossLobby(
 	encounter: EncounterState,
 	reasonLabel: string,
@@ -2077,21 +2284,108 @@ function BossArenaRuntimeService:_timeoutEncounter(encounter: EncounterState)
 	end
 
 	encounter.timedOut = true
-	self:_cancelActiveCast(encounter)
-	self:_notifyBossTimerStateChanged()
-	self:_queueRosterReturnToBossLobby(
-		encounter,
-		"Boss fight timeout",
-		string.format("Boss fight timed out after %d second(s).", BOSS_ENCOUNTER_DURATION_SECONDS)
-	)
+	self:_beginResults(encounter, "defeat")
 end
 
-function BossArenaRuntimeService:_completeVictoryReturn(encounter: EncounterState)
-	self:_queueRosterReturnToBossLobby(
-		encounter,
-		"Boss fight victory return",
-		string.format("Boss '%s' was defeated. Countdown finished after %d second(s).", encounter.bossId, BOSS_VICTORY_RETURN_DELAY_SECONDS)
+function BossArenaRuntimeService:_collectResultsSplit(encounter: EncounterState): ({ Player }, { Player }, { number })
+	local readyPlayers = {}
+	local returnPlayers = {}
+	local readyUserIds = {}
+	local seenUserIds = {}
+
+	local function appendUserId(userId: number)
+		local resolvedUserId = math.floor(tonumber(userId) or 0)
+		if resolvedUserId <= 0 or seenUserIds[resolvedUserId] == true then
+			return
+		end
+		seenUserIds[resolvedUserId] = true
+
+		if encounter.rosterUserIds[resolvedUserId] ~= true then
+			return
+		end
+
+		local player = getPlayerByUserId(resolvedUserId)
+		if player == nil then
+			return
+		end
+
+		if encounter.replayReadyUserIds[resolvedUserId] == true then
+			table.insert(readyPlayers, player)
+			table.insert(readyUserIds, resolvedUserId)
+		else
+			table.insert(returnPlayers, player)
+		end
+	end
+
+	for _, userId in ipairs(encounter.rosterOrder) do
+		appendUserId(userId)
+	end
+	for userId in pairs(encounter.rosterUserIds) do
+		appendUserId(userId)
+	end
+
+	return readyPlayers, returnPlayers, readyUserIds
+end
+
+local function filterPotionEffectsByUserIds(potionEffectsByUserId: any, readyUserIds: { number }): any
+	if typeof(potionEffectsByUserId) ~= "table" then
+		return nil
+	end
+
+	local filtered = {}
+	for _, userId in ipairs(readyUserIds) do
+		local key = tostring(userId)
+		local snapshot = potionEffectsByUserId[key]
+		if typeof(snapshot) == "table" then
+			filtered[key] = snapshot
+		end
+	end
+
+	return if next(filtered) ~= nil then filtered else nil
+end
+
+function BossArenaRuntimeService:_completeResults(encounter: EncounterState)
+	if encounter.resultsCompleted == true then
+		return
+	end
+	encounter.resultsCompleted = true
+
+	local readyPlayers, returnPlayers, readyUserIds = self:_collectResultsSplit(encounter)
+	self:_queuePlayersReturnToBossLobby(returnPlayers, "Boss results return")
+
+	if #readyPlayers <= 0 then
+		self:_clearEncounter(string.format(
+			"Boss results finished for '%s' with no replay-ready players. Returning %d player(s) to boss lobby.",
+			encounter.bossId,
+			#returnPlayers
+		))
+		return
+	end
+
+	local replayPayload, payloadError = BossQueueTeleportPayload.Build(
+		encounter.bossId,
+		encounter.arenaId,
+		tostring(encounter.payload and encounter.payload.portalId or "replay"),
+		readyUserIds,
+		os.time(),
+		filterPotionEffectsByUserIds(encounter.payload and encounter.payload.potionEffectsByUserId, readyUserIds)
 	)
+	if replayPayload == nil then
+		warnWithPrefix(payloadError or "Failed to build replay boss payload.")
+		self:_queuePlayersReturnToBossLobby(readyPlayers, "Boss replay fallback return")
+		self:_clearEncounter(string.format("Boss replay failed for '%s'; returning ready players to lobby.", encounter.bossId))
+		return
+	end
+
+	local bossId = encounter.bossId
+	local readyCount = #readyPlayers
+	self:_clearEncounter(string.format(
+		"Boss results finished for '%s'. Replaying with %d ready player(s); returning %d player(s) to boss lobby.",
+		bossId,
+		readyCount,
+		#returnPlayers
+	))
+	self:_spawnBossEncounter(replayPayload)
 end
 
 function BossArenaRuntimeService:_heartbeat()
@@ -2100,15 +2394,19 @@ function BossArenaRuntimeService:_heartbeat()
 		return
 	end
 
-	self:_refreshRosterFromPlayers()
-
 	local encounter = self._encounter
 	if encounter == nil then
 		return
 	end
 
+	if encounter.timerPhase ~= "results" then
+		self:_refreshRosterFromPlayers()
+	end
+
 	self:_syncDamageLeaderstats(encounter)
-	self:_positionQueuedPlayersIfNeeded(encounter)
+	if encounter.timerPhase ~= "results" then
+		self:_positionQueuedPlayersIfNeeded(encounter)
+	end
 
 	if encounter.arenaModel.Parent == nil then
 		self:_clearEncounter("Active arena model was removed from Workspace.")
@@ -2130,12 +2428,19 @@ function BossArenaRuntimeService:_heartbeat()
 	if encounter.timerPhase == "return" then
 		local returnCountdownEndsAt = encounter.returnCountdownEndsAt
 		if returnCountdownEndsAt ~= nil and os.clock() >= returnCountdownEndsAt then
-			self:_completeVictoryReturn(encounter)
+			self:_completeResults(encounter)
+		end
+		return
+	end
+	if encounter.timerPhase == "results" then
+		local resultsEndsAt = encounter.resultsEndsAt
+		if resultsEndsAt ~= nil and os.clock() >= resultsEndsAt then
+			self:_completeResults(encounter)
 		end
 		return
 	end
 	if encounter.bossHumanoid.Health <= 0 then
-		self:_beginVictoryReturnCountdown(encounter)
+		self:_beginResults(encounter, "victory")
 		return
 	end
 	if os.clock() >= encounter.timerEndsAt then
@@ -2194,14 +2499,133 @@ function BossArenaRuntimeService:OnPlayerRemoving(player: Player)
 	end
 
 	encounter.rosterUserIds[player.UserId] = nil
+	encounter.replayReadyUserIds[player.UserId] = nil
 	encounter.placedCharacters[player.UserId] = nil
 	if encounter.currentTargetUserId == player.UserId then
 		encounter.currentTargetUserId = nil
 	end
+	self:_notifyRosterStateChanged()
+	self:_notifyBossResultsStateChanged()
 end
 
 function BossArenaRuntimeService:HasActiveEncounter(): boolean
 	return self._encounter ~= nil
+end
+
+function BossArenaRuntimeService:GetActiveRosterUserIds(): { number }
+	local encounter = self._encounter
+	if encounter == nil then
+		return {}
+	end
+
+	local rosterUserIds = {}
+	local seenUserIds = {}
+
+	for _, userId in ipairs(encounter.rosterOrder) do
+		local resolvedUserId = math.floor(tonumber(userId) or 0)
+		if resolvedUserId <= 0 or seenUserIds[resolvedUserId] == true then
+			continue
+		end
+
+		local player = getPlayerByUserId(resolvedUserId)
+		if player ~= nil and encounter.rosterUserIds[resolvedUserId] == true then
+			seenUserIds[resolvedUserId] = true
+			table.insert(rosterUserIds, resolvedUserId)
+		end
+	end
+
+	for userId in pairs(encounter.rosterUserIds) do
+		local resolvedUserId = math.floor(tonumber(userId) or 0)
+		if resolvedUserId <= 0 or seenUserIds[resolvedUserId] == true then
+			continue
+		end
+
+		local player = getPlayerByUserId(resolvedUserId)
+		if player ~= nil then
+			seenUserIds[resolvedUserId] = true
+			table.insert(rosterUserIds, resolvedUserId)
+		end
+	end
+
+	return rosterUserIds
+end
+
+function BossArenaRuntimeService:RequestPlayerAbandon(player: Player): (boolean, string?)
+	if not isEnabledForPlace() then
+		return false, "Boss arena runtime is not enabled for this place."
+	end
+	if typeof(player) ~= "Instance" or not player:IsA("Player") then
+		return false, "A valid player is required."
+	end
+
+	local encounter = self._encounter
+	if encounter == nil then
+		return false, "There is no active boss encounter."
+	end
+	if encounter.rosterUserIds[player.UserId] ~= true then
+		return false, "You are not in this boss encounter."
+	end
+	if encounter.timedOut == true or (encounter.timerPhase ~= "intro" and encounter.timerPhase ~= "fight") then
+		return false, "This boss encounter cannot be abandoned right now."
+	end
+
+	local destinationPlaceId = self:_getBossLobbyReturnPlaceId()
+	if destinationPlaceId <= 0 then
+		return false, "Boss lobby return route is not configured."
+	end
+
+	local oldRosterSize = countRosterMembers(encounter)
+	encounter.rosterUserIds[player.UserId] = nil
+	encounter.placedCharacters[player.UserId] = nil
+	encounter.damageByUserId[player.UserId] = nil
+	if encounter.currentTargetUserId == player.UserId then
+		encounter.currentTargetUserId = nil
+	end
+	if encounter.activeCast ~= nil and encounter.activeCast.targetUserId == player.UserId then
+		self:_cancelActiveCast(encounter)
+	end
+	setDamageLeaderstat(player, 0)
+
+	local remainingRosterSize = countRosterMembers(encounter)
+	if remainingRosterSize > 0 and oldRosterSize > remainingRosterSize then
+		local oldScaling = BossEncounterScaling.GetForPartySize(oldRosterSize)
+		local newScaling = BossEncounterScaling.GetForPartySize(remainingRosterSize)
+		local oldHealthMultiplier = math.max(0.001, tonumber(oldScaling.healthMultiplier) or 1)
+		local newHealthMultiplier = math.max(0.001, tonumber(newScaling.healthMultiplier) or 1)
+
+		encounter.encounterScaling = newScaling
+		applyBossHealthRatio(encounter.bossHumanoid, newHealthMultiplier / oldHealthMultiplier)
+		encounter.rewardEligibleDamageThreshold = math.max(
+			0,
+			encounter.bossHumanoid.MaxHealth * BOSS_REWARD_DAMAGE_CONTRIBUTION_RATIO
+		)
+	end
+
+	task.spawn(function()
+		local teleportOk, teleportError = pcall(function()
+			TeleportService:TeleportAsync(destinationPlaceId, { player })
+		end)
+		if not teleportOk then
+			warnWithPrefix(string.format(
+				"Boss abandon teleport to place %d failed for %s: %s",
+				destinationPlaceId,
+				player.Name,
+				tostring(teleportError)
+			))
+		end
+	end)
+
+	if remainingRosterSize <= 0 then
+		self:_clearEncounter(string.format("Player %s abandoned; no roster players remain.", player.Name))
+	else
+		self:_syncDamageLeaderstats(encounter)
+		self:_notifyBossHealthStateChanged()
+		self:_notifyBossTimerStateChanged()
+		self:_notifyEncounterStateChanged()
+		self:_notifyRosterStateChanged()
+	end
+
+	return true, "Returning to the boss lobby."
 end
 
 function BossArenaRuntimeService:GetActiveBossId(): string?
@@ -2308,6 +2732,104 @@ function BossArenaRuntimeService:GetBossTimerState(): BossTimerState?
 	return self:_buildBossTimerState(self._encounter)
 end
 
+function BossArenaRuntimeService:GetBossResultsState(player: Player?): BossResultsState?
+	local encounter = self._encounter
+	if encounter == nil or encounter.timerPhase ~= "results" then
+		return nil
+	end
+
+	local startsAtServerTime = encounter.resultsStartedAtServerTime
+	local endsAtServerTime = encounter.resultsEndsAtServerTime
+	if startsAtServerTime == nil or endsAtServerTime == nil or endsAtServerTime <= startsAtServerTime then
+		return nil
+	end
+
+	local userId = if player and player:IsA("Player") then player.UserId else 0
+	if userId > 0 and encounter.rosterUserIds[userId] ~= true then
+		return nil
+	end
+
+	local maxHealth = math.max(1, tonumber(encounter.bossHumanoid.MaxHealth) or 1)
+	local damage = if userId > 0 then math.max(0, tonumber(encounter.damageByUserId[userId]) or 0) else 0
+	local rewards = if userId > 0 then copyRewardEntries(encounter.resultRewardsByUserId[userId]) else {}
+
+	return {
+		outcome = if encounter.resultsOutcome == "victory" then "victory" else "defeat",
+		bossId = encounter.bossId,
+		damagePercent = math.clamp((damage / maxHealth) * 100, 0, 100),
+		startsAtServerTime = startsAtServerTime,
+		endsAtServerTime = endsAtServerTime,
+		durationSeconds = BOSS_RESULTS_DURATION_SECONDS,
+		rewards = rewards,
+		readyCount = countReplayReadyPlayers(encounter),
+		capacity = countRosterMembers(encounter),
+		isReplayReady = userId > 0 and encounter.replayReadyUserIds[userId] == true,
+	}
+end
+
+function BossArenaRuntimeService:SetPlayerReplayReady(player: Player, isReady: boolean): (boolean, string?)
+	if not isEnabledForPlace() then
+		return false, "Boss arena runtime is not enabled for this place."
+	end
+	if typeof(player) ~= "Instance" or not player:IsA("Player") then
+		return false, "A valid player is required."
+	end
+
+	local encounter = self._encounter
+	if encounter == nil or encounter.timerPhase ~= "results" then
+		return false, "Boss results are not active."
+	end
+	if encounter.rosterUserIds[player.UserId] ~= true then
+		return false, "You are not in this boss encounter."
+	end
+	if encounter.resultsCompleted == true then
+		return false, "Boss results have already completed."
+	end
+
+	if isReady then
+		encounter.replayReadyUserIds[player.UserId] = true
+	else
+		encounter.replayReadyUserIds[player.UserId] = nil
+	end
+	self:_notifyBossResultsStateChanged()
+
+	return true, if isReady then "Ready to play again." else "Replay readiness cleared."
+end
+
+function BossArenaRuntimeService:ReturnPlayerToBossLobbyFromResults(player: Player): (boolean, string?)
+	if not isEnabledForPlace() then
+		return false, "Boss arena runtime is not enabled for this place."
+	end
+	if typeof(player) ~= "Instance" or not player:IsA("Player") then
+		return false, "A valid player is required."
+	end
+
+	local encounter = self._encounter
+	if encounter == nil or encounter.timerPhase ~= "results" then
+		return false, "Boss results are not active."
+	end
+	if encounter.rosterUserIds[player.UserId] ~= true then
+		return false, "You are not in this boss encounter."
+	end
+
+	encounter.rosterUserIds[player.UserId] = nil
+	encounter.replayReadyUserIds[player.UserId] = nil
+	encounter.placedCharacters[player.UserId] = nil
+	encounter.damageByUserId[player.UserId] = nil
+	setDamageLeaderstat(player, 0)
+
+	self:_queuePlayersReturnToBossLobby({ player }, "Boss results return request")
+
+	if countRosterMembers(encounter) <= 0 then
+		self:_clearEncounter(string.format("Player %s returned from results; no roster players remain.", player.Name))
+	else
+		self:_notifyRosterStateChanged()
+		self:_notifyBossResultsStateChanged()
+	end
+
+	return true, "Returning to the boss lobby."
+end
+
 function BossArenaRuntimeService:GetAssignedPlayerSpawnCFrame(player: Player): CFrame?
 	local encounter = self._encounter
 	if encounter == nil then
@@ -2381,6 +2903,15 @@ function BossArenaRuntimeService:ConnectEncounterStateChanged(callback: (string?
 	end
 end
 
+function BossArenaRuntimeService:ConnectRosterStateChanged(callback: () -> ()): () -> ()
+	assert(type(callback) == "function", "Roster state callback must be a function.")
+	self._rosterStateListeners[callback] = true
+
+	return function()
+		self._rosterStateListeners[callback] = nil
+	end
+end
+
 function BossArenaRuntimeService:ConnectBossHealthStateChanged(callback: (BossHealthState?) -> ()): () -> ()
 	assert(type(callback) == "function", "Boss health callback must be a function.")
 	self._bossHealthStateListeners[callback] = true
@@ -2396,6 +2927,15 @@ function BossArenaRuntimeService:ConnectBossTimerStateChanged(callback: (BossTim
 
 	return function()
 		self._bossTimerStateListeners[callback] = nil
+	end
+end
+
+function BossArenaRuntimeService:ConnectBossResultsStateChanged(callback: () -> ()): () -> ()
+	assert(type(callback) == "function", "Boss results callback must be a function.")
+	self._bossResultsStateListeners[callback] = true
+
+	return function()
+		self._bossResultsStateListeners[callback] = nil
 	end
 end
 

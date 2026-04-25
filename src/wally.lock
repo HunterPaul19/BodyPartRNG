@@ -3,6 +3,11 @@
 registry = "test"
 
 [[package]]
+name = "1foreverhd/topbarplus"
+version = "3.4.0"
+dependencies = []
+
+[[package]]
 name = "etheroit/profileservice"
 version = "1.2.0"
 dependencies = []
@@ -20,4 +25,4 @@ dependencies = []
 [[package]]
 name = "template/game-template"
 version = "0.1.0"
-dependencies = [["ReplicaController", "etheroit/replicacontroller@1.0.0"], ["ProfileService", "etheroit/profileservice@1.2.0"], ["ReplicaService", "etheroit/replicaservice@1.0.2"]]
+dependencies = [["ReplicaController", "etheroit/replicacontroller@1.0.0"], ["TopBarPlus", "1foreverhd/topbarplus@3.4.0"], ["ProfileService", "etheroit/profileservice@1.2.0"], ["ReplicaService", "etheroit/replicaservice@1.0.2"]]

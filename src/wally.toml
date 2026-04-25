@@ -8,6 +8,7 @@ exclude = ["Packages", "ServerPackages"]
 
 [dependencies]
 ReplicaController = "etheroit/replicacontroller@1.0.0"
+TopBarPlus = "1foreverhd/topbarplus@3.4.0"
 
 [server-dependencies]
 ProfileService = "etheroit/profileservice@1.2.0"

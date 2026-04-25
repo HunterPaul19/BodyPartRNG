@@ -260,6 +260,12 @@ function AchievementService:OnStart()
 	DataService.OwnedBodyPartAdded:Connect(function(player: Player, record: any, bodyPartsState: any)
 		self:_handleOwnedBodyPartAdded(player, record, bodyPartsState)
 	end)
+
+	if DataService.BodyPartPieceDiscovered then
+		DataService.BodyPartPieceDiscovered:Connect(function(player: Player, _pieceId: string, bodyPartsState: any)
+			self:_handleOwnedBodyPartAdded(player, nil, bodyPartsState)
+		end)
+	end
 end
 
 function AchievementService:OnPlayerAdded(player: Player)

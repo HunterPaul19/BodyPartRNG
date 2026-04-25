@@ -48,6 +48,7 @@ local ALL_CONTROLLER_NAMES = {
 	"DialogueController",
 	"DialogueInteractionController",
 	"FoliageController",
+	"FootstepController",
 	"FrameController",
 	"HelpController",
 	"HUDWindowController",

@@ -641,10 +641,16 @@ function BodyPartPresentation.BuildPreviewPresentation(payload: any)
 	local setConfig = BodyPartsCatalog.GetSetForPiece(piece.id)
 	local applyPlayerClothing = setConfig == nil or setConfig.applyPlayerClothing ~= false
 	local applyPlayerBodyColors = setConfig == nil or setConfig.applyPlayerBodyColors ~= false
-	local previewScale = tonumber(source.scale)
+	local previewScale = tonumber(source.visualScale)
+		or tonumber(source.scale)
 		or tonumber(entry and entry.scale)
 		or tonumber(record and (record.sizeMultiplier or record.scale))
 		or 1
+	local displayScale = tonumber(source.displayScale)
+		or tonumber(source.sizeMultiplier)
+		or tonumber(record and (record.sizeMultiplier or record.scale))
+		or tonumber(entry and entry.sizeMultiplier)
+		or previewScale
 	local sizeId = source.sizeId or (record and record.sizeId) or (entry and entry.sizeId)
 	local rarityChance = tonumber(record and (record.displayOddsDenominator or record.rarityDenominator))
 		or tonumber(setConfig and setConfig.rollDisplay and setConfig.rollDisplay.chance)
@@ -677,6 +683,7 @@ function BodyPartPresentation.BuildPreviewPresentation(payload: any)
 		applyPlayerBodyColors = applyPlayerBodyColors,
 		passiveIncomePerSecond = passiveIncomePerSecond,
 		previewScale = previewScale,
+		displayScale = displayScale,
 		appearanceUserId = tonumber(source.appearanceUserId)
 			or tonumber(source.userId)
 			or tonumber(record and record.userId)
@@ -713,8 +720,8 @@ function BodyPartPresentation.BuildPreviewPresentation(payload: any)
 		rarityFontFace = rarityFontFace,
 		mutationText = BodyPartPresentation.FormatMutationLabelText("Mutation", record),
 		sizeText = TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Size, {
-			SizeDescriptor = getSizeDescriptor(previewScale, sizeId),
-			SizeMultiplier = formatMultiplier(previewScale),
+			SizeDescriptor = getSizeDescriptor(displayScale, sizeId),
+			SizeMultiplier = formatMultiplier(displayScale),
 		}),
 		cashText = TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.CashPerSec, {
 			IncomePerSecond = string.format(
@@ -727,8 +734,8 @@ function BodyPartPresentation.BuildPreviewPresentation(payload: any)
 			ChanceText = formatChance(rarityChance),
 		}),
 		bundleModel = BodyPartsCatalog.ResolveBundleModel(piece.id),
-		sizeTagStyle = getSizeTagStyle(previewScale, sizeId),
-		sizeTagTexture = getSizeTagTexture(previewScale, sizeId),
+		sizeTagStyle = getSizeTagStyle(displayScale, sizeId),
+		sizeTagTexture = getSizeTagTexture(displayScale, sizeId),
 		cardNameText = BodyPartPresentation.FormatInventoryNameText(piece.displayName, record),
 		cardUsageText = formatMoneyPerSecond(passiveIncomePerSecond),
 		cardAccentColor = if rarityStyle then rarityStyle.accentColor else nil,
@@ -751,6 +758,8 @@ function BodyPartPresentation.BuildBundleCardPayload(previewPresentation: any, o
 		region = previewPresentation.region,
 		previewScale = previewPresentation.previewScale,
 		appearanceUserId = previewPresentation.appearanceUserId,
+		applyPlayerClothing = previewPresentation.applyPlayerClothing,
+		applyPlayerBodyColors = previewPresentation.applyPlayerBodyColors,
 		cardAccentColor = previewPresentation.cardAccentColor,
 		baseFillColor = previewPresentation.baseFillColor,
 		selectedFillColor = previewPresentation.selectedFillColor,

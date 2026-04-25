@@ -131,6 +131,13 @@ function LeaderboardController:_scheduleRefresh(delaySeconds: number?)
 	end)
 end
 
+function LeaderboardController:_refreshRowsNow()
+	self._refreshGeneration += 1
+	self._refreshScheduled = false
+	self._refreshDeadline = nil
+	self:_refreshRows()
+end
+
 function LeaderboardController:_getRollCount(player: Player): number
 	local stats = player:FindFirstChild("leaderstats")
 	if not stats then
@@ -313,7 +320,7 @@ end
 
 function LeaderboardController:_watchRollsValue(rollsValue: IntValue, playerConnections: { RBXScriptConnection })
 	table.insert(playerConnections, rollsValue:GetPropertyChangedSignal("Value"):Connect(function()
-		self:_scheduleRefresh()
+		self:_refreshRowsNow()
 	end))
 end
 

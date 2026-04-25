@@ -7,9 +7,9 @@ local ChatNotificationConfig = {
 	MinimumRareRollRarity = "Prime",
 	RareRollKind = "rareRoll",
 	RarityColors = {
-		Prime = Color3.fromRGB(96, 165, 250),
-		Elite = Color3.fromRGB(236, 72, 153),
-		Apex = Color3.fromRGB(245, 158, 11),
+		Prime = Color3.fromRGB(255, 179, 0),
+		Elite = Color3.fromRGB(247, 0, 255),
+		Apex = Color3.fromRGB(255, 0, 0),
 	},
 }
 

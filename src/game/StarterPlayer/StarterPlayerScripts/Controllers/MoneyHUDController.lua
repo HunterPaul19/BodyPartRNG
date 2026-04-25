@@ -14,7 +14,7 @@ local function formatMoneyText(value: any): string
 	local numericValue = tonumber(value) or 0
 	local clampedValue = math.max(0, numericValue)
 
-	return "$" .. NumberFormatter.Format(math.round(clampedValue))
+	return NumberFormatter.Format(math.round(clampedValue))
 end
 
 function MoneyHUDController:_getLabel(): TextLabel?

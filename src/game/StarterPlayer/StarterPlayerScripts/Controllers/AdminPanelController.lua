@@ -78,6 +78,7 @@ function AdminPanelController:_ensureState()
 	self._luckOverrideInputText = ""
 	self._luckOverrideState = nil
 	self._luckOverrideUi = {}
+	self._actionFormInputs = {}
 end
 
 local function setTextStroke(label: TextLabel, transparency: number)
@@ -323,6 +324,11 @@ function AdminPanelController:_createSpacer(parent: Instance, height: number)
 end
 
 function AdminPanelController:_invokeAction(tabId: string, actionId: string, actionTitle: string)
+	if tabId == PLAYERS_TAB_ID and actionId == "repair_marketplace_entitlement" then
+		self:_repairSelectedPlayerVipPlus()
+		return
+	end
+
 	local ok, result = self:_invokeAdminRequest(tabId, actionId, string.format("Sending %s", actionTitle), {})
 	if not ok or not result then
 		return
@@ -492,6 +498,148 @@ function AdminPanelController:_createSandboxTextInput(
 	return input
 end
 
+function AdminPanelController:_getSelectedAdminTargetUserId(): number
+	local selectedPlayer = select(1, self:_getSelectedPlayerStatsTarget())
+	if selectedPlayer then
+		return selectedPlayer.UserId
+	end
+
+	return LOCAL_PLAYER.UserId
+end
+
+function AdminPanelController:_resolveActionFieldDefault(field: any): string
+	local defaultValue = field and field.defaultValue
+	if defaultValue == "$selectedPlayerUserId" then
+		return tostring(self:_getSelectedAdminTargetUserId())
+	end
+	if defaultValue == "$localPlayerUserId" then
+		return tostring(LOCAL_PLAYER.UserId)
+	end
+	if defaultValue == nil then
+		return ""
+	end
+	return tostring(defaultValue)
+end
+
+function AdminPanelController:_collectActionPayload(actionKey: string, action: any): any
+	local payload = {}
+	local inputs = self._actionFormInputs[actionKey] or {}
+
+	for _, field in ipairs(action.fields or {}) do
+		local input = inputs[field.id]
+		local rawValue = if input and input:IsA("TextBox") then input.Text else self:_resolveActionFieldDefault(field)
+		local trimmedValue = trimText(rawValue)
+
+		if field.kind == "number" then
+			if trimmedValue ~= "" then
+				payload[field.id] = tonumber(trimmedValue)
+			end
+		elseif field.kind == "boolean" then
+			local lowered = string.lower(trimmedValue)
+			payload[field.id] = lowered == "true" or lowered == "yes" or lowered == "1" or lowered == "on"
+		elseif field.kind == "player" then
+			local resolvedUserId = tonumber(trimmedValue)
+			payload[field.id] = if resolvedUserId then math.floor(resolvedUserId) else self:_getSelectedAdminTargetUserId()
+		else
+			payload[field.id] = trimmedValue
+		end
+	end
+
+	return payload
+end
+
+function AdminPanelController:_createActionFormCard(parent: Instance, tabId: string, action: any)
+	local card = Instance.new("Frame")
+	card.Name = string.format("%sFormCard", action.id)
+	card.BackgroundColor3 = SANDBOX_CARD_COLOR
+	card.AutomaticSize = Enum.AutomaticSize.Y
+	card.Size = UDim2.new(1, -4, 0, 0)
+	card.Parent = parent
+	setGenerated(card)
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 14)
+	corner.Parent = card
+	setGenerated(corner)
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = if action.risk == "destructive" then Color3.fromRGB(180, 91, 91) else SANDBOX_STROKE_COLOR
+	stroke.Transparency = 0.14
+	stroke.Parent = card
+	setGenerated(stroke)
+
+	local padding = Instance.new("UIPadding")
+	padding.PaddingTop = UDim.new(0, 14)
+	padding.PaddingBottom = UDim.new(0, 14)
+	padding.PaddingLeft = UDim.new(0, 14)
+	padding.PaddingRight = UDim.new(0, 14)
+	padding.Parent = card
+	setGenerated(padding)
+
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Vertical
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+	layout.Padding = UDim.new(0, 10)
+	layout.Parent = card
+	setGenerated(layout)
+
+	local title = Instance.new("TextLabel")
+	title.Name = "TitleLabel"
+	title.BackgroundTransparency = 1
+	title.AutomaticSize = Enum.AutomaticSize.Y
+	title.Size = UDim2.new(1, 0, 0, 0)
+	title.Font = Enum.Font.GothamBold
+	title.Text = action.title
+	title.TextColor3 = Color3.fromRGB(247, 249, 255)
+	title.TextSize = 17
+	title.TextWrapped = true
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.Parent = card
+	setGenerated(title)
+
+	local description = Instance.new("TextLabel")
+	description.Name = "DescriptionLabel"
+	description.BackgroundTransparency = 1
+	description.AutomaticSize = Enum.AutomaticSize.Y
+	description.Size = UDim2.new(1, 0, 0, 0)
+	description.Font = Enum.Font.Gotham
+	description.Text = action.description
+	description.TextColor3 = Color3.fromRGB(184, 196, 227)
+	description.TextSize = 14
+	description.TextWrapped = true
+	description.TextXAlignment = Enum.TextXAlignment.Left
+	description.TextYAlignment = Enum.TextYAlignment.Top
+	description.Parent = card
+	setGenerated(description)
+
+	local actionKey = string.format("%s:%s", tabId, action.id)
+	self._actionFormInputs[actionKey] = {}
+
+	for _, field in ipairs(action.fields or {}) do
+		local fieldContainer = self:_createSandboxField(card, field.label or field.id)
+		local input = self:_createSandboxTextInput(
+			fieldContainer,
+			string.format("%sInput", tostring(field.id)),
+			self:_resolveActionFieldDefault(field),
+			tostring(field.placeholder or ""),
+			38,
+			field.multiline == true
+		)
+		self._actionFormInputs[actionKey][field.id] = input
+	end
+
+	local buttonText = if action.risk == "destructive" then "Run Destructive Action" else "Run Action"
+	self:_createSandboxButton(card, "RunButton", buttonText, UDim2.new(1, 0, 0, 40), function()
+		local payload = self:_collectActionPayload(actionKey, action)
+		local ok, result = self:_invokeAdminRequest(tabId, action.id, string.format("Running %s", action.title), payload)
+		if not ok or not result then
+			return
+		end
+
+		self:_setStatus(tostring(result.message or "No response message provided."), if result.ok then SUCCESS_COLOR else ERROR_COLOR)
+	end)
+end
+
 function AdminPanelController:_getPlayerStatsTargets(): { Player }
 	local targets = Players:GetPlayers()
 	table.sort(targets, function(a, b)
@@ -642,6 +790,30 @@ function AdminPanelController:_loadSelectedPlayerStats(forceRefresh: boolean?): 
 	self:_syncPlayerStatsUi()
 	self:_setStatus(tostring(result.message or "Loaded player stats."), SUCCESS_COLOR)
 	return true
+end
+
+function AdminPanelController:_repairSelectedPlayerVipPlus(): boolean
+	local selectedPlayer = select(1, self:_getSelectedPlayerStatsTarget())
+	if not selectedPlayer then
+		self:_setStatus("No players are currently available to repair.", ERROR_COLOR)
+		return false
+	end
+
+	local ok, result = self:_invokeAdminRequest(PLAYERS_TAB_ID, "repair_marketplace_entitlement", "Repairing VIP+", {
+		userId = selectedPlayer.UserId,
+		offerKey = "vip_plus",
+		reason = "admin_panel_vip_plus_repair",
+	})
+	if not ok or not result then
+		return false
+	end
+
+	self:_setStatus(tostring(result.message or "Marketplace entitlement repair completed."), if result.ok then SUCCESS_COLOR else ERROR_COLOR)
+	if result.ok == true then
+		self:_loadSelectedPlayerStats(true)
+	end
+
+	return result.ok == true
 end
 
 function AdminPanelController:_getNotificationTargets(): { [number]: any }
@@ -2595,6 +2767,11 @@ function AdminPanelController:_createPlayerStatsInspectorSection(parent: Scrolli
 end
 
 function AdminPanelController:_createActionCard(parent: Instance, tabId: string, action: any, template: GuiButton)
+	if typeof(action.fields) == "table" and #action.fields > 0 then
+		self:_createActionFormCard(parent, tabId, action)
+		return
+	end
+
 	local card = template:Clone()
 	card.Name = string.format("%sCard", action.id)
 	card.Visible = true
@@ -2613,7 +2790,7 @@ function AdminPanelController:_createActionCard(parent: Instance, tabId: string,
 
 	local badgeLabel = card:FindFirstChild("ActionBadge")
 	if badgeLabel and badgeLabel:IsA("TextLabel") then
-		badgeLabel.Text = "Stub"
+		badgeLabel.Text = if action.risk == "destructive" then "Live gated" else "Ready"
 	end
 
 	UIController:CreateButton(card, function()
@@ -2634,9 +2811,7 @@ function AdminPanelController:_buildPage(tabDefinition: any, page: ScrollingFram
 		self:_createRuntimeInspectorSection(page)
 		self:_createSpacer(page, 8)
 		self:_createVisualSandboxSection(page)
-		page.Visible = false
-		page.CanvasPosition = Vector2.zero
-		return
+		self:_createSpacer(page, 8)
 	end
 
 	if tabDefinition.id == OVERVIEW_TAB_ID then
@@ -2658,7 +2833,9 @@ function AdminPanelController:_buildPage(tabDefinition: any, page: ScrollingFram
 		self:_createSectionHeader(page, section.title, section.description)
 
 		for _, action in ipairs(section.actions) do
-			if not (tabDefinition.id == PLAYERS_TAB_ID and action.id == "inspect_player_profile") then
+			local isCustomPlayerInspector = tabDefinition.id == PLAYERS_TAB_ID and action.id == "inspect_player_profile"
+			local isCustomBodyPartGrant = tabDefinition.id == BODY_PARTS_TAB_ID and action.id == "grant_body_part"
+			if not (isCustomPlayerInspector or isCustomBodyPartGrant) then
 				self:_createActionCard(page, tabDefinition.id, action, actionTemplate)
 			end
 		end

@@ -289,6 +289,15 @@ function StatsService:RecordBodyPartsSold(player: Player, amount: number)
 	setStatsValue(player, { "collection", "totalBodyPartsSold" }, stats.collection.totalBodyPartsSold + soldCount)
 end
 
+function StatsService:RecordTransientBodyPartAcquired(player: Player)
+	local stats = DataService:GetStats(player)
+	if not stats then
+		return
+	end
+
+	setStatsValue(player, { "collection", "totalBodyPartsAcquired" }, stats.collection.totalBodyPartsAcquired + 1)
+end
+
 function StatsService:RecordPurchasePrompt(player: Player, key: string)
 	if typeof(key) ~= "string" or key == "" then
 		return

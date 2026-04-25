@@ -1,30 +1,47 @@
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
 
+local AdminActionRegistry = require(ReplicatedStorage.Shared.Admin.AdminActionRegistry)
 local AdminConfig = require(script.Parent.AdminConfig)
 local AuraService = require(script.Parent.AuraService)
 local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
+local AchievementConfig = require(ReplicatedStorage.Shared.Config.AchievementConfig)
+local AchievementState = require(ReplicatedStorage.Shared.Titles.AchievementState)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
+local BodyPartLoadout = require(ReplicatedStorage.Shared.Character.BodyPartLoadout)
 local BodyPartVisuals = require(ReplicatedStorage.Shared.Character.BodyPartVisuals)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local AuraConfig = require(ReplicatedStorage.Shared.Config.AuraConfig)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local MerchantShopConfig = require(ReplicatedStorage.Shared.Config.MerchantShopConfig)
 local MerchantShopService = require(script.Parent.MerchantShopService)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
+local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
 local PotionService = require(script.Parent.PotionService)
+local PurchaseReceiptService = require(script.Parent.PurchaseReceiptService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 local RollService = require(script.Parent.RollService)
+local RollTypes = require(ReplicatedStorage.Shared.Config.RollTypes)
+local RollTargetRegions = require(ReplicatedStorage.Shared.Character.RollTargetRegions)
+local Schema = require(ReplicatedStorage.Lists.Schema)
+local TitleConfig = require(ReplicatedStorage.Shared.Config.TitleConfig)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local ADMIN_ACTION_REMOTE_NAME = "AdminAction"
 local ACCESS_ATTRIBUTE = "CanUseAdminPanel"
 local OVERVIEW_TAB_ID = "overview"
 local BODY_PARTS_TAB_ID = "bodyParts"
+local ROLL_SOURCES_TAB_ID = "cases"
 local PLAYERS_TAB_ID = "players"
 local PROGRESSION_TAB_ID = "progression"
 local DIAGNOSTICS_TAB_ID = "diagnostics"
+local MONEY_KEY = Schema.Money and Schema.Money.key or "money"
+local TIME_PLAYED_KEY = Schema.TimePlayed and Schema.TimePlayed.key or "timePlayed"
+local ACHIEVEMENTS_KEY = Schema.Achievements and Schema.Achievements.key or "achievements"
 local MIN_SANDBOX_SCALE = 0.4
 local MAX_SANDBOX_SCALE = 2.5
 local MIN_NOTIFICATION_DURATION = 1
@@ -39,6 +56,9 @@ local remotesFolder: Folder? = nil
 local adminActionRemote: RemoteFunction? = nil
 local sandboxStateByPlayer: { [Player]: { [string]: { bundleName: string, scale: number } } } = {}
 local characterAddedConnections: { [Player]: RBXScriptConnection } = {}
+local recentEvents = {}
+local MAX_RECENT_EVENTS = 40
+local MAX_SIMULATION_COUNT = 10000
 
 local AdminService = {}
 
@@ -59,6 +79,117 @@ local function trimText(value: any): string
 	local normalized = string.gsub(value, "\r\n", "\n")
 	normalized = string.gsub(normalized, "\r", "\n")
 	return string.match(normalized, "^%s*(.-)%s*$") or ""
+end
+
+local function pushRecentEvent(kind: string, message: string, data: any?)
+	table.insert(recentEvents, 1, {
+		atUnix = os.time(),
+		kind = kind,
+		message = message,
+		data = data,
+	})
+
+	while #recentEvents > MAX_RECENT_EVENTS do
+		table.remove(recentEvents)
+	end
+end
+
+local function toWholeNumber(value: any, defaultValue: number?): number
+	local numericValue = tonumber(value)
+	if numericValue == nil or numericValue ~= numericValue then
+		return math.floor(defaultValue or 0)
+	end
+	return math.floor(numericValue)
+end
+
+local function hasUserId(list: { any }?, userId: number): boolean
+	if typeof(list) ~= "table" then
+		return false
+	end
+
+	for _, allowedUserId in ipairs(list) do
+		if tonumber(allowedUserId) == userId then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function isDestructiveUserId(userId: number): boolean
+	if RunService:IsStudio() and AdminConfig.AllowAllPlayersInStudio then
+		return true
+	end
+
+	return AdminConfig.AllowLiveDestructiveActions == true
+		and hasUserId(AdminConfig.LiveDestructiveUserIds, userId)
+end
+
+local function validateActionRequest(player: Player, tabId: string, actionId: string, payload: any): (boolean, string?, any?)
+	local action = AdminActionRegistry.GetAction(tabId, actionId)
+	if not action then
+		return true, nil, nil
+	end
+
+	if action.environment == AdminActionRegistry.Environment.StudioOnly and not RunService:IsStudio() then
+		return false, "This admin action is Studio-only.", action
+	end
+
+	if action.risk == AdminActionRegistry.Risk.Destructive and not isDestructiveUserId(player.UserId) then
+		return false, "This destructive admin action is not enabled for your user in this environment.", action
+	end
+
+	if action.requiresConfirmation == true then
+		local confirmation = trimText(payload and payload.confirmation)
+		if confirmation ~= tostring(action.confirmationText or "") then
+			return false, string.format("Type %s in the confirmation field before running this action.", tostring(action.confirmationText or "")), action
+		end
+	end
+
+	return true, nil, action
+end
+
+local function getPayloadTargetPlayer(payload: any, fallbackPlayer: Player?): (Player?, string?)
+	local targetUserId = toWholeNumber(payload and payload.userId, fallbackPlayer and fallbackPlayer.UserId or 0)
+	if targetUserId <= 0 then
+		return nil, "A valid target userId is required."
+	end
+
+	local targetPlayer = Players:GetPlayerByUserId(targetUserId)
+	if not targetPlayer then
+		return nil, "That player is no longer in this server."
+	end
+
+	return targetPlayer, nil
+end
+
+local function getCharacterRoot(player: Player): BasePart?
+	local character = player.Character
+	if not (character and character:IsA("Model")) then
+		return nil
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid and humanoid.RootPart then
+		return humanoid.RootPart
+	end
+
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if root and root:IsA("BasePart") then
+		return root
+	end
+
+	return if character.PrimaryPart and character.PrimaryPart:IsA("BasePart") then character.PrimaryPart else nil
+end
+
+local function safeJsonEncode(value: any): string
+	local ok, encoded = pcall(function()
+		return HttpService:JSONEncode(value)
+	end)
+	if ok then
+		return encoded
+	end
+	return "{}"
 end
 
 local function ensureRemotesFolder(): Folder
@@ -110,8 +241,8 @@ local function isAllowedUserId(userId: number): boolean
 		return true
 	end
 
-	for _, allowedUserId in ipairs(AdminConfig.AllowedUserIds) do
-		if tonumber(allowedUserId) == userId then
+	for _, authorizedUserId in ipairs(AdminConfig.AuthorizedUserIds or AdminConfig.AllowedUserIds or {}) do
+		if tonumber(authorizedUserId) == userId then
 			return true
 		end
 	end
@@ -396,10 +527,92 @@ local function handleTestDialogue()
 	})
 end
 
-local function handleShowMerchant()
-	local merchantState = MerchantShopService:ForceAppear()
+local function handleShowMerchant(payload: any?)
+	local merchantState = MerchantShopService:ForceAppear(toWholeNumber(payload and payload.durationSeconds, 300))
+	pushRecentEvent("merchant", "Forced merchant active from admin panel.", {
+		durationSeconds = toWholeNumber(payload and payload.durationSeconds, 300),
+	})
 	return response(true, "OK", "The merchant has been forced onto the map.", {
 		merchantState = merchantState,
+	})
+end
+
+local function buildPlayerSummary(player: Player)
+	return {
+		userId = player.UserId,
+		name = player.Name,
+		displayName = player.DisplayName,
+		money = DataService:GetMoney(player),
+		timePlayed = DataService:GetTimePlayed(player),
+		timeShards = DataService:GetTimeShardsBalance(player),
+		successfulRollCount = DataService:GetSuccessfulRollCount(player),
+		selectedRollType = DataService:GetSelectedRollType(player),
+		selectedRollRegion = DataService:GetSelectedRollRegion(player),
+		quickRollEnabled = DataService:GetQuickRollEnabled(player),
+		vipOwned = DataService:GetVipOwned(player),
+		vipPlusOwned = DataService:GetVipPlusOwned(player),
+	}
+end
+
+local function handleRefreshServerState()
+	local players = {}
+	for _, player in ipairs(Players:GetPlayers()) do
+		table.insert(players, buildPlayerSummary(player))
+	end
+
+	return response(true, "OK", string.format("Refreshed state for %d player(s).", #players), {
+		placeId = game.PlaceId,
+		jobId = game.JobId,
+		isStudio = RunService:IsStudio(),
+		serverTime = Workspace:GetServerTimeNow(),
+		players = players,
+	})
+end
+
+local function handleRunSmokeTest()
+	local checks = {
+		adminRemote = adminActionRemote ~= nil and adminActionRemote.Parent ~= nil,
+		bodyPartCatalogHasPieces = #BodyPartsCatalog.GetAllPieces() > 0,
+		rollTypesConfigured = #RollTypes.GetOrdered() > 0,
+		potionsConfigured = #PotionConfig.GetAll() > 0,
+		merchantEntriesConfigured = #MerchantShopConfig.GetAll() > 0,
+	}
+	local failed = {}
+	for checkName, ok in pairs(checks) do
+		if ok ~= true then
+			table.insert(failed, checkName)
+		end
+	end
+
+	local ok = #failed == 0
+	return response(ok, if ok then "OK" else "SMOKE_FAILED", if ok then "Smoke test passed." else ("Smoke test failed: " .. table.concat(failed, ", ")), {
+		checks = checks,
+		failed = failed,
+	})
+end
+
+local function handleDumpSessionSummary()
+	local totalMoney = 0
+	local totalRolls = 0
+	local players = {}
+	for _, targetPlayer in ipairs(Players:GetPlayers()) do
+		local summary = buildPlayerSummary(targetPlayer)
+		totalMoney += summary.money
+		totalRolls += summary.successfulRollCount
+		table.insert(players, summary)
+	end
+
+	local merchantState = nil
+	if Players:GetPlayers()[1] then
+		merchantState = MerchantShopService:GetShopState(Players:GetPlayers()[1]).shopState
+	end
+
+	return response(true, "OK", string.format("%d player(s), $%d total money, %d total rolls.", #players, totalMoney, totalRolls), {
+		players = players,
+		totalMoney = totalMoney,
+		totalRolls = totalRolls,
+		merchantState = merchantState,
+		recentEvents = recentEvents,
 	})
 end
 
@@ -507,8 +720,130 @@ local function handleInspectPlayerProfile(payload: any)
 	return response(true, "OK", "Loaded player summary.", BodyPartService:GetPlayerInspectSummary(targetPlayer))
 end
 
-local function handlePreviewRarityTable(player: Player)
-	local debugData = RollService:GetProbabilityDebug(player)
+local function handleRepairMarketplaceEntitlement(player: Player, payload: any)
+	local targetUserId = tonumber(payload.userId) or player.UserId
+	local offerKey = trimText(payload.offerKey)
+	if offerKey == "" then
+		offerKey = "vip_plus"
+	end
+
+	local result = PurchaseReceiptService:RepairEntitlementForUser(
+		player,
+		targetUserId,
+		offerKey,
+		trimText(payload.reason)
+	)
+	local code = result.code
+	if code == nil then
+		code = if result.ok == true then "OK" else "REPAIR_FAILED"
+	end
+
+	return response(
+		result.ok == true,
+		tostring(code),
+		tostring(result.message or "Marketplace entitlement repair completed."),
+		result.data
+	)
+end
+
+local function handleReloadPlayerState(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	BodyPartService:NotifyClient(targetPlayer, "Admin refreshed your body part state.")
+	RollService:NotifyClient(targetPlayer, "Admin refreshed your rolling state.")
+	PotionService:NotifyClient(targetPlayer, "Admin refreshed your potion state.")
+
+	return response(true, "OK", string.format("Refreshed replicated state for %s.", targetPlayer.Name), {
+		player = buildPlayerSummary(targetPlayer),
+		bodyParts = BodyPartService:GetClientState(targetPlayer),
+		rolling = RollService:GetRollingState(targetPlayer),
+		potions = PotionService:GetPotionState(targetPlayer),
+	})
+end
+
+local function handleTeleportToPlayer(player: Player, payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local sourceRoot = getCharacterRoot(player)
+	local targetRoot = getCharacterRoot(targetPlayer)
+	if not sourceRoot or not targetRoot then
+		return response(false, "CHARACTER_MISSING", "Both characters need valid root parts.")
+	end
+
+	player.Character:PivotTo(targetRoot.CFrame * CFrame.new(3, 0, 0))
+	return response(true, "OK", string.format("Teleported to %s.", targetPlayer.Name))
+end
+
+local function handleBringPlayer(player: Player, payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local sourceRoot = getCharacterRoot(player)
+	local targetRoot = getCharacterRoot(targetPlayer)
+	if not sourceRoot or not targetRoot then
+		return response(false, "CHARACTER_MISSING", "Both characters need valid root parts.")
+	end
+
+	targetPlayer.Character:PivotTo(sourceRoot.CFrame * CFrame.new(3, 0, 0))
+	return response(true, "OK", string.format("Brought %s to you.", targetPlayer.Name))
+end
+
+local function handleRespawnPlayer(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	targetPlayer:LoadCharacter()
+	return response(true, "OK", string.format("Respawned %s.", targetPlayer.Name))
+end
+
+local function handleKickPlayer(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local reason = trimText(payload.reason)
+	if reason == "" then
+		reason = "Admin action."
+	end
+
+	pushRecentEvent("moderation", string.format("Kicked %s.", targetPlayer.Name), {
+		userId = targetPlayer.UserId,
+		reason = reason,
+	})
+	targetPlayer:Kick(reason)
+	return response(true, "OK", string.format("Kicked %s.", targetPlayer.Name))
+end
+
+local function handleResetPlayerData(payload: any)
+	local targetUserId = toWholeNumber(payload and payload.userId, 0)
+	if targetUserId <= 0 then
+		return response(false, "BAD_REQUEST", "A valid target userId is required.")
+	end
+
+	local ok, wipeError = DataService:WipeByUserId(targetUserId)
+	if not ok then
+		return response(false, "WIPE_FAILED", wipeError or "Failed to reset player data.")
+	end
+
+	pushRecentEvent("moderation", string.format("Reset profile data for userId %d.", targetUserId), {
+		userId = targetUserId,
+	})
+	return response(true, "OK", string.format("Reset profile data for userId %d.", targetUserId))
+end
+
+local function handlePreviewRarityTable(player: Player, payload: any?)
+	local debugData = RollService:GetProbabilityDebug(player, payload)
 	return response(
 		true,
 		"OK",
@@ -517,14 +852,155 @@ local function handlePreviewRarityTable(player: Player)
 	)
 end
 
-local function handleGrantAllPotions(player: Player)
-	local ok, message, data = PotionService:GrantAllPotionUses(player, 1)
+local function handleGetLuckOverride(player: Player)
+	return response(true, "OK", "Loaded current luck override.", RollService:GetAdminLuckOverrideState(player))
+end
+
+local function handleSetLuckOverride(player: Player, payload: any)
+	local totalLuck = tonumber(payload.totalLuck)
+	if totalLuck == nil or totalLuck ~= totalLuck then
+		return response(false, "BAD_REQUEST", "totalLuck must be numeric.")
+	end
+
+	return response(true, "OK", "Applied admin luck override.", RollService:SetAdminLuckOverride(player, totalLuck))
+end
+
+local function handleClearLuckOverride(player: Player)
+	return response(true, "OK", "Cleared admin luck override.", RollService:ClearAdminLuckOverride(player))
+end
+
+local function handleGrantMoney(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local amount = tonumber(payload.amount)
+	if amount == nil or amount ~= amount then
+		return response(false, "BAD_REQUEST", "Amount must be numeric.")
+	end
+
+	local mode = string.lower(trimText(payload.mode))
+	local previousMoney = DataService:GetMoney(targetPlayer)
+	local updatedMoney
+	if mode == "set" then
+		local targetMoney = math.max(0, math.floor(amount))
+		updatedMoney = DataService:AdjustMoney(targetPlayer, targetMoney - previousMoney, "admin_set")
+	else
+		updatedMoney = DataService:AdjustMoney(targetPlayer, amount, "admin_grant")
+	end
+
+	return response(true, "OK", string.format("%s money: %d -> %d.", targetPlayer.Name, previousMoney, updatedMoney), {
+		previousMoney = previousMoney,
+		updatedMoney = updatedMoney,
+	})
+end
+
+local function handleAddTimeShards(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local amount = tonumber(payload.amount)
+	if amount == nil or amount ~= amount then
+		return response(false, "BAD_REQUEST", "Amount must be numeric.")
+	end
+
+	local previousBalance = DataService:GetTimeShardsBalance(targetPlayer)
+	local updatedBalance = DataService:AdjustTimeShardsBalance(targetPlayer, amount, "admin_grant")
+	return response(true, "OK", string.format("%s Time Shards: %d -> %d.", targetPlayer.Name, previousBalance, updatedBalance), {
+		previousBalance = previousBalance,
+		updatedBalance = updatedBalance,
+	})
+end
+
+local function handleSetTimePlayed(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local seconds = math.max(0, toWholeNumber(payload.seconds, 0))
+	DataService:Set(targetPlayer, TIME_PLAYED_KEY, seconds)
+	return response(true, "OK", string.format("Set %s time played to %d seconds.", targetPlayer.Name, seconds), {
+		timePlayed = seconds,
+	})
+end
+
+local function handleGrantPotion(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local potionId = trimText(payload.potionId)
+	local amount = math.max(1, toWholeNumber(payload.amount, 1))
+	local ok, message = PotionService:GrantPotionUses(targetPlayer, potionId, amount)
+	return response(ok, if ok then "OK" else "GRANT_FAILED", message, PotionService:GetPotionState(targetPlayer))
+end
+
+local function handleGrantAllPotions(player: Player, payload: any?)
+	local amount = math.max(1, toWholeNumber(payload and payload.amount, 1))
+	local ok, message, data = PotionService:GrantAllPotionUses(player, amount)
 	return response(ok, if ok then "OK" else "GRANT_FAILED", message, data)
 end
 
 local function handleClearAllPotionEffects(player: Player)
 	local ok, message, data = PotionService:ClearActivePotions(player)
 	return response(ok, if ok then "OK" else "CLEAR_FAILED", message, data)
+end
+
+local function handleSetRollType(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local rollTypeId = trimText(payload.rollTypeId)
+	local ok, message = RollService:SelectRollType(targetPlayer, rollTypeId)
+	return response(ok, if ok then "OK" else "ROLL_TYPE_FAILED", message, RollService:GetRollingState(targetPlayer))
+end
+
+local function handleUnlockAchievement(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local achievementId = trimText(payload.achievementId)
+	if not AchievementConfig.Get(achievementId) then
+		return response(false, "BAD_REQUEST", "That achievement does not exist.")
+	end
+
+	DataService:Set(targetPlayer, ACHIEVEMENTS_KEY, function(currentValue)
+		local state = AchievementState.Normalize(currentValue)
+		state.completedIds[achievementId] = true
+		return state
+	end)
+
+	local title = TitleConfig.GetByAchievementId(achievementId)
+	return response(true, "OK", string.format("Unlocked achievement %s for %s.", achievementId, targetPlayer.Name), {
+		achievementId = achievementId,
+		titleId = title and title.id or nil,
+	})
+end
+
+local function handleEquipTitle(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local titleId = trimText(payload.titleId)
+	if titleId ~= "" and not TitleConfig.Get(titleId) then
+		return response(false, "BAD_REQUEST", "That title does not exist.")
+	end
+
+	local ok, message = DataService:SetEquippedTitleId(targetPlayer, if titleId == "" then nil else titleId)
+	return response(ok, if ok then "OK" else "TITLE_FAILED", message or "Title updated.", {
+		titleId = titleId,
+	})
 end
 
 local function handleEquipOwnedBodyPart(player: Player, payload: any)
@@ -687,6 +1163,125 @@ local function handleResetVisualCharacter(player: Player)
 	})
 end
 
+local function grantBodyPartToTarget(targetPlayer: Player, pieceId: string): (any?, string?)
+	local grantPayload, payloadError = buildAdminGrantedBodyPartPayload(pieceId)
+	if not grantPayload then
+		return nil, payloadError or "Could not prepare the body part grant."
+	end
+
+	return DataService:AddOwnedBodyPart(targetPlayer, grantPayload)
+end
+
+local function handleForceCaseReward(player: Player, payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, player)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local pieceId = trimText(payload.pieceId)
+	if pieceId == "" then
+		return response(false, "BAD_REQUEST", "pieceId is required.")
+	end
+
+	local grantedRecord, grantError = grantBodyPartToTarget(targetPlayer, pieceId)
+	if not grantedRecord then
+		return response(false, "GRANT_FAILED", grantError or "Could not grant that body part.")
+	end
+
+	return response(true, "OK", string.format("Granted roll-source reward %s to %s.", pieceId, targetPlayer.Name), {
+		grantedRecord = grantedRecord,
+		runtimeState = BodyPartService:GetClientState(targetPlayer),
+	})
+end
+
+local function handleGrantFullSet(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local setId = trimText(payload.setId)
+	local pieces = BodyPartsCatalog.GetPiecesForSet(setId)
+	if not pieces or #pieces == 0 then
+		return response(false, "BAD_REQUEST", "No configured pieces exist for that setId.")
+	end
+
+	local grantedRecords = {}
+	for _, piece in ipairs(pieces) do
+		local grantedRecord, grantError = grantBodyPartToTarget(targetPlayer, piece.id)
+		if not grantedRecord then
+			return response(false, "GRANT_FAILED", grantError or string.format("Failed to grant %s.", piece.id))
+		end
+		table.insert(grantedRecords, grantedRecord)
+	end
+
+	return response(true, "OK", string.format("Granted %d piece(s) from set %s to %s.", #grantedRecords, setId, targetPlayer.Name), {
+		grantedRecords = grantedRecords,
+		runtimeState = BodyPartService:GetClientState(targetPlayer),
+	})
+end
+
+local function handleClearBodyParts(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local ownedBodyParts = DataService:GetOwnedBodyParts(targetPlayer)
+	local equippedState = BodyPartService:GetSessionLoadout(targetPlayer)
+	local equippedOwnedIds = {}
+	for _, entry in pairs(equippedState) do
+		if typeof(entry) == "table" and typeof(entry.ownedId) == "string" then
+			equippedOwnedIds[entry.ownedId] = true
+		end
+	end
+
+	local removeIds = {}
+	for ownedId, record in pairs(ownedBodyParts) do
+		if equippedOwnedIds[ownedId] ~= true and record.isFavorite ~= true then
+			table.insert(removeIds, ownedId)
+		end
+	end
+
+	if #removeIds == 0 then
+		return response(true, "OK", "No unequipped, unfavorited body parts were available to clear.")
+	end
+
+	local removedRecords, removeError = DataService:RemoveOwnedBodyParts(targetPlayer, removeIds)
+	if not removedRecords then
+		return response(false, "CLEAR_FAILED", removeError or "Failed to clear body parts.")
+	end
+
+	BodyPartService:NotifyClient(targetPlayer, "Admin cleared unequipped body parts.")
+	return response(true, "OK", string.format("Cleared %d body part(s) from %s.", #removedRecords, targetPlayer.Name), {
+		removedCount = #removedRecords,
+		runtimeState = BodyPartService:GetClientState(targetPlayer),
+	})
+end
+
+local function handleEquipBestLoadout(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local ok, message = BodyPartService:EquipBestLoadout(targetPlayer)
+	return response(ok, if ok then "OK" else "EQUIP_FAILED", message, BodyPartService:GetClientState(targetPlayer))
+end
+
+local function handleInspectLoadoutBonuses(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	return response(true, "OK", string.format("Loaded bonuses for %s.", targetPlayer.Name), {
+		sessionBonuses = BodyPartService:GetComputedLoadoutBonuses(targetPlayer),
+		persistedBonuses = BodyPartService:GetPersistedLoadoutBonuses(targetPlayer),
+		equipped = BodyPartLoadout.CloneEquippedState(BodyPartService:GetSessionLoadout(targetPlayer)),
+	})
+end
+
 local function handleTestPyramidHitbox(player: Player)
 	local character, humanoid = getLiveCharacter(player)
 	if not character or not humanoid then
@@ -739,6 +1334,150 @@ local function handleTestPyramidHitbox(player: Player)
 	)
 end
 
+local function handleInspectRollSources()
+	local entries = {}
+	for _, rollType in ipairs(RollTypes.GetOrdered()) do
+		table.insert(entries, {
+			id = rollType.id,
+			displayName = rollType.displayName,
+			moneyCost = rollType.moneyCost,
+			luckMultiplier = rollType.luckMultiplier,
+			bandLuckScalar = rollType.bandLuckScalar,
+			uiOrder = rollType.uiOrder,
+		})
+	end
+
+	return response(true, "OK", string.format("Loaded %d roll source(s).", #entries), {
+		rollTypes = entries,
+	})
+end
+
+local function normalizeRollSimulationPayload(payload: any): any
+	local options = {}
+	options.count = math.clamp(toWholeNumber(payload and payload.count, 100), 1, MAX_SIMULATION_COUNT)
+
+	local rollTypeId = trimText(payload and payload.rollTypeId)
+	if rollTypeId ~= "" and rollTypeId ~= "selected" then
+		options.rollTypeId = rollTypeId
+	end
+
+	local rollRegion = trimText(payload and payload.rollRegion)
+	if rollRegion ~= "" and rollRegion ~= "selected" and RollTargetRegions.IsValid(rollRegion) then
+		options.rollRegion = rollRegion
+	end
+
+	local totalLuck = tonumber(payload and payload.totalLuck)
+	if totalLuck ~= nil and totalLuck == totalLuck then
+		options.totalLuck = totalLuck
+	end
+
+	return options
+end
+
+local function handleSimulateRollBatch(player: Player, payload: any)
+	local targetPlayer = player
+	local resolvedTarget, targetError = getPayloadTargetPlayer(payload, player)
+	if resolvedTarget then
+		targetPlayer = resolvedTarget
+	elseif payload and payload.userId ~= nil then
+		return response(false, "BAD_REQUEST", targetError or "Could not resolve the target player.")
+	end
+
+	local options = normalizeRollSimulationPayload(payload)
+	local simulation = RollService:SimulateRolls(targetPlayer, options)
+	return response(true, "OK", string.format("Simulated %d roll(s) for %s.", simulation.count, targetPlayer.Name), simulation)
+end
+
+local function handleCaptureRuntimeSnapshot(player: Player)
+	local players = {}
+	for _, targetPlayer in ipairs(Players:GetPlayers()) do
+		table.insert(players, buildPlayerSummary(targetPlayer))
+	end
+
+	return response(true, "OK", "Captured runtime snapshot.", {
+		capturedAtUnix = os.time(),
+		serverTime = Workspace:GetServerTimeNow(),
+		placeId = game.PlaceId,
+		jobId = game.JobId,
+		isStudio = RunService:IsStudio(),
+		playerCount = #players,
+		players = players,
+		requestingPlayer = buildPlayerSummary(player),
+		recentEvents = recentEvents,
+	})
+end
+
+local function handleViewRecentEvents()
+	return response(true, "OK", string.format("Loaded %d recent event(s).", #recentEvents), {
+		events = recentEvents,
+	})
+end
+
+local function handleInspectReplication(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local data = DataService:Get(targetPlayer)
+	local payloadText = safeJsonEncode(data)
+	return response(true, "OK", string.format("Loaded replicated data snapshot for %s (%d bytes JSON).", targetPlayer.Name, #payloadText), {
+		player = buildPlayerSummary(targetPlayer),
+		payloadBytes = #payloadText,
+		data = data,
+	})
+end
+
+local function handleExportDebugPayload(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local debugPayload = {
+		capturedAtUnix = os.time(),
+		player = buildPlayerSummary(targetPlayer),
+		data = DataService:Get(targetPlayer),
+		bodyParts = BodyPartService:GetClientState(targetPlayer),
+		rolling = RollService:GetRollingState(targetPlayer),
+		potions = PotionService:GetPotionState(targetPlayer),
+		merchant = MerchantShopService:GetShopState(targetPlayer).shopState,
+	}
+	local encoded = safeJsonEncode(debugPayload)
+	return response(true, "OK", string.format("Exported debug payload for %s (%d bytes JSON).", targetPlayer.Name, #encoded), {
+		payload = debugPayload,
+		json = encoded,
+		bytes = #encoded,
+	})
+end
+
+local function handleInspectBossArena()
+	local runtimeService = nil
+	local ok, result = pcall(function()
+		return require(script.Parent.BossArenaRuntimeService)
+	end)
+	if ok then
+		runtimeService = result
+	end
+
+	if runtimeService == nil then
+		return response(false, "UNAVAILABLE", "Boss arena runtime service is unavailable.")
+	end
+
+	local data = {}
+	if typeof(runtimeService.GetBossHealthState) == "function" then
+		data.healthState = runtimeService:GetBossHealthState()
+	end
+	if typeof(runtimeService.GetBossTimerState) == "function" then
+		data.timerState = runtimeService:GetBossTimerState()
+	end
+	if typeof(runtimeService.GetEncounterState) == "function" then
+		data.encounterState = runtimeService:GetEncounterState()
+	end
+
+	return response(true, "OK", "Loaded boss arena state.", data)
+end
+
 function AdminService:IsPlayerAllowed(player: Player): boolean
 	return isAllowedUserId(player.UserId)
 end
@@ -771,42 +1510,176 @@ function AdminService:HandleAction(player: Player, request: any)
 	if payload ~= nil and typeof(payload) ~= "table" then
 		return response(false, "BAD_REQUEST", "Admin request payloads must be omitted or sent as a table.")
 	end
+	payload = payload or {}
+
+	local isValidAction, validationMessage = validateActionRequest(player, tabId, actionId, payload)
+	if not isValidAction then
+		return response(false, "FORBIDDEN", validationMessage or "That admin action is not allowed.")
+	end
 
 	if tabId == OVERVIEW_TAB_ID and actionId == "test_dialogue" then
 		return handleTestDialogue()
 	end
 
 	if tabId == OVERVIEW_TAB_ID and actionId == "show_merchant" then
-		return handleShowMerchant()
+		return handleShowMerchant(payload)
+	end
+
+	if tabId == OVERVIEW_TAB_ID and actionId == "refresh_server_state" then
+		return handleRefreshServerState()
+	end
+
+	if tabId == OVERVIEW_TAB_ID and actionId == "run_smoke_test" then
+		return handleRunSmokeTest()
+	end
+
+	if tabId == OVERVIEW_TAB_ID and actionId == "dump_session_summary" then
+		return handleDumpSessionSummary()
 	end
 
 	if tabId == OVERVIEW_TAB_ID and actionId == "send_notification" then
-		return handleSendNotification(player, payload or {})
+		return handleSendNotification(player, payload)
 	end
 
 	if tabId == PLAYERS_TAB_ID and actionId == "inspect_player_profile" then
-		return handleInspectPlayerProfile(payload or {})
+		return handleInspectPlayerProfile(payload)
+	end
+
+	if tabId == PLAYERS_TAB_ID and actionId == "repair_marketplace_entitlement" then
+		return handleRepairMarketplaceEntitlement(player, payload)
+	end
+
+	if tabId == PLAYERS_TAB_ID and actionId == "reload_player_state" then
+		return handleReloadPlayerState(payload)
+	end
+
+	if tabId == PLAYERS_TAB_ID and actionId == "teleport_to_player" then
+		return handleTeleportToPlayer(player, payload)
+	end
+
+	if tabId == PLAYERS_TAB_ID and actionId == "bring_player" then
+		return handleBringPlayer(player, payload)
+	end
+
+	if tabId == PLAYERS_TAB_ID and actionId == "respawn_player" then
+		return handleRespawnPlayer(payload)
+	end
+
+	if tabId == PLAYERS_TAB_ID and actionId == "kick_player" then
+		return handleKickPlayer(payload)
+	end
+
+	if tabId == PLAYERS_TAB_ID and actionId == "reset_player_data" then
+		return handleResetPlayerData(payload)
+	end
+
+	if tabId == PROGRESSION_TAB_ID and actionId == "grant_money" then
+		return handleGrantMoney(payload)
+	end
+
+	if tabId == PROGRESSION_TAB_ID and actionId == "add_time_shards" then
+		return handleAddTimeShards(payload)
+	end
+
+	if tabId == PROGRESSION_TAB_ID and actionId == "grant_potion" then
+		return handleGrantPotion(payload)
 	end
 
 	if tabId == PROGRESSION_TAB_ID and actionId == "grant_all_potions" then
-		return handleGrantAllPotions(player)
+		return handleGrantAllPotions(player, payload)
 	end
 
 	if tabId == PROGRESSION_TAB_ID and actionId == "clear_all_potion_effects" then
 		return handleClearAllPotionEffects(player)
 	end
 
+	if tabId == PROGRESSION_TAB_ID and actionId == "set_time_played" then
+		return handleSetTimePlayed(payload)
+	end
+
+	if tabId == PROGRESSION_TAB_ID and actionId == "set_roll_type" then
+		return handleSetRollType(payload)
+	end
+
+	if tabId == PROGRESSION_TAB_ID and actionId == "unlock_achievement" then
+		return handleUnlockAchievement(payload)
+	end
+
+	if tabId == PROGRESSION_TAB_ID and actionId == "equip_title" then
+		return handleEquipTitle(payload)
+	end
+
+	if tabId == PROGRESSION_TAB_ID and actionId == "get_luck_override" then
+		return handleGetLuckOverride(player)
+	end
+
+	if tabId == PROGRESSION_TAB_ID and actionId == "set_luck_override" then
+		return handleSetLuckOverride(player, payload)
+	end
+
+	if tabId == PROGRESSION_TAB_ID and actionId == "clear_luck_override" then
+		return handleClearLuckOverride(player)
+	end
+
 	if tabId == DIAGNOSTICS_TAB_ID and actionId == "test_pyramid_hitbox" then
 		return handleTestPyramidHitbox(player)
 	end
 
+	if tabId == DIAGNOSTICS_TAB_ID and actionId == "capture_runtime_snapshot" then
+		return handleCaptureRuntimeSnapshot(player)
+	end
+
+	if tabId == DIAGNOSTICS_TAB_ID and actionId == "view_recent_events" then
+		return handleViewRecentEvents()
+	end
+
+	if tabId == DIAGNOSTICS_TAB_ID and actionId == "inspect_replication" then
+		return handleInspectReplication(payload)
+	end
+
+	if tabId == DIAGNOSTICS_TAB_ID and actionId == "export_debug_payload" then
+		return handleExportDebugPayload(payload)
+	end
+
+	if tabId == DIAGNOSTICS_TAB_ID and actionId == "inspect_boss_arena" then
+		return handleInspectBossArena()
+	end
+
+	if tabId == ROLL_SOURCES_TAB_ID and actionId == "inspect_roll_sources" then
+		return handleInspectRollSources()
+	end
+
+	if tabId == ROLL_SOURCES_TAB_ID and actionId == "select_roll_source" then
+		return handleSetRollType(payload)
+	end
+
+	if tabId == ROLL_SOURCES_TAB_ID and (actionId == "simulate_case_batch" or actionId == "force_modifier_roll") then
+		return handleSimulateRollBatch(player, payload)
+	end
+
+	if tabId == ROLL_SOURCES_TAB_ID and actionId == "force_case_reward" then
+		return handleForceCaseReward(player, payload)
+	end
+
 	if tabId == BODY_PARTS_TAB_ID then
 		if actionId == "grant_body_part" then
-			return handleGrantBodyPart(player, payload or {})
+			return handleGrantBodyPart(player, payload)
+		end
+
+		if actionId == "grant_full_set" then
+			return handleGrantFullSet(payload)
+		end
+
+		if actionId == "clear_body_parts" then
+			return handleClearBodyParts(payload)
+		end
+
+		if actionId == "equip_best_loadout" then
+			return handleEquipBestLoadout(payload)
 		end
 
 		if actionId == "grant_aura" then
-			return handleGrantAura(player, payload or {})
+			return handleGrantAura(player, payload)
 		end
 
 		if actionId == "get_runtime_state" then
@@ -814,11 +1687,11 @@ function AdminService:HandleAction(player: Player, request: any)
 		end
 
 		if actionId == "equip_owned_body_part" then
-			return handleEquipOwnedBodyPart(player, payload or {})
+			return handleEquipOwnedBodyPart(player, payload)
 		end
 
 		if actionId == "unequip_runtime_region" then
-			return handleUnequipRuntimeRegion(player, payload or {})
+			return handleUnequipRuntimeRegion(player, payload)
 		end
 
 		if actionId == "clear_runtime_loadout" then
@@ -826,7 +1699,15 @@ function AdminService:HandleAction(player: Player, request: any)
 		end
 
 		if actionId == "preview_rarity_table" then
-			return handlePreviewRarityTable(player)
+			return handlePreviewRarityTable(player, payload)
+		end
+
+		if actionId == "force_modifier_roll" then
+			return handleSimulateRollBatch(player, payload)
+		end
+
+		if actionId == "inspect_loadout_bonuses" then
+			return handleInspectLoadoutBonuses(payload)
 		end
 
 		if actionId == "get_visual_sandbox_options" then
@@ -834,11 +1715,11 @@ function AdminService:HandleAction(player: Player, request: any)
 		end
 
 		if actionId == "apply_visual_region" then
-			return handleApplyVisualRegion(player, payload or {})
+			return handleApplyVisualRegion(player, payload)
 		end
 
 		if actionId == "reset_visual_region" then
-			return handleResetVisualRegion(player, payload or {})
+			return handleResetVisualRegion(player, payload)
 		end
 
 		if actionId == "reset_visual_character" then

@@ -13,6 +13,7 @@ local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile
 local RollMath = require(ReplicatedStorage.Shared.Rolling.RollMath)
 local RollCutsceneConfig = require(ReplicatedStorage.Shared.UI.RollCutsceneConfig)
 local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
+local BodyPartEconomy = require(ReplicatedStorage.Shared.Character.BodyPartEconomy)
 local BodyPartService = require(script.Parent.BodyPartService)
 local ChatNotificationService = require(script.Parent.ChatNotificationService)
 local DataService = require(script.Parent.DataService)
@@ -49,7 +50,9 @@ local finalizeAutoSellRollRemote: RemoteFunction? = nil
 local promptQuickRollPurchaseRemote: RemoteFunction? = nil
 local updatedRemote: RemoteEvent? = nil
 local rollLocks: { [Player]: boolean } = {}
-local pendingAutoSellByPlayer: { [Player]: { [string]: { displayRarity: string, ownedId: string } } } = {}
+local pendingAutoSellByPlayer: { [Player]: { [string]: any } } = {}
+local nextPendingAutoSellToken = 0
+local adminLuckOverridesByPlayer: { [Player]: number } = {}
 local loadoutChangedConnection = nil
 local potionStateChangedConnection = nil
 
@@ -309,7 +312,7 @@ local function getEffectiveRollCooldown(player: Player, bonuses: any, quickRollS
 	return cooldownDuration
 end
 
-local function getPendingAutoSellState(player: Player): { [string]: { displayRarity: string, ownedId: string } }
+local function getPendingAutoSellState(player: Player): { [string]: any }
 	local pendingState = pendingAutoSellByPlayer[player]
 	if pendingState then
 		return pendingState
@@ -320,16 +323,44 @@ local function getPendingAutoSellState(player: Player): { [string]: { displayRar
 	return pendingState
 end
 
-local function clearPendingAutoSell(player: Player, ownedId: string)
+local function createPendingAutoSellToken(player: Player): string
+	nextPendingAutoSellToken += 1
+	return string.format("%d_%d_%d", player.UserId, math.floor(os.clock() * 1000), nextPendingAutoSellToken)
+end
+
+local function clearPendingAutoSell(player: Player, pendingKey: string)
 	local pendingState = pendingAutoSellByPlayer[player]
 	if not pendingState then
 		return
 	end
 
-	pendingState[ownedId] = nil
+	pendingState[pendingKey] = nil
 	if next(pendingState) == nil then
 		pendingAutoSellByPlayer[player] = nil
 	end
+end
+
+local function cloneRollGrantPayload(payload: any): any
+	if typeof(payload) ~= "table" then
+		return nil
+	end
+
+	return table.clone(payload)
+end
+
+local function sellReservedBodyPartRecord(player: Player, ownedRecord: any): (boolean, string)
+	if typeof(ownedRecord) ~= "table" then
+		return false, "No rolled body part was available to sell."
+	end
+
+	local piece = BodyPartsCatalog.GetPiece(ownedRecord.pieceId)
+	local pieceName = if piece then piece.displayName else "body part"
+	local payout = BodyPartEconomy.GetSellValue(ownedRecord, piece)
+	DataService:AddMoney(player, payout, "sell_single")
+	StatsService:RecordBodyPartsSold(player, 1)
+	StatsService:RecordTransientBodyPartAcquired(player)
+
+	return true, string.format("Sold %s for $%s.", pieceName, tostring(payout))
 end
 
 local function isOwnedIdEquipped(player: Player, ownedId: string): boolean
@@ -344,7 +375,7 @@ local function isOwnedIdEquipped(player: Player, ownedId: string): boolean
 	return false
 end
 
-local function computeLuckState(player: Player, rollTypeConfig, successfulRollCount: number)
+local function computeLuckState(player: Player, rollTypeConfig, successfulRollCount: number, suppressAdminOverride: boolean?)
 	local bonuses, potionBonuses, loadoutBonuses = getEffectiveBonuses(player)
 	local equippedLuckBonus = math.max(0, tonumber(loadoutBonuses and loadoutBonuses.luckBonus) or 0)
 	local rollsSinceBonusRoll = RollMath.GetBonusChargeProgress(successfulRollCount, RollingConfig.BonusInterval)
@@ -364,6 +395,11 @@ local function computeLuckState(player: Player, rollTypeConfig, successfulRollCo
 	local vipLuck = potionLuck * vipMultiplier
 	local rawLuck = vipLuck
 	local bandLuckScalar = math.max(0, tonumber(rollTypeConfig and rollTypeConfig.bandLuckScalar) or 1)
+	local adminOverrideLuck = adminLuckOverridesByPlayer[player]
+	local hasAdminOverride = suppressAdminOverride ~= true and adminOverrideLuck ~= nil
+	if hasAdminOverride then
+		rawLuck = math.max(0, tonumber(adminOverrideLuck) or 0)
+	end
 	local bandLuckInput = rawLuck * bandLuckScalar
 
 	return {
@@ -379,6 +415,8 @@ local function computeLuckState(player: Player, rollTypeConfig, successfulRollCo
 		vipLuck = vipLuck,
 		equippedLuckMultiplier = equippedLuckMultiplier,
 		rawLuck = rawLuck,
+		hasAdminLuckOverride = hasAdminOverride,
+		adminOverrideLuck = adminOverrideLuck,
 		bandLuckScalar = bandLuckScalar,
 		bandLuckInput = bandLuckInput,
 		useBonusRoll = useBonusRoll,
@@ -752,6 +790,12 @@ function RollService:GetProbabilityDebug(player: Player, options: any?)
 			luckState.rawLuck = luckState.vipLuck
 			luckState.bandLuckInput = buildBandLuckInput(luckState.rawLuck, rollType)
 		end
+		if tonumber(options.totalLuck) ~= nil then
+			luckState.rawLuck = math.max(0, tonumber(options.totalLuck) or 0)
+			luckState.hasAdminLuckOverride = true
+			luckState.adminOverrideLuck = luckState.rawLuck
+			luckState.bandLuckInput = buildBandLuckInput(luckState.rawLuck, rollType)
+		end
 	end
 
 	local entries, activeEntries, bandLuckSummary = buildRollListEntries(luckState.bandLuckInput)
@@ -790,6 +834,95 @@ function RollService:GetProbabilityDebug(player: Player, options: any?)
 			formatRarityShareSummary(rarityShares),
 			summarizeProbabilityTable(entries),
 		}, " | "),
+	}
+end
+
+function RollService:GetAdminLuckOverrideState(player: Player): { [string]: any }
+	local selectedRollTypeId = DataService:GetSelectedRollType(player)
+	local rollType = RollTypes.Get(selectedRollTypeId) or RollTypes.GetDefault()
+	local successfulRollCount = DataService:GetSuccessfulRollCount(player)
+	local computedLuckState = computeLuckState(player, rollType, successfulRollCount, true)
+	local overrideLuck = adminLuckOverridesByPlayer[player]
+	local effectiveLuck = if overrideLuck ~= nil then overrideLuck else computedLuckState.rawLuck
+
+	return {
+		hasOverride = overrideLuck ~= nil,
+		overrideLuck = overrideLuck,
+		effectiveLuck = effectiveLuck,
+		computedLuckWithoutOverride = computedLuckState.rawLuck,
+		rollTypeId = rollType.id,
+		rollTypeDisplayName = rollType.displayName,
+		baseLuck = computedLuckState.baseLuck,
+		bonusLuck = computedLuckState.bonusLuck,
+		potionLuck = computedLuckState.potionLuck,
+		vipLuck = computedLuckState.vipLuck,
+		equippedLuckMultiplier = computedLuckState.equippedLuckMultiplier,
+		potionLuckBonus = computedLuckState.potionLuckBonus,
+		potionLuckMultiplier = computedLuckState.potionLuckMultiplier,
+		useBonusRoll = computedLuckState.useBonusRoll,
+		isVipOwned = computedLuckState.isVipOwned,
+	}
+end
+
+function RollService:SetAdminLuckOverride(player: Player, totalLuck: number): { [string]: any }
+	adminLuckOverridesByPlayer[player] = math.max(0, tonumber(totalLuck) or 0)
+	self:NotifyClient(player, "Admin luck override updated.")
+	return self:GetAdminLuckOverrideState(player)
+end
+
+function RollService:ClearAdminLuckOverride(player: Player): { [string]: any }
+	adminLuckOverridesByPlayer[player] = nil
+	self:NotifyClient(player, "Admin luck override cleared.")
+	return self:GetAdminLuckOverrideState(player)
+end
+
+function RollService:SimulateRolls(player: Player, options: any?): { [string]: any }
+	local count = math.clamp(math.floor(tonumber(options and options.count) or 100), 1, 10000)
+	local debugData = self:GetProbabilityDebug(player, options)
+	local activeEntries = {}
+	for _, entry in ipairs(debugData.entries or {}) do
+		if entry.isPruned ~= true then
+			table.insert(activeEntries, entry)
+		end
+	end
+
+	local selectedRegion = if typeof(options) == "table" and typeof(options.rollRegion) == "string" and RollTargetRegions.IsValid(options.rollRegion)
+		then options.rollRegion
+		else DataService:GetSelectedRollRegion(player)
+	local randomSource = Random.new(math.floor(tonumber(options and options.seed) or os.clock() * 1000000))
+	local byRarity = {}
+	local bySetId = {}
+	local byPieceId = {}
+	local missingPieceCount = 0
+
+	for _ = 1, count do
+		local chosenSet = chooseWeightedSet(randomSource, activeEntries)
+		if chosenSet then
+			local rarity = chosenSet.displayRarity or "Unknown"
+			byRarity[rarity] = (byRarity[rarity] or 0) + 1
+			bySetId[chosenSet.setId] = (bySetId[chosenSet.setId] or 0) + 1
+
+			local piece = choosePieceFromSetForRegion(randomSource, chosenSet.setId, selectedRegion)
+			if piece then
+				byPieceId[piece.id] = (byPieceId[piece.id] or 0) + 1
+			else
+				missingPieceCount += 1
+			end
+		end
+	end
+
+	return {
+		count = count,
+		rollTypeId = debugData.rollTypeId,
+		rollTypeDisplayName = debugData.rollTypeDisplayName,
+		rollRegion = selectedRegion,
+		finalLuck = debugData.finalLuck,
+		bandLuckInput = debugData.bandLuckInput,
+		byRarity = byRarity,
+		bySetId = bySetId,
+		byPieceId = byPieceId,
+		missingPieceCount = missingPieceCount,
+		probabilitySummary = debugData.summary,
 	}
 end
 
@@ -1125,6 +1258,48 @@ function RollService:FinalizeAutoSellRoll(player: Player, payload: any): (boolea
 		return false, "Finalize auto-sell payload must be a table."
 	end
 
+	local token = payload.token
+	if typeof(token) == "string" and token ~= "" then
+		local pendingState = pendingAutoSellByPlayer[player]
+		local pendingEntry = pendingState and pendingState[token]
+		if not pendingEntry then
+			return false, "That roll is no longer pending auto-sell."
+		end
+
+		if payload.keep == true then
+			local ownedRecord, grantError = DataService:AddOwnedBodyPart(player, pendingEntry.grantPayload, pendingEntry.reservation)
+			if not ownedRecord then
+				return false, grantError or "Failed to keep the roll result."
+			end
+
+			clearPendingAutoSell(player, token)
+			StatsService:RecordAutoSellOutcome(player, "kept")
+
+			local message = string.format("Kept %s roll result.", pendingEntry.displayRarity)
+			if payload.equip == true then
+				local equipped, equipMessage = BodyPartService:EquipOwnedBodyPart(player, ownedRecord.ownedId, payload.scale, {
+					applyVisuals = true,
+				})
+				if equipped then
+					message = equipMessage or message
+				elseif equipMessage then
+					message = string.format("%s %s", message, equipMessage)
+				end
+			end
+
+			return true, message
+		end
+
+		local sold, sellMessage = sellReservedBodyPartRecord(player, pendingEntry.ownedRecord)
+		if not sold then
+			return false, sellMessage or "Failed to auto-sell the roll result."
+		end
+
+		clearPendingAutoSell(player, token)
+		StatsService:RecordAutoSellOutcome(player, "sold")
+		return true, sellMessage or string.format("Auto-sold %s roll result.", pendingEntry.displayRarity)
+	end
+
 	local ownedId = payload.ownedId
 	if typeof(ownedId) ~= "string" or ownedId == "" then
 		return false, "ownedId is required."
@@ -1136,9 +1311,8 @@ function RollService:FinalizeAutoSellRoll(player: Player, payload: any): (boolea
 		return false, "That roll is no longer pending auto-sell."
 	end
 
-	clearPendingAutoSell(player, ownedId)
-
 	if payload.keep == true or isOwnedIdEquipped(player, ownedId) then
+		clearPendingAutoSell(player, ownedId)
 		StatsService:RecordAutoSellOutcome(player, "kept")
 		return true, string.format("Kept %s roll result.", pendingEntry.displayRarity)
 	end
@@ -1147,6 +1321,7 @@ function RollService:FinalizeAutoSellRoll(player: Player, payload: any): (boolea
 	if not sold then
 		return false, sellMessage or "Failed to auto-sell the roll result."
 	end
+	clearPendingAutoSell(player, ownedId)
 	StatsService:RecordAutoSellOutcome(player, "sold")
 
 	return true, sellMessage or string.format("Auto-sold %s roll result.", pendingEntry.displayRarity)
@@ -1290,8 +1465,11 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 	end
 
 	local remainingMoney = DataService:AdjustMoney(player, -selectedRollType.moneyCost, "roll_cost")
-
-	local ownedRecord, grantError = DataService:AddOwnedBodyPart(player, {
+	local autoSellRarity = RollingConfig.NormalizeDisplayRarity(finalSet.setConfig.rollDisplay.rarity)
+	local autoSellEnabledForRarity = DataService:IsAutoSellEnabledForRarity(player, autoSellRarity)
+	local pendingAutoSell = (not skipPresentation) and autoSellEnabledForRarity
+	local shouldUseTransientRecord = autoSellEnabledForRarity
+	local grantPayload = {
 		pieceId = finalPiece.id,
 		rarityDenominator = finalSet.displayedDenominator,
 		rolledSetId = finalSet.setId,
@@ -1305,7 +1483,14 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		sizeMultiplier = sizeScale,
 		variantMultiplier = variantMultiplier,
 		finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
-	})
+	}
+
+	local ownedRecord, grantError, reservedGrant
+	if shouldUseTransientRecord then
+		ownedRecord, reservedGrant, grantError = DataService:ReserveBodyPartRollRecord(player, grantPayload)
+	else
+		ownedRecord, grantError = DataService:AddOwnedBodyPart(player, grantPayload)
+	end
 	if not ownedRecord then
 		StatsService:RecordRollFailure(player, "grant_failed")
 		DataService:AddMoney(player, selectedRollType.moneyCost, "other")
@@ -1317,18 +1502,20 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 	end
 
 	local updatedSuccessfulRollCount = DataService:IncrementSuccessfulRollCount(player)
-	local autoSellRarity = RollingConfig.NormalizeDisplayRarity(finalSet.setConfig.rollDisplay.rarity)
-	local autoSellEnabledForRarity = DataService:IsAutoSellEnabledForRarity(player, autoSellRarity)
-	local pendingAutoSell = (not skipPresentation) and autoSellEnabledForRarity
 	local autoSoldInstantly = false
+	local pendingAutoSellToken = nil
 	local rollMessage = string.format("Rolled %s.", finalResult.Name)
 	if pendingAutoSell then
-		getPendingAutoSellState(player)[ownedRecord.ownedId] = {
+		pendingAutoSellToken = createPendingAutoSellToken(player)
+		getPendingAutoSellState(player)[pendingAutoSellToken] = {
+			token = pendingAutoSellToken,
 			displayRarity = autoSellRarity,
-			ownedId = ownedRecord.ownedId,
+			ownedRecord = ownedRecord,
+			grantPayload = cloneRollGrantPayload(grantPayload),
+			reservation = reservedGrant,
 		}
 	elseif skipPresentation and autoSellEnabledForRarity then
-		local sold, sellMessage = BodyPartService:SellOwnedBodyPart(player, ownedRecord.ownedId)
+		local sold, sellMessage = sellReservedBodyPartRecord(player, ownedRecord)
 		if sold then
 			autoSoldInstantly = true
 			StatsService:RecordAutoSellOutcome(player, "sold")
@@ -1337,7 +1524,7 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 			warn(string.format(
 				"[RollService] Immediate auto-sell failed for %s (%s): %s",
 				player.Name,
-				ownedRecord.ownedId,
+				tostring(ownedRecord.ownedId),
 				tostring(sellMessage)
 			))
 			rollMessage = string.format("Auto-sell failed for %s; item kept.", finalResult.Name)
@@ -1363,6 +1550,7 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		finalResult = finalResult,
 		ownedRecord = ownedRecord,
 		ownedId = ownedRecord.ownedId,
+		pendingAutoSellToken = pendingAutoSellToken,
 		pendingAutoSell = pendingAutoSell,
 		autoSoldInstantly = autoSoldInstantly,
 		skipPreview = skipPreview,
@@ -1679,12 +1867,18 @@ end
 
 function RollService:OnPlayerRemoving(player: Player)
 	rollLocks[player] = nil
+	adminLuckOverridesByPlayer[player] = nil
 
 	local pendingState = pendingAutoSellByPlayer[player]
 	if pendingState then
-		for ownedId in pairs(pendingState) do
-			if not isOwnedIdEquipped(player, ownedId) then
-				BodyPartService:SellOwnedBodyPart(player, ownedId)
+		for pendingKey, pendingEntry in pairs(pendingState) do
+			if typeof(pendingEntry) == "table" and pendingEntry.ownedRecord ~= nil then
+				local sold = sellReservedBodyPartRecord(player, pendingEntry.ownedRecord)
+				if sold then
+					StatsService:RecordAutoSellOutcome(player, "sold")
+				end
+			elseif not isOwnedIdEquipped(player, pendingKey) then
+				BodyPartService:SellOwnedBodyPart(player, pendingKey)
 			end
 		end
 	end

@@ -59,6 +59,14 @@ local function getPendingAutoSellPayload(guiControls): ({ [string]: any }?)
 		return nil
 	end
 
+	local token = rollResult.pendingAutoSellToken
+	if typeof(token) == "string" and token ~= "" then
+		return {
+			token = token,
+			keep = guiControls.CurrentRollResultEquipped == true,
+		}
+	end
+
 	local ownedId = rollResult.ownedId
 	if typeof(ownedId) ~= "string" or ownedId == "" then
 		local ownedRecord = rollResult.ownedRecord

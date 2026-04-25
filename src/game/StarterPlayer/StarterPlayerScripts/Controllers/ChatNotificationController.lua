@@ -4,6 +4,7 @@ local TextChatService = game:GetService("TextChatService")
 local ChatNotificationConfig = require(ReplicatedStorage.Shared.Config.ChatNotificationConfig)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
+local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
 
 local ChatNotificationController = {}
 
@@ -26,6 +27,21 @@ local function toRichTextColor(color: Color3): string
 	)
 end
 
+local function getRarityTextColor(displayRarity: string): Color3
+	local fallbackColor = ChatNotificationConfig.GetRarityColor(displayRarity)
+	local rarityStyle = BodyPartPresentation.ResolveSetRarityStyle({
+		rollDisplay = {
+			color = fallbackColor,
+		},
+	}, displayRarity, fallbackColor)
+
+	if typeof(rarityStyle) == "table" and typeof(rarityStyle.textColor) == "Color3" then
+		return rarityStyle.textColor
+	end
+
+	return fallbackColor
+end
+
 local function formatIntegerWithCommas(value: any): string
 	local integerText = tostring(math.max(1, math.floor(tonumber(value) or 1)))
 	local sign = ""
@@ -41,6 +57,19 @@ local function formatIntegerWithCommas(value: any): string
 	end
 
 	return sign .. grouped
+end
+
+local function pieceDisplayNameIncludesSetName(setDisplayName: string, pieceDisplayName: string): boolean
+	if setDisplayName == "" then
+		return false
+	end
+
+	if string.sub(pieceDisplayName, 1, #setDisplayName) ~= setDisplayName then
+		return false
+	end
+
+	local nextCharacter = string.sub(pieceDisplayName, #setDisplayName + 1, #setDisplayName + 1)
+	return nextCharacter == "" or string.match(nextCharacter, "%s") ~= nil
 end
 
 local function getTextChannel(): TextChannel?
@@ -95,8 +124,12 @@ local function buildItemText(payload: any): string
 		table.insert(parts, escapeRichText(payload.sizeDisplayName or SizeConfig.GetDisplayName(sizeId)))
 	end
 
-	table.insert(parts, escapeRichText(payload.setDisplayName or "Unknown"))
-	table.insert(parts, escapeRichText(payload.pieceDisplayName or "Body Part"))
+	local setDisplayName = tostring(payload.setDisplayName or "Unknown")
+	local pieceDisplayName = tostring(payload.pieceDisplayName or "Body Part")
+	if not pieceDisplayNameIncludesSetName(setDisplayName, pieceDisplayName) then
+		table.insert(parts, escapeRichText(setDisplayName))
+	end
+	table.insert(parts, escapeRichText(pieceDisplayName))
 
 	return table.concat(parts, " ")
 end
@@ -111,7 +144,7 @@ local function buildRareRollMessage(payload: any): string?
 		return nil
 	end
 
-	local rarityColor = ChatNotificationConfig.GetRarityColor(displayRarity)
+	local rarityColor = getRarityTextColor(displayRarity)
 	local rarityColorText = toRichTextColor(rarityColor)
 	local rarityPrefix = string.upper(displayRarity)
 	local messageText = string.format(

@@ -84,6 +84,7 @@ local REPLICAS: { [Player]: any } = {}
 local timePlayedSessionStartedAt: { [Player]: number } = {}
 local timePlayedLastFlushAt: { [Player]: number } = {}
 local timePlayedLoopStarted = false
+local serialShutdownFlushBound = false
 
 local GlobalUpdateProcessed = Signal.new()
 local PlayerDataLoaded = Signal.new()
@@ -93,6 +94,7 @@ local MoneyChanged = Signal.new()
 local SuccessfulRollIncremented = Signal.new()
 local TimePlayedFlushed = Signal.new()
 local OwnedBodyPartAdded = Signal.new()
+local BodyPartPieceDiscovered = Signal.new()
 local OwnedAuraAdded = Signal.new()
 local EquippedTitleChanged = Signal.new()
 local EquippedAuraChanged = Signal.new()
@@ -310,6 +312,8 @@ local function buildPathArray(key: string, path: { any }?): { any }
 	return pathArray
 end
 
+local cloneOwnedBodyPartsState
+
 local function setReplicaPathValue(player: Player, key: string, path: { any }?, value: any): boolean
 	local replica = getActiveReplica(player)
 	if not replica then
@@ -327,6 +331,26 @@ local function setReplicaPathValues(player: Player, key: string, path: { any }?,
 	end
 
 	replica:SetValues(buildPathArray(key, path), values)
+	return true
+end
+
+local function markBodyPartPieceDiscovered(player: Player, currentBodyPartsState: any, pieceId: string): boolean
+	if not BODY_PARTS_KEY then
+		return false
+	end
+
+	local discoveredPieceIds = if typeof(currentBodyPartsState) == "table"
+		then currentBodyPartsState.discoveredPieceIds
+		else nil
+	if typeof(discoveredPieceIds) == "table" and discoveredPieceIds[pieceId] == true then
+		return false
+	end
+
+	if not setReplicaPathValue(player, BODY_PARTS_KEY, { "discoveredPieceIds", pieceId }, true) then
+		return false
+	end
+
+	BodyPartPieceDiscovered:Fire(player, pieceId, cloneOwnedBodyPartsState(getReplicaValue(player, BODY_PARTS_KEY)))
 	return true
 end
 
@@ -382,6 +406,7 @@ DataService.MoneyChanged = MoneyChanged
 DataService.SuccessfulRollIncremented = SuccessfulRollIncremented
 DataService.TimePlayedFlushed = TimePlayedFlushed
 DataService.OwnedBodyPartAdded = OwnedBodyPartAdded
+DataService.BodyPartPieceDiscovered = BodyPartPieceDiscovered
 DataService.OwnedAuraAdded = OwnedAuraAdded
 DataService.EquippedTitleChanged = EquippedTitleChanged
 DataService.EquippedAuraChanged = EquippedAuraChanged
@@ -508,7 +533,7 @@ local function normalizeOwnedAuraRecord(record: any, fallbackOwnedId: string?): 
 	}
 end
 
-local function cloneOwnedBodyPartsState(state: OwnedBodyParts.OwnedBodyPartsState?): OwnedBodyParts.OwnedBodyPartsState
+cloneOwnedBodyPartsState = function(state: OwnedBodyParts.OwnedBodyPartsState?): OwnedBodyParts.OwnedBodyPartsState
 	local ownedById = {}
 	local discoveredPieceIds = {}
 	local seenCutsceneSetIds = {}
@@ -791,6 +816,22 @@ local function startTimePlayedLoop()
 	end)
 end
 
+local function bindSerialShutdownFlush()
+	if serialShutdownFlushBound then
+		return
+	end
+
+	serialShutdownFlushBound = true
+	game:BindToClose(function()
+		pcall(function()
+			BodyPartSerialStore:FlushUnusedReservedSerials()
+		end)
+		pcall(function()
+			AuraSerialStore:FlushUnusedReservedSerials()
+		end)
+	end)
+end
+
 local profileStoreName = if DEBUG then "studio" else SCOPE
 local profileTemplate = buildStructureFromSchema(Schema)
 local profileStore = ProfileService.GetProfileStore(profileStoreName, profileTemplate)
@@ -804,6 +845,7 @@ function DataService:OnStart()
 	Leaderboards.connect(self)
 	Leaderboards.start(self)
 	startTimePlayedLoop()
+	bindSerialShutdownFlush()
 end
 
 function DataService:OnPlayerAdded(player: Player)
@@ -1519,20 +1561,12 @@ function DataService:GetTotalInExistenceForAura(auraId: string): (number?, strin
 	return AuraSerialStore:GetTotalInExistenceForAura(auraId)
 end
 
-function DataService:AddOwnedBodyPart(player: Player, payload: OwnedBodyParts.OwnedBodyPartGrantPayload): (OwnedBodyParts.OwnedBodyPartRecord?, string?)
-	if not BODY_PARTS_KEY then
-		return nil, "Body parts persistence is not configured."
-	end
-	local replica = getActiveReplica(player)
-	if not replica then
-		return nil, "Player data is not loaded."
-	end
-
+local function validateBodyPartGrantPayload(payload: any): ({ [string]: any }?, string?)
 	if typeof(payload) ~= "table" then
 		return nil, "Owned body part payload must be a table."
 	end
 
-	local pieceId = payload.pieceId
+	local pieceId = BodyPartLegacyIds.NormalizePieceId(payload.pieceId)
 	if typeof(pieceId) ~= "string" or pieceId == "" then
 		return nil, "pieceId is required."
 	end
@@ -1581,27 +1615,7 @@ function DataService:AddOwnedBodyPart(player: Player, payload: OwnedBodyParts.Ow
 		return nil, "finalPassiveIncomePerSecond must be zero or greater when provided."
 	end
 
-	local currentBodyPartsState = if typeof(replica.Data[BODY_PARTS_KEY]) == "table"
-		then replica.Data[BODY_PARTS_KEY]
-		else OwnedBodyParts.CreateEmptyState()
-	local currentOwnedCount = OwnedBodyParts.CountOwned(currentBodyPartsState)
-	if currentOwnedCount >= OwnedBodyParts.MAX_OWNED_COUNT then
-		return nil, string.format(
-			"Inventory is full (%d/%d). Sell body parts to make room.",
-			currentOwnedCount,
-			OwnedBodyParts.MAX_OWNED_COUNT
-		)
-	end
-
-	local serialNumber, serialError = self:GetNextSerialForPiece(pieceId)
-	if not serialNumber then
-		return nil, serialError or "Failed to allocate body part serial number."
-	end
-
-	local nextOwnedId = math.max(1, math.floor(tonumber(currentBodyPartsState.nextOwnedId) or 1))
-	local ownedId = OwnedBodyParts.CreateOwnedId(nextOwnedId)
-	local createdRecord = normalizeOwnedBodyPartRecord({
-		ownedId = ownedId,
+	return {
 		pieceId = pieceId,
 		rarityDenominator = rarityDenominator,
 		rolledSetId = payload.rolledSetId,
@@ -1615,17 +1629,117 @@ function DataService:AddOwnedBodyPart(player: Player, payload: OwnedBodyParts.Ow
 		sizeMultiplier = sizeMultiplier,
 		variantMultiplier = variantMultiplier,
 		finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
+	}, nil
+end
+
+local function buildGrantedBodyPartRecord(
+	grantData: { [string]: any },
+	ownedId: string?,
+	serialNumber: number
+): OwnedBodyParts.OwnedBodyPartRecord?
+	return normalizeOwnedBodyPartRecord({
+		ownedId = ownedId,
+		pieceId = grantData.pieceId,
+		rarityDenominator = grantData.rarityDenominator,
+		rolledSetId = grantData.rolledSetId,
+		rolledSetDisplayName = grantData.rolledSetDisplayName,
+		displayOddsDenominator = grantData.displayOddsDenominator,
+		displayRarity = grantData.displayRarity,
+		mutationId = grantData.mutationId,
+		mutation = grantData.mutation,
+		mutationMultiplier = grantData.mutationMultiplier,
+		sizeId = grantData.sizeId,
+		sizeMultiplier = grantData.sizeMultiplier,
+		variantMultiplier = grantData.variantMultiplier,
+		finalPassiveIncomePerSecond = grantData.finalPassiveIncomePerSecond,
 		serialNumber = serialNumber,
 	}, ownedId)
+end
+
+function DataService:ReserveBodyPartRollRecord(player: Player, payload: OwnedBodyParts.OwnedBodyPartGrantPayload): (OwnedBodyParts.OwnedBodyPartRecord?, any?, string?)
+	if not BODY_PARTS_KEY then
+		return nil, nil, "Body parts persistence is not configured."
+	end
+	local replica = getActiveReplica(player)
+	if not replica then
+		return nil, nil, "Player data is not loaded."
+	end
+
+	local grantData, grantError = validateBodyPartGrantPayload(payload)
+	if not grantData then
+		return nil, nil, grantError
+	end
+
+	local serialNumber, serialError = self:GetNextSerialForPiece(grantData.pieceId)
+	if not serialNumber then
+		return nil, nil, serialError or "Failed to allocate body part serial number."
+	end
+
+	local reservedRecord = buildGrantedBodyPartRecord(grantData, nil, serialNumber)
+	if not reservedRecord then
+		return nil, nil, "Failed to reserve rolled body part."
+	end
+
+	local currentBodyPartsState = if typeof(replica.Data[BODY_PARTS_KEY]) == "table"
+		then replica.Data[BODY_PARTS_KEY]
+		else OwnedBodyParts.CreateEmptyState()
+	markBodyPartPieceDiscovered(player, currentBodyPartsState, grantData.pieceId)
+
+	return deepCopy(reservedRecord), {
+		serialNumber = serialNumber,
+		pieceId = grantData.pieceId,
+	}, nil
+end
+
+function DataService:AddOwnedBodyPart(
+	player: Player,
+	payload: OwnedBodyParts.OwnedBodyPartGrantPayload,
+	reservation: any?
+): (OwnedBodyParts.OwnedBodyPartRecord?, string?)
+	if not BODY_PARTS_KEY then
+		return nil, "Body parts persistence is not configured."
+	end
+	local replica = getActiveReplica(player)
+	if not replica then
+		return nil, "Player data is not loaded."
+	end
+
+	local grantData, grantError = validateBodyPartGrantPayload(payload)
+	if not grantData then
+		return nil, grantError
+	end
+
+	local currentBodyPartsState = if typeof(replica.Data[BODY_PARTS_KEY]) == "table"
+		then replica.Data[BODY_PARTS_KEY]
+		else OwnedBodyParts.CreateEmptyState()
+	local currentOwnedCount = OwnedBodyParts.CountOwned(currentBodyPartsState)
+	if currentOwnedCount >= OwnedBodyParts.MAX_OWNED_COUNT then
+		return nil, string.format(
+			"Inventory is full (%d/%d). Sell body parts to make room.",
+			currentOwnedCount,
+			OwnedBodyParts.MAX_OWNED_COUNT
+		)
+	end
+
+	local serialNumber = if typeof(reservation) == "table" then tonumber(reservation.serialNumber) else nil
+	if serialNumber == nil or serialNumber <= 0 then
+		local serialError
+		serialNumber, serialError = self:GetNextSerialForPiece(grantData.pieceId)
+		if not serialNumber then
+			return nil, serialError or "Failed to allocate body part serial number."
+		end
+	end
+
+	local nextOwnedId = math.max(1, math.floor(tonumber(currentBodyPartsState.nextOwnedId) or 1))
+	local ownedId = OwnedBodyParts.CreateOwnedId(nextOwnedId)
+	local createdRecord = buildGrantedBodyPartRecord(grantData, ownedId, serialNumber)
 
 	if not createdRecord then
 		return nil, "Failed to store owned body part."
 	end
 
 	setReplicaPathValue(player, BODY_PARTS_KEY, { "ownedById", ownedId }, createdRecord)
-	if not (typeof(currentBodyPartsState.discoveredPieceIds) == "table" and currentBodyPartsState.discoveredPieceIds[pieceId] == true) then
-		setReplicaPathValue(player, BODY_PARTS_KEY, { "discoveredPieceIds", pieceId }, true)
-	end
+	markBodyPartPieceDiscovered(player, currentBodyPartsState, grantData.pieceId)
 	setReplicaPathValue(player, BODY_PARTS_KEY, { "nextOwnedId" }, nextOwnedId + 1)
 
 	local updatedBodyPartsState = self:GetBodyPartsState(player)
