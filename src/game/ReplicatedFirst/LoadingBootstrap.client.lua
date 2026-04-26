@@ -1,3 +1,5 @@
+local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Diagnostics"):WaitForChild("Logger"))
+
 local ContentProvider = game:GetService("ContentProvider")
 local Players = game:GetService("Players")
 local ReplicatedFirst = game:GetService("ReplicatedFirst")
@@ -9,7 +11,7 @@ local placeProfilesFolder = if sharedFolder then sharedFolder:WaitForChild("Plac
 local placeProfileModule = if placeProfilesFolder then placeProfilesFolder:WaitForChild("PlaceProfile", 10) else nil
 
 if not (placeProfileModule and placeProfileModule:IsA("ModuleScript")) then
-	error(
+	Logger.Error(
 		"[LoadingBootstrap] ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile is missing or did not replicate in time.",
 		0
 	)
@@ -46,7 +48,7 @@ end)
 
 local loadingScreen = ReplicatedFirst:WaitForChild("LoadingScreen", 5)
 if not (loadingScreen and loadingScreen:IsA("ScreenGui")) then
-	warn("[LoadingBootstrap] ReplicatedFirst.LoadingScreen is missing or invalid.")
+	Logger.Warn("[LoadingBootstrap] ReplicatedFirst.LoadingScreen is missing or invalid.")
 	return
 end
 
@@ -202,7 +204,7 @@ local function collectProfileGuiInstances(
 
 		if child == nil then
 			if isRequired then
-				error(
+				Logger.Error(
 					string.format(
 						"%s Required PlayerGui.%s.%s did not appear within %d seconds.",
 						formatContextPrefix(),
@@ -215,7 +217,7 @@ local function collectProfileGuiInstances(
 			end
 
 			if allowMissingRoots then
-				warn(string.format(
+				Logger.Warn(string.format(
 					"%s Optional PlayerGui.%s.%s was not found; skipping preload for that root.",
 					formatContextPrefix(),
 					rootName,
@@ -263,7 +265,7 @@ local function collectProfileGameAssetInstances(relativePaths): { Instance }
 	for _, relativePath in ipairs(relativePaths) do
 		local resolved = resolveGameAssetInstance(relativePath)
 		if resolved == nil then
-			warn(string.format(
+			Logger.Warn(string.format(
 				"%s Optional ReplicatedStorage.GameAssets.%s was not found; skipping preload for that asset path.",
 				formatContextPrefix(),
 				string.gsub(relativePath, "/", ".")
@@ -300,7 +302,7 @@ local function preloadInstances(instances: { Instance }, allowSkip: boolean)
 		end)
 
 		if not ok then
-			warn(string.format("[LoadingBootstrap] Failed to preload %s: %s", instance:GetFullName(), tostring(err)))
+			Logger.Warn(string.format("[LoadingBootstrap] Failed to preload %s: %s", instance:GetFullName(), tostring(err)))
 		end
 
 		loadedAssets += 1
@@ -412,7 +414,7 @@ preloadInstances(collectPreloadInstances(loadingScreen), false)
 waitForGameLoaded()
 
 local preloadSpec = PlaceProfile.GetPreloadSpec()
-print(string.format(
+Logger.Print(string.format(
 	"%s PreloadSpec MainInterface=[%s] ModalRoot=[%s] GameAssets=[%s]",
 	formatContextPrefix(),
 	formatPreloadRootNames(preloadSpec.mainInterfaceRoots),
@@ -427,7 +429,7 @@ task.spawn(function()
 		if #preloadSpec.mainInterfaceRoots > 0 then
 			local mainInterface = resolveGuiRoot(playerGui, "MainInterface", GUI_ROOT_TIMEOUT)
 			if not (mainInterface and mainInterface:IsA("ScreenGui")) then
-				error(
+				Logger.Error(
 					string.format(
 						"%s Required PlayerGui.MainInterface did not appear within %d seconds. This place should include the shared MainInterface content.",
 						formatContextPrefix(),
@@ -450,7 +452,7 @@ task.spawn(function()
 		if #preloadSpec.modalRootRoots > 0 then
 			local modalRoot = resolveGuiRoot(playerGui, "ModalRoot", GUI_ROOT_TIMEOUT)
 			if not (modalRoot and modalRoot:IsA("ScreenGui")) then
-				error(
+				Logger.Error(
 					string.format(
 						"%s Required PlayerGui.ModalRoot did not appear within %d seconds. This place should include the shared ModalRoot content.",
 						formatContextPrefix(),
@@ -492,11 +494,11 @@ while not preloadCompleted and not skipRequested and os.clock() < preloadDeadlin
 end
 
 if preloadFailureMessage ~= nil then
-	error(preloadFailureMessage, 0)
+	Logger.Error(preloadFailureMessage, 0)
 end
 
 if not preloadCompleted and not skipRequested then
-	warn("[LoadingBootstrap] Optional preload timed out; dismissing loading screen.")
+	Logger.Warn("[LoadingBootstrap] Optional preload timed out; dismissing loading screen.")
 end
 
 if skipConnection then

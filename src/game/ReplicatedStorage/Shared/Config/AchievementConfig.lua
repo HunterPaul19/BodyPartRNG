@@ -4,6 +4,7 @@ export type AchievementTriggerType =
 	| "play_time_seconds"
 	| "new_discovered_pieces"
 	| "new_completed_sets"
+	| "direct_award"
 
 export type AchievementConfigEntry = {
 	id: string,
@@ -100,6 +101,18 @@ local rawOrdered: { AchievementConfigEntry } = {
 		titleId = "set_sovereign",
 		triggerType = "new_completed_sets",
 		targetValue = 5,
+	},
+	{
+		id = "met_developer",
+		titleId = "met_developer",
+		triggerType = "direct_award",
+		targetValue = 1,
+	},
+	{
+		id = "launch_week_player",
+		titleId = "launch_week_player",
+		triggerType = "direct_award",
+		targetValue = 1,
 	},
 }
 

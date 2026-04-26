@@ -54,6 +54,13 @@ local FAMILY_DESCRIPTIONS = {
 		"A potent charm tonic that makes high-value hits much more realistic for a short run.",
 		"An ultra-rare fortune brew reserved for players chasing the biggest upgrades in the game.",
 	},
+	size = {
+		"A starter size charm that nudges rolls away from smaller limbs.",
+		"A stronger size-luck mix for chasing larger body part variants.",
+		"A dependable size draught when you want bigger finds more often.",
+		"A premium size blend that makes huge limbs more realistic for a short run.",
+		"The merchant's rarest size stock, built for chasing the biggest variants.",
+	},
 	rollSpeed = {
 		"A light-speed sip for cutting some drag off your early roll cadence.",
 		"A stronger accelerator that keeps your rolls moving when the grind starts to drag.",

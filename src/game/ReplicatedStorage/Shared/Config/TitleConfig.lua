@@ -135,6 +135,24 @@ local rawOrdered: { TitleConfigEntry } = {
 		achievementId = "set_sovereign",
 		sortOrder = 14,
 	},
+	{
+		id = "met_developer",
+		label = "You Met a Developer",
+		description = "You crossed paths with someone building Body Part RNG.",
+		howToGet = "Be in a server with a developer.",
+		displayColor = Color3.fromRGB(255, 82, 82),
+		achievementId = "met_developer",
+		sortOrder = 15,
+	},
+	{
+		id = "launch_week_player",
+		label = "You Played Within a Week of Release",
+		description = "You were here when the hunt first began.",
+		howToGet = "Play during the first week of release.",
+		displayColor = Color3.fromRGB(255, 214, 76),
+		achievementId = "launch_week_player",
+		sortOrder = 16,
+	},
 }
 
 table.sort(rawOrdered, function(a, b)

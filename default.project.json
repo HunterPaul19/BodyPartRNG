@@ -1,5 +1,5 @@
 {
-  "name": "GameTemplate",
+  "name": "BodyPartRNG",
   "tree": {
     "$className": "DataModel",
     "ReplicatedFirst": {
@@ -14,16 +14,85 @@
         "$path": "src/Packages"
       },
       "Common": {
-        "$path": "src/game/ReplicatedStorage/Common"
+        "$path": "src/game/ReplicatedStorage/Shared/Foundation/Common"
       },
       "Lists": {
-        "$path": "src/game/ReplicatedStorage/Lists"
+        "$path": "src/game/ReplicatedStorage/Shared/Config/Lists"
       },
       "Loader": {
         "$path": "src/game/ReplicatedStorage/Loader.lua"
       },
       "Shared": {
-        "$path": "src/game/ReplicatedStorage/Shared"
+        "$className": "Folder",
+        "Admin": {
+          "$path": "src/game/ReplicatedStorage/Shared/Platform/Admin"
+        },
+        "Animation": {
+          "$path": "src/game/ReplicatedStorage/Shared/Foundation/Animation.lua"
+        },
+        "Assets": {
+          "$path": "src/game/ReplicatedStorage/Shared/Assets"
+        },
+        "Audio": {
+          "$path": "src/game/ReplicatedStorage/Shared/Presentation/Audio"
+        },
+        "BossArena": {
+          "$path": "src/game/ReplicatedStorage/Shared/Gameplay/BossArena"
+        },
+        "BossArenas": {
+          "$path": "src/game/ReplicatedStorage/Shared/Gameplay/BossArenas"
+        },
+        "Bosses": {
+          "$path": "src/game/ReplicatedStorage/Shared/Gameplay/Bosses"
+        },
+        "BossQueue": {
+          "$path": "src/game/ReplicatedStorage/Shared/Gameplay/BossQueue"
+        },
+        "Camera": {
+          "$path": "src/game/ReplicatedStorage/Shared/Presentation/Camera"
+        },
+        "Character": {
+          "$path": "src/game/ReplicatedStorage/Shared/Gameplay/Character"
+        },
+        "Combat": {
+          "$path": "src/game/ReplicatedStorage/Shared/Gameplay/Combat"
+        },
+        "Config": {
+          "$path": "src/game/ReplicatedStorage/Shared/Config"
+        },
+        "Diagnostics": {
+          "$path": "src/game/ReplicatedStorage/Shared/Platform/Diagnostics"
+        },
+        "Effects": {
+          "$path": "src/game/ReplicatedStorage/Shared/Presentation/Effects"
+        },
+        "Formatting": {
+          "$path": "src/game/ReplicatedStorage/Shared/Presentation/Formatting"
+        },
+        "Localization": {
+          "$path": "src/game/ReplicatedStorage/Shared/Presentation/Localization"
+        },
+        "Marketplace": {
+          "$path": "src/game/ReplicatedStorage/Shared/Gameplay/Marketplace"
+        },
+        "PlaceProfiles": {
+          "$path": "src/game/ReplicatedStorage/Shared/Platform/PlaceProfiles"
+        },
+        "Premium": {
+          "$path": "src/game/ReplicatedStorage/Shared/Gameplay/Premium"
+        },
+        "Rolling": {
+          "$path": "src/game/ReplicatedStorage/Shared/Gameplay/Rolling"
+        },
+        "Stats": {
+          "$path": "src/game/ReplicatedStorage/Shared/Gameplay/Stats"
+        },
+        "Titles": {
+          "$path": "src/game/ReplicatedStorage/Shared/Gameplay/Titles"
+        },
+        "UI": {
+          "$path": "src/game/ReplicatedStorage/Shared/Presentation/UI"
+        }
       }
     },
     "ServerScriptService": {
@@ -34,7 +103,154 @@
         "$path": "src/game/ServerScriptService/Start.server.lua"
       },
       "Services": {
-        "$path": "src/game/ServerScriptService/Services"
+        "$className": "Folder",
+        "AchievementService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/AchievementService.lua"
+        },
+        "AccessoryService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/AccessoryService.lua"
+        },
+        "AdminConfig": {
+          "$path": "src/game/ServerScriptService/Services/Core/AdminConfig.lua"
+        },
+        "AdminService": {
+          "$path": "src/game/ServerScriptService/Services/Core/AdminService.lua"
+        },
+        "AppraisalService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/AppraisalService.lua"
+        },
+        "AuraService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/AuraService.lua"
+        },
+        "BodyPartService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/BodyPartService"
+        },
+        "BossArenaAbandonService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/BossArenaAbandonService.lua"
+        },
+        "BossArenaArrivalService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/BossArenaArrivalService.lua"
+        },
+        "BossArenaBossHealthService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/BossArenaBossHealthService.lua"
+        },
+        "BossArenaEncounterTimerService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/BossArenaEncounterTimerService.lua"
+        },
+        "BossArenaMovePresentationService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/BossArenaMovePresentationService.lua"
+        },
+        "BossArenaPlayerHealthService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/BossArenaPlayerHealthService.lua"
+        },
+        "BossArenaPlayerM1Service": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/BossArenaPlayerM1Service.lua"
+        },
+        "BossArenaResultsService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/BossArenaResultsService.lua"
+        },
+        "BossArenaRewardService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/BossArenaRewardService.lua"
+        },
+        "BossArenaRuntimeService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/BossArenaRuntimeService.lua"
+        },
+        "BossArenaStudioPickerService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/BossArenaStudioPickerService.lua"
+        },
+        "BossArenaStudioTestSuiteService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/BossArenaStudioTestSuiteService.lua"
+        },
+        "BossArenaStudioValidationService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/BossArenaStudioValidationService.lua"
+        },
+        "BossLobbySpawnService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/BossLobbySpawnService.lua"
+        },
+        "BossQueueService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/BossQueueService.lua"
+        },
+        "ChatNotificationService": {
+          "$path": "src/game/ServerScriptService/Services/Social/ChatNotificationService.lua"
+        },
+        "ChatTagService": {
+          "$path": "src/game/ServerScriptService/Services/Social/ChatTagService.lua"
+        },
+        "CombatPhysicsBootstrapService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/CombatPhysicsBootstrapService.lua"
+        },
+        "Common": {
+          "$path": "src/game/ServerScriptService/Services/Core/Common"
+        },
+        "CraftingService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/CraftingService.lua"
+        },
+        "DataService": {
+          "$path": "src/game/ServerScriptService/Services/Core/DataService"
+        },
+        "DayNightCycleService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/DayNightCycleService.lua"
+        },
+        "DiagnosticsService": {
+          "$path": "src/game/ServerScriptService/Services/Core/DiagnosticsService.lua"
+        },
+        "EnterBossLobbyPortalService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/EnterBossLobbyPortalService.lua"
+        },
+        "MarketplaceHandlers": {
+          "$path": "src/game/ServerScriptService/Services/Economy/MarketplaceHandlers"
+        },
+        "MerchantShopService": {
+          "$path": "src/game/ServerScriptService/Services/Economy/MerchantShopService.lua"
+        },
+        "OfflineEarningsService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/OfflineEarningsService.lua"
+        },
+        "PassiveIncomeService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/PassiveIncomeService.lua"
+        },
+        "PlayerLoadoutStatsService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/PlayerLoadoutStatsService.lua"
+        },
+        "PotionService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/PotionService.lua"
+        },
+        "PremiumBenefitsService": {
+          "$path": "src/game/ServerScriptService/Services/Economy/PremiumBenefitsService.lua"
+        },
+        "PreviewAppearanceService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/PreviewAppearanceService.lua"
+        },
+        "PurchaseReceiptService": {
+          "$path": "src/game/ServerScriptService/Services/Economy/PurchaseReceiptService.lua"
+        },
+        "PvpService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/PvpService.lua"
+        },
+        "RateLimitObservabilityService": {
+          "$path": "src/game/ServerScriptService/Services/Core/RateLimitObservabilityService.lua"
+        },
+        "ReturnHomePortalService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/ReturnHomePortalService.lua"
+        },
+        "RollService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/RollService"
+        },
+        "StatsService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/StatsService.lua"
+        },
+        "TestService": {
+          "$path": "src/game/ServerScriptService/Services/Core/TestService.lua"
+        },
+        "TimeShardService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/TimeShardService.lua"
+        },
+        "TitleService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/TitleService.lua"
+        },
+        "VoidRecoveryService": {
+          "$path": "src/game/ServerScriptService/Services/Core/VoidRecoveryService.lua"
+        }
       }
     },
     "StarterPlayer": {
@@ -43,7 +259,157 @@
           "$path": "src/game/StarterPlayer/StarterPlayerScripts/Start.client.lua"
         },
         "Controllers": {
-          "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers"
+          "$className": "Folder",
+          "AdminPanelController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Social/AdminPanelController.lua"
+          },
+          "AppraisalController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/AppraisalController.lua"
+          },
+          "AutoSellController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/AutoSellController.lua"
+          },
+          "AutoSellRollController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/AutoSellRollController.lua"
+          },
+          "BodyPartBuildLockController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/BodyPartBuildLockController.lua"
+          },
+          "BossArenaAbandonController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Bosses/BossArenaAbandonController.lua"
+          },
+          "BossArenaM1Controller": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Bosses/BossArenaM1Controller.lua"
+          },
+          "BossArenaMovePresentation": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Bosses/BossArenaMovePresentation"
+          },
+          "BossArenaMovePresentationController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Bosses/BossArenaMovePresentationController.lua"
+          },
+          "BossArenaResultsController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Bosses/BossArenaResultsController.lua"
+          },
+          "BossArenaStudioPickerController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Bosses/BossArenaStudioPickerController.lua"
+          },
+          "BossArenaStudioTestSuiteController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Bosses/BossArenaStudioTestSuiteController.lua"
+          },
+          "BossArenaTimerController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Bosses/BossArenaTimerController.lua"
+          },
+          "BossHealthBarController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Bosses/BossHealthBarController.lua"
+          },
+          "BossHitFlashController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Bosses/BossHitFlashController.lua"
+          },
+          "ChatNotificationController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Social/ChatNotificationController.lua"
+          },
+          "ChatTagController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Social/ChatTagController.lua"
+          },
+          "CombatHUDController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Bosses/CombatHUDController.lua"
+          },
+          "CombatPhysicsController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Bosses/CombatPhysicsController.lua"
+          },
+          "CraftingController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/CraftingController.lua"
+          },
+          "DataController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Core/DataController"
+          },
+          "DayNightCycleController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/DayNightCycleController.lua"
+          },
+          "DialogueController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/DialogueController.lua"
+          },
+          "DialogueInteractionController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/DialogueInteractionController.lua"
+          },
+          "FoliageController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/FoliageController.lua"
+          },
+          "FootstepController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/FootstepController.lua"
+          },
+          "FrameController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Core/FrameController.lua"
+          },
+          "HelpController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/UI/HelpController.lua"
+          },
+          "HUDWindowController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Core/HUDWindowController.lua"
+          },
+          "IndexController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/IndexController.lua"
+          },
+          "InventoryController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/InventoryController.lua"
+          },
+          "LeaderboardController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/UI/LeaderboardController.lua"
+          },
+          "MainInterfaceController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Core/MainInterfaceController.lua"
+          },
+          "MarketplaceController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/MarketplaceController.lua"
+          },
+          "MerchantPresentationController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/MerchantPresentationController.lua"
+          },
+          "MerchantShopController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/MerchantShopController.lua"
+          },
+          "MerchantTeleportController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/MerchantTeleportController.lua"
+          },
+          "MoneyHUDController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/UI/MoneyHUDController.lua"
+          },
+          "OverheadTitleController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/OverheadTitleController.lua"
+          },
+          "PlayerInspectController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/PlayerInspectController.lua"
+          },
+          "ProximityPromptReachController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/ProximityPromptReachController.lua"
+          },
+          "PotionController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/PotionController.lua"
+          },
+          "PvpController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/PvpController.lua"
+          },
+          "RollController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/RollController.lua"
+          },
+          "SlotCardRenderer": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/UI/SlotCardRenderer.lua"
+          },
+          "StoreController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/UI/StoreController.lua"
+          },
+          "TestController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Core/TestController.lua"
+          },
+          "TimeShardsHUDController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/UI/TimeShardsHUDController.lua"
+          },
+          "TitleController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/TitleController.lua"
+          },
+          "UIController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Core/UIController.lua"
+          }
         }
       }
     },

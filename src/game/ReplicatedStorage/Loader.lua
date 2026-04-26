@@ -1,3 +1,5 @@
+local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Diagnostics"):WaitForChild("Logger"))
+
 local Loader = {}
 
 type PredicateFn = (module: ModuleScript) -> boolean
@@ -93,7 +95,7 @@ local function logLifecycleEvent(
 	end
 
 	if elapsedSeconds ~= nil then
-		print(string.format(
+		Logger.Print(string.format(
 			"%s %s.%s %s in %.2fs at %s",
 			formatPrefix(context),
 			loadedModule.name,
@@ -105,7 +107,7 @@ local function logLifecycleEvent(
 		return
 	end
 
-	print(string.format(
+	Logger.Print(string.format(
 		"%s %s.%s %s at %s",
 		formatPrefix(context),
 		loadedModule.name,
@@ -131,7 +133,7 @@ local function scheduleLifecycleWatchdog(
 			return
 		end
 
-		warn(string.format(
+		Logger.Warn(string.format(
 			"%s %s.%s is still running after %.2fs at %s",
 			formatPrefix(context),
 			loadedModule.name,
@@ -151,7 +153,7 @@ local function requireWithContext(moduleScript: ModuleScript, loadSource: string
 		return result
 	end
 
-	error(formatRequireError(context, moduleScript, loadSource, result), 0)
+	Logger.Error(formatRequireError(context, moduleScript, loadSource, result), 0)
 end
 
 local function collectLoadedModules(
@@ -212,7 +214,7 @@ local function invokeLifecycle(loadedModule: LoadedModule, methodName: string, a
 	local elapsedSeconds = os.clock() - startedAt
 	logLifecycleEvent(context, loadedModule, methodName, "completed", elapsedSeconds)
 	if not ok then
-		error(formatMethodError(context, loadedModule, methodName, result), 0)
+		Logger.Error(formatMethodError(context, loadedModule, methodName, result), 0)
 	end
 end
 
@@ -289,7 +291,7 @@ function Loader.RunAllReporting(
 				invokeLifecycle(loadedModule, methodName, args, normalizedContext)
 			end, createTraceback)
 			if not ok then
-				warn(result)
+				Logger.Warn(result)
 			end
 		end)
 	end

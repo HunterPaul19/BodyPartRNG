@@ -1,5 +1,9 @@
+local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Diagnostics"):WaitForChild("Logger"))
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local GameAssetPaths = require(ReplicatedStorage.Shared.Assets.GameAssetPaths)
+local GameAssetResolver = require(ReplicatedStorage.Shared.Assets.GameAssetResolver)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 
 export type AuraBonusConfig = {
@@ -974,12 +978,8 @@ local function buildDescription(label: string): string
 end
 
 local function getAurasFolder(): Folder?
-	local gameAssets = ReplicatedStorage:WaitForChild("GameAssets", 10)
-	if not (gameAssets and gameAssets:IsA("Folder")) then
-		return nil
-	end
-
-	local auras = gameAssets:WaitForChild("Auras", 10)
+	local auras = GameAssetResolver.Wait(GameAssetPaths.Effects.Auras, 10)
+		or GameAssetResolver.Wait(GameAssetPaths.Legacy.Auras, 10)
 	if auras and auras:IsA("Folder") then
 		return auras
 	end
@@ -988,17 +988,8 @@ local function getAurasFolder(): Folder?
 end
 
 local function getAuraIconsFolder(): Folder?
-	local gameAssets = ReplicatedStorage:WaitForChild("GameAssets", 10)
-	if not (gameAssets and gameAssets:IsA("Folder")) then
-		return nil
-	end
-
-	local uiFolder = gameAssets:WaitForChild("UI", 10)
-	if not (uiFolder and uiFolder:IsA("Folder")) then
-		return nil
-	end
-
-	local auraIcons = uiFolder:WaitForChild("AuraIcons", 10)
+	local auraIcons = GameAssetResolver.Wait({ "UI", "Icons", "Auras" }, 10)
+		or GameAssetResolver.Wait({ "UI", "AuraIcons" }, 10)
 	if auraIcons and auraIcons:IsA("Folder") then
 		return auraIcons
 	end
@@ -1130,10 +1121,10 @@ local function validateAndBuild(): ({ [string]: AuraConfigEntry }, { AuraConfigE
 	local expectedSetIdByModelName = buildExpectedSetIdByModelName()
 
 	if not aurasFolder then
-		error('AuraConfig validation failed: missing "ReplicatedStorage.GameAssets.Auras" folder.')
+		Logger.Error('AuraConfig validation failed: missing "ReplicatedStorage.GameAssets.Effects.Auras" folder.')
 	end
 	if not auraIconsFolder then
-		error('AuraConfig validation failed: missing "ReplicatedStorage.GameAssets.UI.AuraIcons" folder.')
+		Logger.Error('AuraConfig validation failed: missing "ReplicatedStorage.GameAssets.UI.Icons.Auras" folder.')
 	end
 
 	for _, child in ipairs(aurasFolder:GetChildren()) do
@@ -1184,7 +1175,7 @@ local function validateAndBuild(): ({ [string]: AuraConfigEntry }, { AuraConfigE
 			table.insert(
 				errors,
 				string.format(
-					'Aura "%s" references missing model "ReplicatedStorage.GameAssets.Auras.%s".',
+					'Aura "%s" references missing model "ReplicatedStorage.GameAssets.Effects.Auras.%s".',
 					rawEntry.id,
 					rawEntry.assetModelName
 				)
@@ -1213,7 +1204,7 @@ local function validateAndBuild(): ({ [string]: AuraConfigEntry }, { AuraConfigE
 			table.insert(
 				errors,
 				string.format(
-					'Aura "%s" references missing icon "ReplicatedStorage.GameAssets.UI.AuraIcons.%s".',
+					'Aura "%s" references missing icon "ReplicatedStorage.GameAssets.UI.Icons.Auras.%s".',
 					rawEntry.id,
 					rawEntry.iconName
 				)
@@ -1222,7 +1213,7 @@ local function validateAndBuild(): ({ [string]: AuraConfigEntry }, { AuraConfigE
 			table.insert(
 				errors,
 				string.format(
-					'Aura "%s" icon "ReplicatedStorage.GameAssets.UI.AuraIcons.%s" must be a Decal.',
+					'Aura "%s" icon "ReplicatedStorage.GameAssets.UI.Icons.Auras.%s" must be a Decal.',
 					rawEntry.id,
 					rawEntry.iconName
 				)
@@ -1260,7 +1251,7 @@ local function validateAndBuild(): ({ [string]: AuraConfigEntry }, { AuraConfigE
 	end
 
 	if #errors > 0 then
-		error("AuraConfig validation failed:\n- " .. table.concat(errors, "\n- "))
+		Logger.Error("AuraConfig validation failed:\n- " .. table.concat(errors, "\n- "))
 	end
 
 	table.sort(ordered, function(a, b)

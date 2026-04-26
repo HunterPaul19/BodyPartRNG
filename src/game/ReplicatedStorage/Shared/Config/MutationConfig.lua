@@ -1,5 +1,10 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local GameAssetPaths = require(ReplicatedStorage.Shared.Assets.GameAssetPaths)
+local GameAssetResolver = require(ReplicatedStorage.Shared.Assets.GameAssetResolver)
+
 local MutationConfig = {}
 
 export type MutationEntry = {
@@ -63,12 +68,8 @@ local BY_DISPLAY_NAME: { [string]: MutationEntry } = {}
 local FROZEN_ORDERED = table.create(#ORDERED)
 
 local function getMutationVFXFolder(): Folder?
-	local gameAssets = ReplicatedStorage:WaitForChild("GameAssets", 10)
-	if not (gameAssets and gameAssets:IsA("Folder")) then
-		return nil
-	end
-
-	local mutationVFX = gameAssets:WaitForChild("MutationVFX", 10)
+	local mutationVFX = GameAssetResolver.Wait(GameAssetPaths.Effects.Mutations, 10)
+		or GameAssetResolver.Wait(GameAssetPaths.Legacy.MutationVFX, 10)
 	if mutationVFX and mutationVFX:IsA("Folder") then
 		return mutationVFX
 	end

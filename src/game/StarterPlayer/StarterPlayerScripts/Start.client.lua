@@ -1,3 +1,5 @@
+local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Diagnostics"):WaitForChild("Logger"))
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Loader = require(ReplicatedStorage.Loader)
@@ -22,6 +24,7 @@ local CLIENT_STARTUP_PHASE_DEFINITIONS = {
 			"BossHealthBarController",
 			"BossArenaResultsController",
 			"CombatHUDController",
+			"PvpController",
 			"BossHitFlashController",
 			"BossArenaTimerController",
 			"BossArenaAbandonController",
@@ -62,7 +65,9 @@ local CLIENT_STARTUP_PHASE_DEFINITIONS = {
 			"MarketplaceController",
 			"MerchantShopController",
 			"MerchantPresentationController",
+			"CraftingController",
 			"PlayerInspectController",
+			"ProximityPromptReachController",
 			"AppraisalController",
 		},
 	},
@@ -144,7 +149,7 @@ local function buildStartupPhases(loadedModules, source: string)
 		table.insert(phaseSummaryParts, string.format("%s=[%s]", phaseDefinition.label, table.concat(phaseNames, ", ")))
 	end
 
-	print(string.format(
+	Logger.Print(string.format(
 		"[ClientBootstrap] Profile='%s' PlaceId=%d %s",
 		activeProfile.id,
 		math.max(0, math.floor(tonumber(game.PlaceId) or 0)),

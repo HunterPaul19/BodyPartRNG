@@ -1,5 +1,9 @@
+local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Diagnostics"):WaitForChild("Logger"))
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local GameAssetPaths = require(ReplicatedStorage.Shared.Assets.GameAssetPaths)
+local GameAssetResolver = require(ReplicatedStorage.Shared.Assets.GameAssetResolver)
 local RollMath = require(ReplicatedStorage.Shared.Rolling.RollMath)
 local RawPieces = require(script.Parent.Pieces)
 local RawSets = require(script.Parent.Sets)
@@ -196,12 +200,8 @@ local function deepFreeze(value: any): any
 end
 
 local function getBodyPartsRoot(): Folder?
-	local gameAssets = ReplicatedStorage:WaitForChild("GameAssets", 10)
-	if not (gameAssets and gameAssets:IsA("Folder")) then
-		return nil
-	end
-
-	local bodyParts = gameAssets:WaitForChild("BodyParts", 10)
+	local bodyParts = GameAssetResolver.Wait(GameAssetPaths.Models.BodyParts, 10)
+		or GameAssetResolver.Wait(GameAssetPaths.Legacy.BodyParts, 10)
 	if bodyParts and bodyParts:IsA("Folder") then
 		return bodyParts
 	end
@@ -628,7 +628,7 @@ local function buildCatalog()
 	end
 
 	if not getDefaultBaseRig() then
-		pushError(errors, 'Missing base rig "ReplicatedStorage.GameAssets.BodyParts.BaseRigs.DefaultR15"')
+		pushError(errors, 'Missing base rig "ReplicatedStorage.GameAssets.Models.BodyParts.BaseRigs.DefaultR15"')
 	end
 
 	for pieceId, piece in pairs(piecesById) do
@@ -641,13 +641,13 @@ local function buildCatalog()
 		if typeof(piece.region) == "string" and typeof(piece.assetGroup) == "string" and typeof(piece.assetModel) == "string" then
 			pushError(
 				errors,
-				`Missing bundle model for piece "{pieceId}" at ReplicatedStorage.GameAssets.BodyParts.Bundles.{piece.region}.{piece.assetGroup}.{piece.assetModel}`
+				`Missing bundle model for piece "{pieceId}" at ReplicatedStorage.GameAssets.Models.BodyParts.Bundles.{piece.region}.{piece.assetGroup}.{piece.assetModel}`
 			)
 		end
 	end
 
 	if #errors > 0 then
-		error("BodyParts.Catalog validation failed:\n- " .. table.concat(errors, "\n- "))
+		Logger.Error("BodyParts.Catalog validation failed:\n- " .. table.concat(errors, "\n- "))
 	end
 
 	local frozenPiecesById: { [string]: PieceConfig } = {}

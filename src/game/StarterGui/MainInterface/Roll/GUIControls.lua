@@ -1,3 +1,5 @@
+local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Diagnostics"):WaitForChild("Logger"))
+
 local GUIControls = {}
 
 GUIControls.AutoRoll = false
@@ -44,16 +46,46 @@ local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelR
 
 local LocalPlayer = Players.LocalPlayer
 
-local Remotes = ReplicatedStorage:WaitForChild("Remotes")
-local RollingRemotes = Remotes:WaitForChild("Rolling")
-local GetRollingStateRemote = RollingRemotes:WaitForChild("GetRollingState")
-local SelectRollTypeRemote = RollingRemotes:WaitForChild("SelectRollType")
-local SelectRollRegionRemote = RollingRemotes:WaitForChild("SelectRollRegion")
-local PerformRollRemote = RollingRemotes:WaitForChild("PerformRoll")
-local ToggleQuickRollRemote = RollingRemotes:WaitForChild("ToggleQuickRoll")
-local PromptQuickRollPurchaseRemote = RollingRemotes:WaitForChild("PromptQuickRollPurchase")
-local FinalizeAutoSellRollRemote = RollingRemotes:WaitForChild("FinalizeAutoSellRoll")
-local RollingUpdatedRemote = RollingRemotes:WaitForChild("RollingUpdated")
+local REMOTE_WAIT_TIMEOUT = 15
+
+local function requireChild(parent: Instance, childName: string, className: string): Instance
+	local child = parent:FindFirstChild(childName)
+	if child == nil then
+		child = parent:WaitForChild(childName, REMOTE_WAIT_TIMEOUT)
+	end
+
+	local expectedPath = string.format("%s.%s", parent:GetFullName(), childName)
+	if child == nil then
+		Logger.Error(string.format(
+			"[Roll.GUIControls] Timed out after %d seconds waiting for %s.",
+			REMOTE_WAIT_TIMEOUT,
+			expectedPath
+		), 0)
+	end
+
+	if not child:IsA(className) then
+		Logger.Error(string.format(
+			"[Roll.GUIControls] Expected %s to be a %s, got %s.",
+			expectedPath,
+			className,
+			child.ClassName
+		), 0)
+	end
+
+	return child
+end
+
+local Remotes = requireChild(ReplicatedStorage, "Remotes", "Folder")
+local RollingRemotes = requireChild(Remotes, "Rolling", "Folder")
+local GetRollingStateRemote = requireChild(RollingRemotes, "GetRollingState", "RemoteFunction") :: RemoteFunction
+local SelectRollTypeRemote = requireChild(RollingRemotes, "SelectRollType", "RemoteFunction") :: RemoteFunction
+local SelectRollRegionRemote = requireChild(RollingRemotes, "SelectRollRegion", "RemoteFunction") :: RemoteFunction
+local PerformRollRemote = requireChild(RollingRemotes, "PerformRoll", "RemoteFunction") :: RemoteFunction
+local ToggleQuickRollRemote = requireChild(RollingRemotes, "ToggleQuickRoll", "RemoteFunction") :: RemoteFunction
+local ToggleAutoEquipBestRemote = requireChild(RollingRemotes, "ToggleAutoEquipBest", "RemoteFunction") :: RemoteFunction
+local PromptQuickRollPurchaseRemote = requireChild(RollingRemotes, "PromptQuickRollPurchase", "RemoteFunction") :: RemoteFunction
+local FinalizeAutoSellRollRemote = requireChild(RollingRemotes, "FinalizeAutoSellRoll", "RemoteFunction") :: RemoteFunction
+local RollingUpdatedRemote = requireChild(RollingRemotes, "RollingUpdated", "RemoteEvent") :: RemoteEvent
 local BODY_PARTS_FOLDER_NAME = "BodyParts"
 local EQUIP_REMOTE_NAME = "EquipOwnedBodyPart"
 
@@ -65,6 +97,9 @@ local MainButtons = Main.Parent.Main
 local RollButton = MainButtons.RollButton
 local QuickRollButton = MainButtons.QuickRoll
 local AutoRollButton = MainButtons.AutoRoll
+local AutoEquipBestButton = MainButtons:WaitForChild("AutoEquipBestButton")
+local AutoEquipBestUsageLabel = AutoEquipBestButton:WaitForChild("Usage")
+local AutoEquipBestSelectionCorners = AutoEquipBestUsageLabel:FindFirstChild("SelectionCorners")
 local RollDropdown = RollButton.RollDropdown
 local RollDropdownInner = RollDropdown.Inner
 local RollDropdownScrollingFrame = RollDropdownInner.ScrollingFrame
@@ -76,6 +111,25 @@ local LeftButton = RollButton.Left
 local RightButton = RollButton.Right
 local DEFAULT_ROLL_DESC_COLOR = RollButton.Desc.TextColor3
 local READY_ROLL_DESC_COLOR = Color3.fromRGB(255, 223, 94)
+local AUTO_EQUIP_BEST_ACTIVE_COLOR = Color3.fromRGB(96, 226, 98)
+local DEFAULT_AUTO_EQUIP_BEST_BACKGROUND_COLOR = AutoEquipBestButton.BackgroundColor3
+local DEFAULT_AUTO_EQUIP_BEST_IMAGE_COLOR = if AutoEquipBestButton:IsA("ImageButton")
+	then AutoEquipBestButton.ImageColor3
+	else Color3.new(1, 1, 1)
+local DEFAULT_AUTO_EQUIP_BEST_TEXT_COLOR = if AutoEquipBestUsageLabel:IsA("TextLabel")
+	then AutoEquipBestUsageLabel.TextColor3
+	else Color3.new(1, 1, 1)
+local DEFAULT_AUTO_EQUIP_BEST_CORNER_FRAME_COLORS = {}
+if AutoEquipBestSelectionCorners then
+	for _, descendant in ipairs(AutoEquipBestSelectionCorners:GetDescendants()) do
+		if descendant:IsA("Frame") then
+			table.insert(DEFAULT_AUTO_EQUIP_BEST_CORNER_FRAME_COLORS, {
+				frame = descendant,
+				color = descendant.BackgroundColor3,
+			})
+		end
+	end
+end
 local RollResultRaritySubInfoLabel = SubInfoFrame:FindFirstChild("Rarity")
 local RollResultMutationSubInfoLabel = SubInfoFrame:FindFirstChild("Mutation")
 local EverRolledSubInfoLabel = SubInfoFrame:FindFirstChild("EverRolled")
@@ -405,6 +459,16 @@ local function getQuickRollState(state)
 	return state.quickRoll
 end
 
+local function getAutoEquipBestState(state)
+	if typeof(state) ~= "table" or typeof(state.autoEquipBest) ~= "table" then
+		return {
+			enabled = false,
+		}
+	end
+
+	return state.autoEquipBest
+end
+
 local function shouldPredictSkippedRollPresentation(triggerSource)
 	return triggerSource == "auto" and getQuickRollState(GUIControls.RollingState).enabled == true
 end
@@ -424,7 +488,7 @@ local function invokeRemote(remote, payload)
 		return remote:InvokeServer()
 	end)
 	if not ok then
-		warn(string.format("[RollGUI] Remote %s failed: %s", remote.Name, tostring(result)))
+		Logger.Warn(string.format("[RollGUI] Remote %s failed: %s", remote.Name, tostring(result)))
 		return nil
 	end
 	return result
@@ -634,6 +698,7 @@ local function restoreIdleRollUi()
 	MainButtons.RollButton.Visible = true
 	MainButtons.QuickRoll.Visible = true
 	MainButtons.AutoRoll.Visible = true
+	AutoEquipBestButton.Visible = true
 	GUIControls.ActiveRollPreviewSessionId = nil
 end
 
@@ -706,6 +771,30 @@ function GUIControls:RefreshAutoRollButton()
 
 	AutoRollButton.Desc.Text = isEligible and (GUIControls.AutoRoll and "On" or "Off") or "Group Join Required"
 	GUIControls:SetButtonVisualState(AutoRollButton, GUIControls.AutoRoll == true, isEligible)
+end
+
+function GUIControls:RefreshAutoEquipBestButton()
+	local autoEquipBestState = getAutoEquipBestState(GUIControls.RollingState)
+	local isEnabled = autoEquipBestState.enabled == true
+	local color = if isEnabled then AUTO_EQUIP_BEST_ACTIVE_COLOR else DEFAULT_AUTO_EQUIP_BEST_IMAGE_COLOR
+
+	AutoEquipBestButton.BackgroundColor3 = if isEnabled
+		then AUTO_EQUIP_BEST_ACTIVE_COLOR
+		else DEFAULT_AUTO_EQUIP_BEST_BACKGROUND_COLOR
+	if AutoEquipBestButton:IsA("ImageButton") then
+		AutoEquipBestButton.ImageColor3 = color
+	end
+	if AutoEquipBestUsageLabel:IsA("TextLabel") then
+		AutoEquipBestUsageLabel.TextColor3 = if isEnabled
+			then AUTO_EQUIP_BEST_ACTIVE_COLOR
+			else DEFAULT_AUTO_EQUIP_BEST_TEXT_COLOR
+	end
+	for _, entry in ipairs(DEFAULT_AUTO_EQUIP_BEST_CORNER_FRAME_COLORS) do
+		local frame = entry.frame
+		if frame and frame.Parent and frame:IsA("Frame") then
+			frame.BackgroundColor3 = if isEnabled then AUTO_EQUIP_BEST_ACTIVE_COLOR else entry.color
+		end
+	end
 end
 
 function GUIControls:SetAutoRollEnabled(enabled)
@@ -1002,10 +1091,11 @@ function GUIControls:RefreshRollControls()
 
 	GUIControls:RefreshQuickRollButton()
 	GUIControls:RefreshAutoRollButton()
+	GUIControls:RefreshAutoEquipBestButton()
 end
 
 function GUIControls:PromptLockedRollType(rollType)
-	warn(string.format("[RollGUI] Purchase flow not implemented for locked roll type %s.", tostring(rollType.id)))
+	Logger.Warn(string.format("[RollGUI] Purchase flow not implemented for locked roll type %s.", tostring(rollType.id)))
 	GUIControls:SetTemporaryStatus(string.format("%s is locked.", tostring(rollType.displayName or rollType.id)))
 end
 
@@ -1161,6 +1251,29 @@ function GUIControls:ToggleQuickRoll()
 	end
 end
 
+function GUIControls:ToggleAutoEquipBest()
+	local autoEquipBestState = getAutoEquipBestState(GUIControls.RollingState)
+	local result = invokeRemote(ToggleAutoEquipBestRemote, { enabled = not autoEquipBestState.enabled })
+	if not result then
+		GUIControls:SetTemporaryStatus("Failed to update Auto Equip Best.")
+		return
+	end
+	if typeof(result.state) == "table" then
+		GUIControls:ApplyRollingState(result.state)
+	end
+	if not result.ok then
+		GUIControls:SetTemporaryStatus(result.message or "Failed to update Auto Equip Best.")
+		return
+	end
+
+	GUIControls:InvalidateTemporaryStatus()
+	GUIControls:RefreshRollControls()
+	local updatedAutoEquipBestState = getAutoEquipBestState(GUIControls.RollingState)
+	if updatedAutoEquipBestState.enabled ~= autoEquipBestState.enabled then
+		ToggleSoundUtil.PlayToggle(updatedAutoEquipBestState.enabled == true)
+	end
+end
+
 function GUIControls:ToggleAutoRoll()
 	if not isPlayerInAutoRollGroup() then
 		GUIControls:PromptAutoRollGroupJoin()
@@ -1228,6 +1341,7 @@ function GUIControls:RollSequence(previewSequence, previewCount)
 	MainButtons.RollButton.Visible = false
 	MainButtons.QuickRoll.Visible = false
 	MainButtons.AutoRoll.Visible = false
+	AutoEquipBestButton.Visible = false
 	ShowBlackTween:Play()
 	BlurTween:Play()
 
@@ -1457,6 +1571,7 @@ function GUIControls:Roll(triggerSource)
 				MainButtons.RollButton.Visible = true
 				MainButtons.QuickRoll.Visible = true
 				MainButtons.AutoRoll.Visible = true
+				AutoEquipBestButton.Visible = true
 				GUIControls.ActiveRollPreviewSessionId = nil
 			else
 				restoreIdleRollUi()
@@ -1476,9 +1591,10 @@ function GUIControls:Roll(triggerSource)
 		MainButtons.RollButton.Visible = false
 		MainButtons.QuickRoll.Visible = false
 		MainButtons.AutoRoll.Visible = false
+		AutoEquipBestButton.Visible = false
 
 		GUIControls.CurrentRollResult = rollResult
-		GUIControls.CurrentRollResultEquipped = false
+		GUIControls.CurrentRollResultEquipped = rollResult.autoEquipped == true
 		GUIControls.EquipDebounce = false
 
 		GUIControls:BeginRollPreviewSession()
@@ -1574,11 +1690,16 @@ QuickRollButton.MouseButton1Down:Connect(function()
 	GUIControls:ToggleQuickRoll()
 end)
 
+AutoEquipBestButton.MouseButton1Down:Connect(function()
+	GUIControls:ToggleAutoEquipBest()
+end)
+
 AutoRollButton.MouseButton1Down:Connect(function()
 	GUIControls:ToggleAutoRoll()
 end)
 
 ToggleSoundUtil.MarkToggleButton(QuickRollButton)
+ToggleSoundUtil.MarkToggleButton(AutoEquipBestButton)
 ToggleSoundUtil.MarkToggleButton(AutoRollButton)
 
 RollingUpdatedRemote.OnClientEvent:Connect(function(state)
@@ -1589,6 +1710,13 @@ RollDropdownInner.Position = DropdownClosedPosition
 GUIControls:SetDropdownOpen(false)
 RollDropdownTemplate.Visible = false
 GUIControls:RefreshRollControls()
-GUIControls:LoadRollingState()
+task.defer(function()
+	local ok, err = pcall(function()
+		GUIControls:LoadRollingState()
+	end)
+	if not ok then
+		Logger.Warn(string.format("[RollGUI] Initial rolling state load failed: %s", tostring(err)))
+	end
+end)
 
 return GUIControls
