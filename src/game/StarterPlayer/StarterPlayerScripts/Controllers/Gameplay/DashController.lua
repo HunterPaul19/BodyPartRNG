@@ -1,0 +1,541 @@
+local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Diagnostics"):WaitForChild("Logger"))
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+local Animation = require(ReplicatedStorage.Shared.Animation)
+local GameAssetPaths = require(ReplicatedStorage.Shared.Assets.GameAssetPaths)
+local GameAssetResolver = require(ReplicatedStorage.Shared.Assets.GameAssetResolver)
+local DashStateRules = require(ReplicatedStorage.Shared.Combat.DashStateRules)
+
+local LOCAL_PLAYER = Players.LocalPlayer
+local DASH_ANIMATION_NAME = "Dash"
+local DASH_ANIMATION_ID = "rbxassetid://80201492192726"
+local DASH_START_SPEED = 110
+local DASH_END_SPEED = 30
+local SIDE_DASH_PEAK_SPEED = 60
+local SIDE_DASH_ACCEL_SECONDS = 0.045
+local BODY_VELOCITY_MAX_FORCE = Vector3.one * 8e4
+local HORIZONTAL_FORCE_MASK = Vector3.new(1, 0, 1)
+local REMOTES_FOLDER_NAME = "Remotes"
+local DASH_FOLDER_NAME = "Dash"
+local REQUEST_DASH_REMOTE_NAME = "RequestDash"
+
+local KEYBOARD_DASH_KEYS = {
+	{ keyCode = Enum.KeyCode.W, direction = "Front" },
+	{ keyCode = Enum.KeyCode.A, direction = "Left" },
+	{ keyCode = Enum.KeyCode.D, direction = "Right" },
+	{ keyCode = Enum.KeyCode.S, direction = "Back" },
+}
+
+type CharacterParts = {
+	character: Model,
+	humanoid: Humanoid,
+	rootPart: BasePart,
+}
+
+type RequestDashResponse = {
+	ok: boolean,
+	direction: string?,
+	durationSeconds: number?,
+	code: string?,
+	retryAfterSeconds: number?,
+}
+
+local DashController = {
+	_started = false,
+	_requestInFlight = false,
+	_inputConnection = nil :: RBXScriptConnection?,
+	_characterAddedConnection = nil :: RBXScriptConnection?,
+	_heartbeatConnection = nil :: RBXScriptConnection?,
+	_mobileDashConnection = nil :: RBXScriptConnection?,
+	_mobileDashButton = nil :: GuiButton?,
+	_mobileBindingStarted = false,
+	_activeBodyVelocity = nil :: BodyVelocity?,
+	_activeVelocityValue = nil :: NumberValue?,
+	_activeTween = nil :: Tween?,
+	_activeTrack = nil :: AnimationTrack?,
+	_dashToken = 0,
+	_nextDashAllowedAt = 0,
+	_requestRemote = nil :: RemoteFunction?,
+	_controlModule = nil :: any,
+	_warnedMissingAnimation = false,
+	_warnedMissingRemote = false,
+}
+
+local function warnWithPrefix(message: string)
+	Logger.Warn(string.format("[DashController] %s", message))
+end
+
+local function normalizeAbilityName(value: string): string
+	return string.lower(string.match(value, "^%s*(.-)%s*$") or "")
+end
+
+local function getCharacterParts(): CharacterParts?
+	local character = LOCAL_PLAYER.Character
+	if character == nil or character.Parent == nil then
+		return nil
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not (humanoid and humanoid:IsA("Humanoid")) then
+		return nil
+	end
+	if not (rootPart and rootPart:IsA("BasePart")) then
+		return nil
+	end
+	if humanoid.Health <= 0 then
+		return nil
+	end
+
+	return {
+		character = character,
+		humanoid = humanoid,
+		rootPart = rootPart,
+	}
+end
+
+local function isBlockedByCharacterState(character: Model): boolean
+	return DashStateRules.IsDashBlocked(character)
+end
+
+local function resolveDashAnimation(): Animation?
+	local animation = GameAssetResolver.Find(GameAssetPaths.Animations.Combat, DASH_ANIMATION_NAME)
+	if animation and animation:IsA("Animation") then
+		return animation
+	end
+
+	return nil
+end
+
+local function normalizeApprovedDirection(direction: string?): string
+	if direction == "Back" or direction == "Left" or direction == "Right" then
+		return direction
+	end
+
+	return "Front"
+end
+
+function DashController:_ensureRemote(): RemoteFunction?
+	if self._requestRemote and self._requestRemote.Parent ~= nil then
+		return self._requestRemote
+	end
+
+	local remotesFolder = ReplicatedStorage:FindFirstChild(REMOTES_FOLDER_NAME)
+	local dashFolder = remotesFolder and remotesFolder:FindFirstChild(DASH_FOLDER_NAME)
+	local requestRemote = dashFolder and dashFolder:FindFirstChild(REQUEST_DASH_REMOTE_NAME)
+	if requestRemote and requestRemote:IsA("RemoteFunction") then
+		self._requestRemote = requestRemote
+		self._warnedMissingRemote = false
+		return requestRemote
+	end
+
+	if self._warnedMissingRemote ~= true then
+		self._warnedMissingRemote = true
+		warnWithPrefix("ReplicatedStorage.Remotes.Dash.RequestDash is missing.")
+	end
+
+	return nil
+end
+
+function DashController:_getControlModule(): any?
+	if self._controlModule ~= nil then
+		return self._controlModule
+	end
+
+	local playerScripts = LOCAL_PLAYER:FindFirstChild("PlayerScripts")
+	local playerModule = playerScripts and playerScripts:FindFirstChild("PlayerModule")
+	local controlModule = playerModule and playerModule:FindFirstChild("ControlModule")
+	if controlModule == nil then
+		return nil
+	end
+
+	local ok, result = pcall(require, controlModule)
+	if not ok then
+		warnWithPrefix(string.format("Failed to require PlayerModule.ControlModule: %s", tostring(result)))
+		return nil
+	end
+
+	self._controlModule = result
+	return result
+end
+
+function DashController:_resolveControllerDirection(): string
+	local controlModule = self:_getControlModule()
+	if controlModule == nil or type(controlModule.GetMoveVector) ~= "function" then
+		return "Front"
+	end
+
+	local moveVector = controlModule:GetMoveVector()
+	if typeof(moveVector) ~= "Vector3" then
+		return "Front"
+	end
+
+	if math.abs(moveVector.X) > math.abs(moveVector.Z) then
+		return if moveVector.X > 0 then "Right" else "Left"
+	end
+
+	return if moveVector.Z > 0 then "Back" else "Front"
+end
+
+function DashController:_resolveKeyboardDirection(): string
+	for _, dashKey in ipairs(KEYBOARD_DASH_KEYS) do
+		if UserInputService:IsKeyDown(dashKey.keyCode) then
+			return dashKey.direction
+		end
+	end
+
+	return "Front"
+end
+
+function DashController:_resolveDashDirection(input: InputObject?): string
+	if input and input.UserInputType == Enum.UserInputType.Keyboard then
+		return self:_resolveKeyboardDirection()
+	end
+	if input and string.find(input.UserInputType.Name, "Gamepad") ~= nil then
+		return self:_resolveControllerDirection()
+	end
+
+	return self:_resolveControllerDirection()
+end
+
+function DashController:_disconnectHeartbeat()
+	if self._heartbeatConnection and self._heartbeatConnection.Connected then
+		self._heartbeatConnection:Disconnect()
+	end
+	self._heartbeatConnection = nil
+end
+
+function DashController:_stopActiveTrack()
+	local track = self._activeTrack
+	self._activeTrack = nil
+	if track then
+		pcall(function()
+			track:Stop(0.1)
+		end)
+	end
+end
+
+function DashController:_destroyActiveMover()
+	if self._activeTween then
+		self._activeTween:Cancel()
+		self._activeTween = nil
+	end
+
+	if self._activeBodyVelocity then
+		self._activeBodyVelocity:Destroy()
+		self._activeBodyVelocity = nil
+	end
+
+	if self._activeVelocityValue then
+		self._activeVelocityValue:Destroy()
+		self._activeVelocityValue = nil
+	end
+end
+
+function DashController:_clearActiveDash()
+	self._dashToken += 1
+	self:_disconnectHeartbeat()
+	self:_stopActiveTrack()
+	self:_destroyActiveMover()
+end
+
+function DashController:_endDash(dashToken: number)
+	if self._dashToken ~= dashToken then
+		return
+	end
+
+	self:_disconnectHeartbeat()
+	self:_stopActiveTrack()
+	self:_destroyActiveMover()
+end
+
+function DashController:_playDashAnimation(character: Model)
+	local animation = resolveDashAnimation()
+	if animation == nil then
+		if self._warnedMissingAnimation ~= true then
+			self._warnedMissingAnimation = true
+			warnWithPrefix(string.format(
+				"Missing %s animation under %s.",
+				DASH_ANIMATION_NAME,
+				GameAssetResolver.Format(GameAssetPaths.Animations.Combat)
+			))
+		end
+		return
+	end
+	self._warnedMissingAnimation = false
+
+	if animation.AnimationId ~= DASH_ANIMATION_ID then
+		warnWithPrefix(string.format("Dash animation id is '%s'; expected '%s'.", animation.AnimationId, DASH_ANIMATION_ID))
+	end
+
+	local ok, profile = pcall(Animation.new, character)
+	if not ok or profile == nil then
+		warnWithPrefix("Failed to create animation profile for dash.")
+		return
+	end
+
+	local track = profile:PlayAnimation(animation, Enum.AnimationPriority.Action2, 1, nil, 0.05)
+	if track == nil then
+		warnWithPrefix("Failed to play dash animation.")
+		return
+	end
+
+	track.Looped = false
+	self._activeTrack = track
+end
+
+function DashController:_createBodyVelocity(rootPart: BasePart): BodyVelocity
+	local bodyVelocity = Instance.new("BodyVelocity")
+	bodyVelocity.Name = "DashBodyVelocity"
+	bodyVelocity.MaxForce = BODY_VELOCITY_MAX_FORCE
+	bodyVelocity.MaxForce *= HORIZONTAL_FORCE_MASK
+	bodyVelocity.Parent = rootPart
+	self._activeBodyVelocity = bodyVelocity
+	return bodyVelocity
+end
+
+function DashController:_createVelocityValue(initialValue: number): NumberValue
+	local velocityValue = Instance.new("NumberValue")
+	velocityValue.Name = "DashVelocityValue"
+	velocityValue.Value = initialValue
+	self._activeVelocityValue = velocityValue
+	return velocityValue
+end
+
+function DashController:_startForwardOrBackMovement(rootPart: BasePart, direction: string, durationSeconds: number, dashToken: number)
+	local velocityValue = self:_createVelocityValue(DASH_START_SPEED)
+	local bodyVelocity = self:_createBodyVelocity(rootPart)
+	local easingStyle = if direction == "Back" then Enum.EasingStyle.Exponential else Enum.EasingStyle.Sine
+	local directionMultiplier = if direction == "Back" then -1 else 1
+
+	local tween = TweenService:Create(
+		velocityValue,
+		TweenInfo.new(durationSeconds, easingStyle, Enum.EasingDirection.Out),
+		{ Value = DASH_END_SPEED }
+	)
+	self._activeTween = tween
+	tween:Play()
+
+	self._heartbeatConnection = RunService.Heartbeat:Connect(function()
+		if self._dashToken ~= dashToken or bodyVelocity.Parent == nil or rootPart.Parent == nil then
+			self:_disconnectHeartbeat()
+			return
+		end
+
+		local lookDirection = CFrame.lookAt(rootPart.Position, rootPart.Position + rootPart.CFrame.LookVector).LookVector
+		bodyVelocity.Velocity = lookDirection * velocityValue.Value * directionMultiplier
+	end)
+end
+
+function DashController:_startSideMovement(rootPart: BasePart, direction: string, durationSeconds: number, dashToken: number)
+	local velocityValue = self:_createVelocityValue(0)
+	local bodyVelocity = self:_createBodyVelocity(rootPart)
+	local directionMultiplier = if direction == "Left" then -1 else 1
+
+	local tween = TweenService:Create(
+		velocityValue,
+		TweenInfo.new(math.min(SIDE_DASH_ACCEL_SECONDS, durationSeconds), Enum.EasingStyle.Sine, Enum.EasingDirection.In),
+		{ Value = SIDE_DASH_PEAK_SPEED }
+	)
+	self._activeTween = tween
+	tween:Play()
+
+	self._heartbeatConnection = RunService.Heartbeat:Connect(function()
+		if self._dashToken ~= dashToken or bodyVelocity.Parent == nil or rootPart.Parent == nil then
+			self:_disconnectHeartbeat()
+			return
+		end
+
+		local rightDirection = CFrame.lookAt(rootPart.Position, rootPart.Position + rootPart.CFrame.LookVector).RightVector
+		bodyVelocity.Velocity = rightDirection * velocityValue.Value * directionMultiplier
+	end)
+end
+
+function DashController:_startMovement(rootPart: BasePart, direction: string, durationSeconds: number, dashToken: number)
+	if direction == "Left" or direction == "Right" then
+		self:_startSideMovement(rootPart, direction, durationSeconds, dashToken)
+		return
+	end
+
+	self:_startForwardOrBackMovement(rootPart, direction, durationSeconds, dashToken)
+end
+
+function DashController:RequestDash(input: InputObject?)
+	local now = os.clock()
+	if now < self._nextDashAllowedAt or self._requestInFlight then
+		return
+	end
+	if self._activeBodyVelocity ~= nil then
+		return
+	end
+
+	local parts = getCharacterParts()
+	if parts == nil then
+		return
+	end
+	if isBlockedByCharacterState(parts.character) then
+		return
+	end
+
+	local requestRemote = self:_ensureRemote()
+	if requestRemote == nil then
+		return
+	end
+
+	local requestedDirection = self:_resolveDashDirection(input)
+	self._requestInFlight = true
+	local ok, response = pcall(function()
+		return requestRemote:InvokeServer(requestedDirection)
+	end)
+	self._requestInFlight = false
+
+	if not ok then
+		warnWithPrefix(string.format("RequestDash failed: %s", tostring(response)))
+		return
+	end
+	if typeof(response) ~= "table" or response.ok ~= true then
+		local retryAfterSeconds = if typeof(response) == "table" then tonumber(response.retryAfterSeconds) else nil
+		if retryAfterSeconds ~= nil and retryAfterSeconds > 0 then
+			self._nextDashAllowedAt = os.clock() + retryAfterSeconds
+		end
+		return
+	end
+
+	parts = getCharacterParts()
+	if parts == nil then
+		return
+	end
+
+	local approvedResponse = response :: RequestDashResponse
+	local direction = normalizeApprovedDirection(approvedResponse.direction)
+	local durationSeconds = math.max(0.05, tonumber(approvedResponse.durationSeconds) or 0.5)
+
+	self._nextDashAllowedAt = os.clock() + 0.1
+	self:_clearActiveDash()
+
+	self._dashToken += 1
+	local dashToken = self._dashToken
+	self:_playDashAnimation(parts.character)
+	self:_startMovement(parts.rootPart, direction, durationSeconds, dashToken)
+
+	task.delay(durationSeconds, function()
+		self:_endDash(dashToken)
+	end)
+end
+
+function DashController:_resolveMobileDashButton(): GuiButton?
+	local playerGui = LOCAL_PLAYER:FindFirstChild("PlayerGui")
+	if not (playerGui and playerGui:IsA("PlayerGui")) then
+		return nil
+	end
+
+	local mainInterface = playerGui:FindFirstChild("MainInterface")
+	if not (mainInterface and mainInterface:IsA("ScreenGui")) then
+		return nil
+	end
+
+	local combatHud = mainInterface:FindFirstChild("CombatHUD")
+	if not (combatHud and combatHud:IsA("Frame")) then
+		return nil
+	end
+
+	local mobileControls = combatHud:FindFirstChild("MobileControls")
+	if not (mobileControls and mobileControls:IsA("Frame")) then
+		return nil
+	end
+
+	for _, descendant in ipairs(mobileControls:GetDescendants()) do
+		if not descendant:IsA("GuiButton") then
+			continue
+		end
+
+		local abilityName = descendant:FindFirstChild("AbilityName")
+		if not (abilityName and abilityName:IsA("TextLabel")) then
+			continue
+		end
+
+		if normalizeAbilityName(abilityName.Text) == "dash" then
+			return descendant
+		end
+	end
+
+	return nil
+end
+
+function DashController:_bindMobileDashButton(): boolean
+	local dashButton = self:_resolveMobileDashButton()
+	if dashButton == nil then
+		return false
+	end
+
+	if self._mobileDashButton == dashButton and self._mobileDashConnection then
+		return true
+	end
+
+	if self._mobileDashConnection then
+		self._mobileDashConnection:Disconnect()
+		self._mobileDashConnection = nil
+	end
+
+	self._mobileDashButton = dashButton
+	self._mobileDashConnection = dashButton.Activated:Connect(function()
+		self:RequestDash()
+	end)
+
+	return true
+end
+
+function DashController:_startMobileBinding()
+	if self._mobileBindingStarted then
+		return
+	end
+
+	self._mobileBindingStarted = true
+	task.spawn(function()
+		while self._started == true do
+			if self._mobileDashButton == nil or self._mobileDashButton.Parent == nil or self._mobileDashConnection == nil then
+				self:_bindMobileDashButton()
+			end
+
+			task.wait(0.25)
+		end
+	end)
+end
+
+function DashController:_bindCharacterLifecycle()
+	if self._characterAddedConnection then
+		self._characterAddedConnection:Disconnect()
+	end
+
+	self._characterAddedConnection = LOCAL_PLAYER.CharacterAdded:Connect(function()
+		self:_clearActiveDash()
+	end)
+end
+
+function DashController:OnStart()
+	if self._started then
+		return
+	end
+	self._started = true
+
+	self:_bindCharacterLifecycle()
+	self:_startMobileBinding()
+
+	self._inputConnection = UserInputService.InputBegan:Connect(function(input: InputObject, gameProcessedEvent: boolean)
+		if gameProcessedEvent then
+			return
+		end
+		if input.KeyCode ~= Enum.KeyCode.Q and input.KeyCode ~= Enum.KeyCode.ButtonY then
+			return
+		end
+
+		self:RequestDash(input)
+	end)
+end
+
+return DashController

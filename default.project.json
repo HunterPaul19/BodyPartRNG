@@ -191,6 +191,9 @@
         "DayNightCycleService": {
           "$path": "src/game/ServerScriptService/Services/Gameplay/DayNightCycleService.lua"
         },
+        "DashService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/DashService.lua"
+        },
         "DiagnosticsService": {
           "$path": "src/game/ServerScriptService/Services/Core/DiagnosticsService.lua"
         },
@@ -305,6 +308,9 @@
           "BossHitFlashController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Bosses/BossHitFlashController.lua"
           },
+          "BossLobbyRewardPreviewController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Bosses/BossLobbyRewardPreviewController.lua"
+          },
           "ChatNotificationController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Social/ChatNotificationController.lua"
           },
@@ -322,6 +328,9 @@
           },
           "DataController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Core/DataController"
+          },
+          "DashController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/DashController.lua"
           },
           "DayNightCycleController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/DayNightCycleController.lua"

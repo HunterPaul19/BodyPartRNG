@@ -11,6 +11,7 @@ local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves
 local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local CharacterPhysicsContext = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Utilities.CharacterPhysicsContext)
+local StateUtil = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Utilities.StateUtil)
 
 local DEFAULT_GRAB_SELECTION_RANGE = 56
 local GRAB_HITBOX_DURATION_SECONDS = 0.12
@@ -38,6 +39,7 @@ local GROUND_RAYCAST_DEPTH = 260
 local EXPLOSION_HITBOX_HEIGHT = 24
 local EXPLOSION_HITBOX_DURATION_SECONDS = 0.12
 local MAX_EXPLOSION_HITBOX_PARTS = 128
+local CANNOT_DASH_STATE_NAME = "CannotDash"
 
 local HIT_SEQUENCE = table.freeze({
 	table.freeze({ radius = 14, damage = 260 }),
@@ -488,6 +490,7 @@ local function attachTargetToHand(bossRootPart: BasePart, handPart: BasePart, ta
 		humanoid.JumpHeight = 0
 	end
 	humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+	StateUtil.createState(character, CANNOT_DASH_STATE_NAME)
 
 	return {
 		player = targetData.player,
@@ -502,6 +505,7 @@ local function attachTargetToHand(bossRootPart: BasePart, handPart: BasePart, ta
 		originalBossRootPriority = originalBossRootPriority,
 		originalHandRootPriority = originalHandRootPriority,
 		handPart = handPart,
+		dashBlockStateCreated = true,
 		restoreMovement = function()
 			if humanoid.Parent == nil then
 				return
@@ -535,6 +539,9 @@ local function releaseTarget(captiveState, restoreNetworkOwner: boolean)
 
 	if captiveState.weld and captiveState.weld.Parent ~= nil then
 		captiveState.weld:Destroy()
+	end
+	if captiveState.dashBlockStateCreated == true and character and character.Parent ~= nil then
+		StateUtil.removeState(character, CANNOT_DASH_STATE_NAME)
 	end
 
 	if captiveState.bossRootPart and captiveState.bossRootPart.Parent ~= nil then

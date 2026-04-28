@@ -5,12 +5,14 @@ local RunService = game:GetService("RunService")
 
 local BossArenas = require(ReplicatedStorage.Shared.BossArenas)
 local Bosses = require(ReplicatedStorage.Shared.Bosses)
+local GameAssetPaths = require(ReplicatedStorage.Shared.Assets.GameAssetPaths)
+local GameAssetResolver = require(ReplicatedStorage.Shared.Assets.GameAssetResolver)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 
 local ACTIVE_PROFILE_ID = "boss_arena"
 local GAME_ASSETS_FOLDER_NAME = "GameAssets"
-local BOSSES_FOLDER_NAME = "Bosses"
-local BOSS_ARENAS_FOLDER_NAME = "BossArenas"
+local BOSS_FOLDER_PATHS = { GameAssetPaths.Models.Bosses, GameAssetPaths.Legacy.Bosses }
+local BOSS_ARENA_FOLDER_PATHS = { GameAssetPaths.Models.Worlds.BossArenas, GameAssetPaths.Legacy.BossArenas }
 
 local BossArenaStudioValidationService = {
 	_started = false,
@@ -37,32 +39,36 @@ local function getGameAssetsFolder(): Folder?
 	return gameAssetsFolder
 end
 
-local function getBossesFolder(gameAssetsFolder: Folder): Folder?
-	local bossesFolder = gameAssetsFolder:FindFirstChild(BOSSES_FOLDER_NAME)
-	if bossesFolder == nil or not bossesFolder:IsA("Folder") then
-		warnWithPrefix(string.format(
-			"Missing ReplicatedStorage.%s.%s; skipping boss asset validation.",
-			GAME_ASSETS_FOLDER_NAME,
-			BOSSES_FOLDER_NAME
-		))
-		return nil
+local function formatAssetPaths(paths: { any }): string
+	local formattedPaths = {}
+	for _, path in ipairs(paths) do
+		table.insert(formattedPaths, GameAssetResolver.Format(path))
 	end
 
-	return bossesFolder
+	return table.concat(formattedPaths, " or ")
 end
 
-local function getBossArenasFolder(gameAssetsFolder: Folder): Folder?
-	local bossArenasFolder = gameAssetsFolder:FindFirstChild(BOSS_ARENAS_FOLDER_NAME)
-	if bossArenasFolder == nil or not bossArenasFolder:IsA("Folder") then
+local function getOptionalGameAssetFolder(label: string, paths: { any }): Folder?
+	local folder = GameAssetResolver.FindFirst(paths)
+	if folder == nil or not folder:IsA("Folder") then
 		warnWithPrefix(string.format(
-			"Missing ReplicatedStorage.%s.%s; skipping arena asset validation.",
-			GAME_ASSETS_FOLDER_NAME,
-			BOSS_ARENAS_FOLDER_NAME
+			"Missing %s assets folder; expected %s. Skipping %s asset validation.",
+			label,
+			formatAssetPaths(paths),
+			label
 		))
 		return nil
 	end
 
-	return bossArenasFolder
+	return folder
+end
+
+local function getBossesFolder(): Folder?
+	return getOptionalGameAssetFolder("boss", BOSS_FOLDER_PATHS)
+end
+
+local function getBossArenasFolder(): Folder?
+	return getOptionalGameAssetFolder("arena", BOSS_ARENA_FOLDER_PATHS)
 end
 
 local function findFirstNamedBasePart(root: Instance, targetName: string): BasePart?
@@ -77,13 +83,12 @@ end
 
 function BossArenaStudioValidationService:RunValidation(): number
 	local warningCount = 0
-	local gameAssetsFolder = getGameAssetsFolder()
-	if gameAssetsFolder == nil then
+	if getGameAssetsFolder() == nil then
 		return 1
 	end
 
-	local bossesFolder = getBossesFolder(gameAssetsFolder)
-	local bossArenasFolder = getBossArenasFolder(gameAssetsFolder)
+	local bossesFolder = getBossesFolder()
+	local bossArenasFolder = getBossArenasFolder()
 
 	if bossesFolder ~= nil then
 		for _, bossDefinition in ipairs(Bosses.GetAll()) do
@@ -91,10 +96,9 @@ function BossArenaStudioValidationService:RunValidation(): number
 			if bossModel == nil or not bossModel:IsA("Model") then
 				warningCount += 1
 				warnWithPrefix(string.format(
-					"Boss asset '%s' is missing or is not a Model under ReplicatedStorage.%s.%s.",
+					"Boss asset '%s' is missing or is not a Model under %s.",
 					bossDefinition.bossId,
-					GAME_ASSETS_FOLDER_NAME,
-					BOSSES_FOLDER_NAME
+					bossesFolder:GetFullName()
 				))
 				continue
 			end
@@ -132,10 +136,9 @@ function BossArenaStudioValidationService:RunValidation(): number
 			if arenaModel == nil or not arenaModel:IsA("Model") then
 				warningCount += 1
 				warnWithPrefix(string.format(
-					"Arena asset '%s' is missing or is not a Model under ReplicatedStorage.%s.%s.",
+					"Arena asset '%s' is missing or is not a Model under %s.",
 					arenaDefinition.assetName,
-					GAME_ASSETS_FOLDER_NAME,
-					BOSS_ARENAS_FOLDER_NAME
+					bossArenasFolder:GetFullName()
 				))
 				continue
 			end

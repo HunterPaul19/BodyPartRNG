@@ -26,6 +26,7 @@ local SERVER_STARTUP_PHASE_DEFINITIONS = {
 		label = "Phase2.Combat",
 		names = {
 			"PlayerLoadoutStatsService",
+			"DashService",
 			"PvpService",
 		},
 	},

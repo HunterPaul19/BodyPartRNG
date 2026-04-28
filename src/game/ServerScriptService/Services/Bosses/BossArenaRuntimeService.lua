@@ -20,12 +20,12 @@ local BossFacing = require(ReplicatedStorage.Shared.Bosses.BossFacing)
 local BossMoveTags = require(ReplicatedStorage.Shared.Bosses.MoveTags)
 local Bosses = require(ReplicatedStorage.Shared.Bosses)
 local CombatConstants = require(ReplicatedStorage.Shared.Combat.Constants)
+local GameAssetPaths = require(ReplicatedStorage.Shared.Assets.GameAssetPaths)
+local GameAssetResolver = require(ReplicatedStorage.Shared.Assets.GameAssetResolver)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 
 local ACTIVE_PROFILE_ID = "boss_arena"
 local GAME_ASSETS_FOLDER_NAME = "GameAssets"
-local BOSSES_FOLDER_NAME = "Bosses"
-local BOSS_ARENAS_FOLDER_NAME = "BossArenas"
 local ARENA_LIGHTING_FOLDER_NAME = "ArenaLighting"
 local ACTIVE_BOSS_MODEL_NAME = "ActiveBoss"
 local ACTIVE_ARENA_MODEL_NAME = "ActiveBossArena"
@@ -47,6 +47,8 @@ local BOSS_REWARD_DAMAGE_CONTRIBUTION_RATIO = 0.15
 local DAMAGE_LEADERSTAT_NAME = "Damage"
 local BOSS_INVULNERABLE_ATTRIBUTE = "BossM1Invulnerable"
 local BOSS_HITBOX_COLLIDER_NAME = "BossHitboxCollider"
+local BOSS_FOLDER_PATHS = { GameAssetPaths.Models.Bosses, GameAssetPaths.Legacy.Bosses }
+local BOSS_ARENA_FOLDER_PATHS = { GameAssetPaths.Models.Worlds.BossArenas, GameAssetPaths.Legacy.BossArenas }
 
 type CastState = {
 	castId: string,
@@ -567,30 +569,36 @@ local function getGameAssetsFolder(): Folder
 	return gameAssetsFolder
 end
 
-local function getBossesFolder(): Folder
-	local bossesFolder = getGameAssetsFolder():FindFirstChild(BOSSES_FOLDER_NAME)
-	if bossesFolder == nil or not bossesFolder:IsA("Folder") then
+local function formatAssetPaths(paths: { any }): string
+	local formattedPaths = {}
+	for _, path in ipairs(paths) do
+		table.insert(formattedPaths, GameAssetResolver.Format(path))
+	end
+
+	return table.concat(formattedPaths, " or ")
+end
+
+local function getRequiredGameAssetFolder(label: string, paths: { any }): Folder
+	getGameAssetsFolder()
+
+	local folder = GameAssetResolver.FindFirst(paths)
+	if folder == nil or not folder:IsA("Folder") then
 		Logger.Error(string.format(
-			"[BossArenaRuntimeService] Missing ReplicatedStorage.%s.%s in the boss arena place.",
-			GAME_ASSETS_FOLDER_NAME,
-			BOSSES_FOLDER_NAME
+			"[BossArenaRuntimeService] Missing %s assets folder in the boss arena place. Expected %s.",
+			label,
+			formatAssetPaths(paths)
 		), 0)
 	end
 
-	return bossesFolder
+	return folder
+end
+
+local function getBossesFolder(): Folder
+	return getRequiredGameAssetFolder("boss", BOSS_FOLDER_PATHS)
 end
 
 local function getBossArenasFolder(): Folder
-	local bossArenasFolder = getGameAssetsFolder():FindFirstChild(BOSS_ARENAS_FOLDER_NAME)
-	if bossArenasFolder == nil or not bossArenasFolder:IsA("Folder") then
-		Logger.Error(string.format(
-			"[BossArenaRuntimeService] Missing ReplicatedStorage.%s.%s in the boss arena place.",
-			GAME_ASSETS_FOLDER_NAME,
-			BOSS_ARENAS_FOLDER_NAME
-		), 0)
-	end
-
-	return bossArenasFolder
+	return getRequiredGameAssetFolder("arena", BOSS_ARENA_FOLDER_PATHS)
 end
 
 local function collectNamedBaseParts(root: Instance, targetName: string): { BasePart }
@@ -1180,20 +1188,19 @@ function BossArenaRuntimeService:_clearEncounter(reason: string?)
 end
 
 function BossArenaRuntimeService:_resolveBossSourceModel(bossId: string): Model
-	local bossModel = getBossesFolder():FindFirstChild(bossId)
+	local bossesFolder = getBossesFolder()
+	local bossModel = bossesFolder:FindFirstChild(bossId)
 	if bossModel == nil then
 		Logger.Error(string.format(
-			"[BossArenaRuntimeService] Missing boss model '%s' under ReplicatedStorage.%s.%s.",
+			"[BossArenaRuntimeService] Missing boss model '%s' under %s.",
 			bossId,
-			GAME_ASSETS_FOLDER_NAME,
-			BOSSES_FOLDER_NAME
+			bossesFolder:GetFullName()
 		), 0)
 	end
 	if not bossModel:IsA("Model") then
 		Logger.Error(string.format(
-			"[BossArenaRuntimeService] ReplicatedStorage.%s.%s.%s must be a Model.",
-			GAME_ASSETS_FOLDER_NAME,
-			BOSSES_FOLDER_NAME,
+			"[BossArenaRuntimeService] %s.%s must be a Model.",
+			bossesFolder:GetFullName(),
 			bossId
 		), 0)
 	end
@@ -1202,20 +1209,19 @@ function BossArenaRuntimeService:_resolveBossSourceModel(bossId: string): Model
 end
 
 function BossArenaRuntimeService:_resolveArenaSourceModel(arenaDefinition: any): Model
-	local arenaModel = getBossArenasFolder():FindFirstChild(arenaDefinition.assetName)
+	local bossArenasFolder = getBossArenasFolder()
+	local arenaModel = bossArenasFolder:FindFirstChild(arenaDefinition.assetName)
 	if arenaModel == nil then
 		Logger.Error(string.format(
-			"[BossArenaRuntimeService] Missing arena model '%s' under ReplicatedStorage.%s.%s.",
+			"[BossArenaRuntimeService] Missing arena model '%s' under %s.",
 			arenaDefinition.assetName,
-			GAME_ASSETS_FOLDER_NAME,
-			BOSS_ARENAS_FOLDER_NAME
+			bossArenasFolder:GetFullName()
 		), 0)
 	end
 	if not arenaModel:IsA("Model") then
 		Logger.Error(string.format(
-			"[BossArenaRuntimeService] ReplicatedStorage.%s.%s.%s must be a Model.",
-			GAME_ASSETS_FOLDER_NAME,
-			BOSS_ARENAS_FOLDER_NAME,
+			"[BossArenaRuntimeService] %s.%s must be a Model.",
+			bossArenasFolder:GetFullName(),
 			arenaDefinition.assetName
 		), 0)
 	end
@@ -1225,16 +1231,16 @@ end
 
 function BossArenaRuntimeService:_cloneArenaLighting(): { Instance }
 	local appliedInstances = {}
-	local lightingFolder = getBossArenasFolder():FindFirstChild(ARENA_LIGHTING_FOLDER_NAME)
+	local bossArenasFolder = getBossArenasFolder()
+	local lightingFolder = bossArenasFolder:FindFirstChild(ARENA_LIGHTING_FOLDER_NAME)
 
 	if lightingFolder == nil then
 		return appliedInstances
 	end
 	if not lightingFolder:IsA("Folder") then
 		Logger.Error(string.format(
-			"[BossArenaRuntimeService] ReplicatedStorage.%s.%s.%s must be a Folder.",
-			GAME_ASSETS_FOLDER_NAME,
-			BOSS_ARENAS_FOLDER_NAME,
+			"[BossArenaRuntimeService] %s.%s must be a Folder.",
+			bossArenasFolder:GetFullName(),
 			ARENA_LIGHTING_FOLDER_NAME
 		), 0)
 	end

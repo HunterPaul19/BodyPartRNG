@@ -1,6 +1,14 @@
 local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Diagnostics"):WaitForChild("Logger"))
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local RollingConfig = require(script.Parent.Parent.Config.RollingConfig)
+
+local RARITY_SORT_RANK = {}
+for index, rarity in ipairs(RollingConfig.DisplayRarityOrder) do
+	RARITY_SORT_RANK[rarity] = index
+end
 
 export type LootFloorPreset = {
 	id: string,
@@ -19,6 +27,16 @@ export type BossRewardProfile = {
 	allowedRarities: { string },
 	slotCount: number,
 	bossPartChance: number,
+}
+
+export type BossRewardPreviewEntry = {
+	pieceId: string,
+	setId: string,
+	displayName: string,
+	displayRarity: string,
+	chance: number,
+	isBossPart: boolean,
+	bundleModel: Model?,
 }
 
 local BossRewards = {}
@@ -207,6 +225,123 @@ end
 
 function BossRewards.GetAllBossRewardProfiles(): { BossRewardProfile }
 	return ALL_PROFILES
+end
+
+local function buildAllowedRaritySet(profile: BossRewardProfile): { [string]: boolean }
+	local allowed = {}
+
+	for _, rarity in ipairs(profile.allowedRarities) do
+		allowed[rarity] = true
+	end
+
+	return allowed
+end
+
+local function pushPreviewEntriesForSet(
+	entries: { BossRewardPreviewEntry },
+	setId: string,
+	chance: number,
+	isBossPart: boolean
+)
+	local pieces = BodyPartsCatalog.GetPiecesForSet(setId)
+	local setConfig = BodyPartsCatalog.GetSet(setId)
+	if setConfig == nil or pieces == nil or #pieces <= 0 then
+		return
+	end
+
+	local pieceChance = math.max(0, tonumber(chance) or 0) / #pieces
+	local displayRarity = tostring(setConfig.rollDisplay.rarity or "Basic")
+
+	for _, piece in ipairs(pieces) do
+		table.insert(entries, table.freeze({
+			pieceId = piece.id,
+			setId = setId,
+			displayName = tostring(piece.displayName or piece.id),
+			displayRarity = displayRarity,
+			chance = pieceChance,
+			isBossPart = isBossPart,
+			bundleModel = BodyPartsCatalog.ResolveBundleModel(piece.id),
+		}))
+	end
+end
+
+function BossRewards.GetBossRewardPreviewEntries(bossId: string): { BossRewardPreviewEntry }
+	local profile = BossRewards.GetBossRewardProfile(bossId)
+	if profile == nil then
+		return table.freeze({})
+	end
+
+	local floorPreset = BossRewards.GetLootFloorPreset(profile.lootFloorId)
+	if floorPreset == nil then
+		return table.freeze({})
+	end
+
+	local entries = {}
+	local bossPartChance = math.clamp(tonumber(profile.bossPartChance) or 0, 0, 1)
+	pushPreviewEntriesForSet(entries, profile.bossSetId, bossPartChance, true)
+
+	local allowedRarities = buildAllowedRaritySet(profile)
+	local poolsByRarity = {}
+	for _, rollEntry in ipairs(BodyPartsCatalog.GetRollEntries()) do
+		local setId = rollEntry.id
+		local displayRarity = tostring(rollEntry.rollDisplay.rarity or "Basic")
+		if setId ~= profile.bossSetId and allowedRarities[displayRarity] == true then
+			local pool = poolsByRarity[displayRarity]
+			if pool == nil then
+				pool = {
+					entries = {},
+					totalWeight = 0,
+				}
+				poolsByRarity[displayRarity] = pool
+			end
+
+			local weight = math.max(0, tonumber(rollEntry.baseChance) or 0)
+			if weight > 0 then
+				pool.totalWeight += weight
+				table.insert(pool.entries, rollEntry)
+			end
+		end
+	end
+
+	local eligibleTierProbability = 0
+	for _, tierEntry in ipairs(floorPreset.tierOddsOrdered) do
+		local pool = poolsByRarity[tierEntry.displayRarity]
+		local tierProbability = math.max(0, tonumber(tierEntry.probability) or 0)
+		if pool ~= nil and pool.totalWeight > 0 and tierProbability > 0 then
+			eligibleTierProbability += tierProbability
+		end
+	end
+
+	if eligibleTierProbability > 0 then
+		local normalRollChance = 1 - bossPartChance
+		for _, tierEntry in ipairs(floorPreset.tierOddsOrdered) do
+			local pool = poolsByRarity[tierEntry.displayRarity]
+			local tierProbability = math.max(0, tonumber(tierEntry.probability) or 0)
+			if pool ~= nil and pool.totalWeight > 0 and tierProbability > 0 then
+				local normalizedTierChance = tierProbability / eligibleTierProbability
+				for _, rollEntry in ipairs(pool.entries) do
+					local setChance = normalRollChance
+						* normalizedTierChance
+						* (math.max(0, tonumber(rollEntry.baseChance) or 0) / pool.totalWeight)
+					pushPreviewEntriesForSet(entries, rollEntry.id, setChance, false)
+				end
+			end
+		end
+	end
+
+	table.sort(entries, function(a, b)
+		local rarityRankA = RARITY_SORT_RANK[RollingConfig.NormalizeDisplayRarity(a.displayRarity)] or 0
+		local rarityRankB = RARITY_SORT_RANK[RollingConfig.NormalizeDisplayRarity(b.displayRarity)] or 0
+		if rarityRankA ~= rarityRankB then
+			return rarityRankA > rarityRankB
+		end
+		if a.chance ~= b.chance then
+			return a.chance > b.chance
+		end
+		return a.displayName < b.displayName
+	end)
+
+	return table.freeze(entries)
 end
 
 return table.freeze(BossRewards)

@@ -24,12 +24,14 @@ local CLIENT_STARTUP_PHASE_DEFINITIONS = {
 			"BossHealthBarController",
 			"BossArenaResultsController",
 			"CombatHUDController",
+			"DashController",
 			"PvpController",
 			"BossHitFlashController",
 			"BossArenaTimerController",
 			"BossArenaAbandonController",
 			"BossArenaM1Controller",
 			"BossArenaMovePresentationController",
+			"BossLobbyRewardPreviewController",
 			"BossArenaStudioTestSuiteController",
 			"BossArenaStudioPickerController",
 			"ChatNotificationController",
@@ -170,7 +172,7 @@ EmitModule.init()
 local loadedModules = Loader.LoadDescendants(StarterPlayerScripts.Controllers, shouldLoadController, loaderContext)
 local startupPhases = buildStartupPhases(loadedModules, script:GetFullName())
 
-Loader.RunOrderedFatal(loadedModules, "OnStart", startupPhases, loaderContext)
+Loader.RunOrderedReporting(loadedModules, "OnStart", startupPhases, loaderContext)
 task.spawn(bindPlayClientSoundRemote)
 
 return Notify

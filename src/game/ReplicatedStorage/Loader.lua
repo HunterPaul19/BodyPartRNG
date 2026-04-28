@@ -187,7 +187,13 @@ local function collectLoadedModules(
 	return loadedModules
 end
 
-local function invokeLifecycle(loadedModule: LoadedModule, methodName: string, args: { any }, context: ExecutionContext)
+local function invokeLifecycle(
+	loadedModule: LoadedModule,
+	methodName: string,
+	args: { any },
+	context: ExecutionContext,
+	reportFailure: ((string) -> ())?
+)
 	local mod = loadedModule.value
 	if typeof(mod) ~= "table" then
 		return
@@ -214,8 +220,17 @@ local function invokeLifecycle(loadedModule: LoadedModule, methodName: string, a
 	local elapsedSeconds = os.clock() - startedAt
 	logLifecycleEvent(context, loadedModule, methodName, "completed", elapsedSeconds)
 	if not ok then
-		Logger.Error(formatMethodError(context, loadedModule, methodName, result), 0)
+		local message = formatMethodError(context, loadedModule, methodName, result)
+		if reportFailure then
+			reportFailure(message)
+		else
+			Logger.Error(message, 0)
+		end
 	end
+end
+
+local function warnLifecycleFailure(message: string)
+	Logger.Warn(message)
 end
 
 function Loader.LoadChildren(parent: Instance, predicate: PredicateFn?, context: ExecutionContext?): { LoadedModule }
@@ -242,7 +257,7 @@ function Loader.RunAllFatal(
 	local normalizedContext = normalizeExecutionContext(context)
 
 	for _, loadedModule in ipairs(loadedModules) do
-		invokeLifecycle(loadedModule, methodName, args, normalizedContext)
+		invokeLifecycle(loadedModule, methodName, args, normalizedContext, nil)
 	end
 end
 
@@ -276,6 +291,34 @@ function Loader.RunOrderedFatal(
 	end
 end
 
+function Loader.RunOrderedReporting(
+	loadedModules: { LoadedModule },
+	methodName: string,
+	groups: { OrderedFatalGroup },
+	defaultContext: ExecutionContext?,
+	...
+)
+	local args = { ... }
+	local normalizedDefaultContext = normalizeExecutionContext(defaultContext)
+	local remainingModulesByPath = {}
+
+	for _, loadedModule in ipairs(loadedModules) do
+		remainingModulesByPath[loadedModule.path] = loadedModule
+	end
+
+	for _, group in ipairs(groups) do
+		local context = normalizeExecutionContext(group.context or normalizedDefaultContext)
+		for _, name in ipairs(group.names or {}) do
+			for _, loadedModule in ipairs(loadedModules) do
+				if loadedModule.name == name and remainingModulesByPath[loadedModule.path] then
+					remainingModulesByPath[loadedModule.path] = nil
+					invokeLifecycle(loadedModule, methodName, args, context, warnLifecycleFailure)
+				end
+			end
+		end
+	end
+end
+
 function Loader.RunAllReporting(
 	loadedModules: { LoadedModule },
 	methodName: string,
@@ -288,7 +331,7 @@ function Loader.RunAllReporting(
 	for _, loadedModule in ipairs(loadedModules) do
 		task.spawn(function()
 			local ok, result = xpcall(function()
-				invokeLifecycle(loadedModule, methodName, args, normalizedContext)
+				invokeLifecycle(loadedModule, methodName, args, normalizedContext, warnLifecycleFailure)
 			end, createTraceback)
 			if not ok then
 				Logger.Warn(result)

@@ -13,6 +13,7 @@ local CombatProjectileUtil = require(ReplicatedStorage.Shared.Combat.CombatProje
 local Knockback = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Knockback)
 local RaycastUtil = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Utilities.RaycastUtil)
 local CharacterPhysicsContext = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Utilities.CharacterPhysicsContext)
+local StateUtil = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Utilities.StateUtil)
 
 local GRAB_RANGE_STUDS = 100
 local LANDING_DAMAGE = 280
@@ -30,6 +31,7 @@ local THROW_FALLBACK_DOWN_TRACE_LIFT = 8
 local THROW_FALLBACK_DOWN_TRACE_DEPTH = 320
 local IMPACT_FLOOR_TRACE_LIFT = 8
 local IMPACT_FLOOR_TRACE_DEPTH = 64
+local CANNOT_DASH_STATE_NAME = "CannotDash"
 
 local stub = CreateExplicitBossMoveStub({
 	bossId = "Broccoli Bro",
@@ -283,6 +285,7 @@ local function attachTargetToHand(handPart: BasePart, targetData): { [string]: a
 	else
 		humanoid.JumpHeight = 0
 	end
+	StateUtil.createState(character, CANNOT_DASH_STATE_NAME)
 
 	return {
 		player = targetData.player,
@@ -291,6 +294,7 @@ local function attachTargetToHand(handPart: BasePart, targetData): { [string]: a
 		rootPart = rootPart,
 		physicsContext = physicsContext,
 		weld = weld,
+		dashBlockStateCreated = true,
 		restoreMovement = function()
 			if humanoid.Parent == nil then
 				return
@@ -321,6 +325,9 @@ local function releaseTarget(captiveState, restoreNetworkOwner: boolean)
 
 	if captiveState.weld and captiveState.weld.Parent ~= nil then
 		captiveState.weld:Destroy()
+	end
+	if captiveState.dashBlockStateCreated == true and character and character.Parent ~= nil then
+		StateUtil.removeState(character, CANNOT_DASH_STATE_NAME)
 	end
 
 	if typeof(captiveState.restoreMovement) == "function" then

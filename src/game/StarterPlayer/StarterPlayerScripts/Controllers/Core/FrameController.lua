@@ -191,9 +191,6 @@ function FrameController:_getModalRoot(shouldWarn: boolean?): ScreenGui?
 	end
 
 	local modalRoot = playerGui:FindFirstChild(self.ModalRootName)
-	if not modalRoot and shouldWarn ~= false then
-		modalRoot = playerGui:WaitForChild(self.ModalRootName, 5)
-	end
 
 	if modalRoot and modalRoot:IsA("ScreenGui") then
 		modalRoot.IgnoreGuiInset = true

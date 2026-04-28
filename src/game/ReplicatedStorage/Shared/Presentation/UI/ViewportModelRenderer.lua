@@ -455,6 +455,67 @@ local function renderModel(viewportFrame: ViewportFrame, sourceModel: Model?, fr
 	return true
 end
 
+local function renderModelAtFramingPivot(viewportFrame: ViewportFrame, sourceModel: Model?, framingModel: Model?): boolean
+	if not (viewportFrame and viewportFrame:IsA("ViewportFrame")) then
+		return false
+	end
+	if not (sourceModel and sourceModel:IsA("Model")) then
+		clearViewport(viewportFrame)
+		return false
+	end
+
+	local cacheKey = table.concat({
+		"modelAtFramingPivot",
+		getModelCacheToken(sourceModel),
+		getModelCacheToken(framingModel),
+	}, "|")
+	if viewportFrame:GetAttribute(CACHE_KEY_ATTRIBUTE) == cacheKey
+		and viewportFrame.CurrentCamera ~= nil
+		and viewportFrame:FindFirstChild("PreviewWorld") ~= nil
+	then
+		return true
+	end
+
+	clearViewport(viewportFrame)
+
+	local worldModel = Instance.new("WorldModel")
+	worldModel.Name = "PreviewWorld"
+	worldModel.Parent = viewportFrame
+
+	local previewModel = createPreviewClone(sourceModel, "PreviewModel", false)
+	if not previewModel then
+		worldModel:Destroy()
+		return false
+	end
+
+	local framingPreviewModel = nil
+	if framingModel and framingModel:IsA("Model") then
+		framingPreviewModel = createPreviewClone(framingModel, "FramingModel", false)
+	end
+
+	if framingPreviewModel then
+		local sourcePivot = previewModel:GetPivot()
+		local targetPosition = framingPreviewModel:GetPivot().Position
+		previewModel:PivotTo(CFrame.new(targetPosition) * (sourcePivot - sourcePivot.Position))
+	end
+	previewModel.Parent = worldModel
+
+	local camera = Instance.new("Camera")
+	camera.Name = "PreviewCamera"
+	camera.FieldOfView = DEFAULT_FIELD_OF_VIEW
+	camera.Parent = viewportFrame
+	camera.CFrame = getBundleCameraCFrame(previewModel, nil)
+
+	if framingPreviewModel then
+		framingPreviewModel:Destroy()
+	end
+
+	applyViewportLighting(viewportFrame, camera)
+	viewportFrame:SetAttribute(CACHE_KEY_ATTRIBUTE, cacheKey)
+
+	return true
+end
+
 local function getPortraitFrontVector(previewModel: Model, head: BasePart?, torso: BasePart?): Vector3
 	local frontSource = head or torso or previewModel.PrimaryPart
 	if frontSource then
@@ -726,6 +787,14 @@ end
 
 function ViewportModelRenderer.RenderCharacterModel(viewportFrame: ViewportFrame, characterModel: Model?, framingModel: Model?): boolean
 	return renderModel(viewportFrame, characterModel, framingModel)
+end
+
+function ViewportModelRenderer.RenderCharacterModelAtFramingPivot(
+	viewportFrame: ViewportFrame,
+	characterModel: Model?,
+	framingModel: Model?
+): boolean
+	return renderModelAtFramingPivot(viewportFrame, characterModel, framingModel)
 end
 
 function ViewportModelRenderer.RenderBaseRig(viewportFrame: ViewportFrame, baseRigModel: Model?): boolean
