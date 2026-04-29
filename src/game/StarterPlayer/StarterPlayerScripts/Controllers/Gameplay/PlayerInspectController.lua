@@ -28,6 +28,7 @@ local BODY_PARTS_REMOTES_FOLDER_NAME = "BodyParts"
 local AURAS_REMOTES_FOLDER_NAME = "Auras"
 local GET_PLAYER_INSPECT_SUMMARY_REMOTE_NAME = "GetPlayerInspectSummary"
 local GET_EXISTENCE_REMOTE_NAME = "GetTotalInExistenceForPiece"
+local GET_EXISTENCES_REMOTE_NAME = "GetTotalInExistenceForPieces"
 local GET_AURA_EXISTENCE_REMOTE_NAME = "GetTotalInExistenceForAura"
 local INSPECT_REFRESH_INTERVAL = 1.0
 local SELECTED_COLOR = Color3.fromRGB(116, 192, 255)
@@ -122,6 +123,26 @@ local function extractTrailingLabelText(templateText: any, fallback: string): st
 		return normalized
 	end
 	return fallback
+end
+
+local function getSelectionKeyValue(primaryValue: any, fallbackValue: any): string
+	if typeof(primaryValue) == "string" and primaryValue ~= "" then
+		return primaryValue
+	end
+	if typeof(primaryValue) == "number" then
+		return tostring(primaryValue)
+	end
+	if typeof(fallbackValue) == "string" and fallbackValue ~= "" then
+		return fallbackValue
+	end
+	if typeof(fallbackValue) == "number" then
+		return tostring(fallbackValue)
+	end
+	return "missing"
+end
+
+local function makePartInfoSelectionKey(kind: string, context: string, primaryValue: any, fallbackValue: any): string
+	return string.format("%s:%s:%s", kind, context, getSelectionKeyValue(primaryValue, fallbackValue))
 end
 
 local function getPlayerFromInstance(target: Instance?): Player?
@@ -251,6 +272,7 @@ function PlayerInspectController:_ensureState()
 	self._existingCounts = {}
 	self._pendingExistingCounts = {}
 	self._partInfoTween = nil :: Tween?
+	self._partInfoSelectionKey = nil :: string?
 	self._remotes = {}
 	self._slotCardRenderer = nil
 	self._characterPreviewPresenter = nil
@@ -300,7 +322,7 @@ function PlayerInspectController:_getAuraRemotesFolder(): Folder?
 end
 
 function PlayerInspectController:_ensureRemotes(): boolean
-	if self._remotes.getInspectSummary and self._remotes.getExistence then
+	if self._remotes.getInspectSummary and self._remotes.getExistence and self._remotes.getExistences then
 		return true
 	end
 
@@ -311,15 +333,20 @@ function PlayerInspectController:_ensureRemotes(): boolean
 
 	local getInspectSummary = bodyPartsFolder:FindFirstChild(GET_PLAYER_INSPECT_SUMMARY_REMOTE_NAME)
 	local getExistence = bodyPartsFolder:FindFirstChild(GET_EXISTENCE_REMOTE_NAME)
+	local getExistences = bodyPartsFolder:FindFirstChild(GET_EXISTENCES_REMOTE_NAME)
 	if not (getInspectSummary and getInspectSummary:IsA("RemoteFunction")) then
 		return false
 	end
 	if not (getExistence and getExistence:IsA("RemoteFunction")) then
 		return false
 	end
+	if not (getExistences and getExistences:IsA("RemoteFunction")) then
+		return false
+	end
 
 	self._remotes.getInspectSummary = getInspectSummary
 	self._remotes.getExistence = getExistence
+	self._remotes.getExistences = getExistences
 	return true
 end
 
@@ -446,21 +473,26 @@ function PlayerInspectController:_cancelPartInfoTween()
 	end
 end
 
-function PlayerInspectController:_setPartInfoVisible(isVisible: boolean)
+function PlayerInspectController:_setPartInfoVisible(isVisible: boolean, animate: boolean?)
 	local ui = self._ui
 	if not ui then
 		return
 	end
 
-	self:_cancelPartInfoTween()
-
 	if not isVisible then
+		self:_cancelPartInfoTween()
 		ui.partInfo.Visible = false
 		ui.partInfoScale.Scale = 1
+		self._partInfoSelectionKey = nil
 		return
 	end
 
 	ui.partInfo.Visible = true
+	if animate ~= true then
+		return
+	end
+
+	self:_cancelPartInfoTween()
 	ui.partInfoScale.Scale = 0.96
 	self._partInfoTween = TweenService:Create(ui.partInfoScale, PART_INFO_TWEEN, {
 		Scale = 1,
@@ -816,18 +848,79 @@ function PlayerInspectController:_requestExistingCount(pieceId: string, requestT
 	self:_syncPartInfo()
 end
 
+function PlayerInspectController:_requestExistingCounts(pieceIds: { string }, requestToken: number)
+	local pendingPieceIds = {}
+	for _, pieceId in ipairs(pieceIds) do
+		if typeof(pieceId) == "string"
+			and pieceId ~= ""
+			and self._existingCounts[pieceId] == nil
+			and self._pendingExistingCounts[pieceId] ~= true
+		then
+			self._pendingExistingCounts[pieceId] = true
+			table.insert(pendingPieceIds, pieceId)
+		end
+	end
+
+	if #pendingPieceIds <= 0 then
+		return
+	end
+
+	if not self:_ensureRemotes() then
+		for _, pieceId in ipairs(pendingPieceIds) do
+			self._pendingExistingCounts[pieceId] = nil
+			self._existingCounts[pieceId] = false
+		end
+		self:_syncPartInfo()
+		return
+	end
+
+	local ok, result = pcall(function()
+		return self._remotes.getExistences:InvokeServer({
+			pieceIds = pendingPieceIds,
+		})
+	end)
+
+	if requestToken ~= self._existingRequestToken then
+		for _, pieceId in ipairs(pendingPieceIds) do
+			self._pendingExistingCounts[pieceId] = nil
+		end
+		return
+	end
+
+	local countsByPieceId = if ok and typeof(result) == "table" and result.ok == true and typeof(result.countsByPieceId) == "table"
+		then result.countsByPieceId
+		else nil
+
+	for _, pieceId in ipairs(pendingPieceIds) do
+		self._pendingExistingCounts[pieceId] = nil
+		local count = if countsByPieceId then tonumber(countsByPieceId[pieceId]) else nil
+		if count == nil then
+			self._existingCounts[pieceId] = false
+		else
+			self._existingCounts[pieceId] = math.max(0, math.floor(count))
+		end
+	end
+
+	self:_syncPartInfo()
+end
+
 function PlayerInspectController:_prefetchExistingCounts()
 	local requestToken = self._existingRequestToken
 	local requestedPieceIds = {}
+	local pieceIds = {}
 
 	for _, entry in pairs(self:_getEquippedEntries()) do
 		local pieceId = entry and entry.pieceId
 		if typeof(pieceId) == "string" and pieceId ~= "" and not requestedPieceIds[pieceId] then
 			requestedPieceIds[pieceId] = true
-			task.spawn(function()
-				self:_requestExistingCount(pieceId, requestToken)
-			end)
+			table.insert(pieceIds, pieceId)
 		end
+	end
+
+	if #pieceIds > 0 then
+		task.spawn(function()
+			self:_requestExistingCounts(pieceIds, requestToken)
+		end)
 	end
 
 	local auraEntry = self:_getEquippedAuraEntry()
@@ -850,6 +943,7 @@ function PlayerInspectController:_syncPartInfo()
 	local selectedAccessorySlot = self._selectedAccessorySlot
 	local previewPresentation = nil
 	local existingLookupKey = nil
+	local selectionKey = nil
 
 	if selectedAura then
 		local auraEntry = self:_getEquippedAuraEntry()
@@ -858,6 +952,7 @@ function PlayerInspectController:_syncPartInfo()
 				record = auraEntry,
 			})
 			existingLookupKey = previewPresentation and previewPresentation.auraId or auraEntry.auraId
+			selectionKey = makePartInfoSelectionKey("aura", "equipped", auraEntry.ownedId, auraEntry.auraId)
 		end
 	elseif selectedAccessorySlot then
 		local accessoryEntry = self:_getEquippedAccessoryEntry(selectedAccessorySlot)
@@ -865,6 +960,7 @@ function PlayerInspectController:_syncPartInfo()
 			previewPresentation = AccessoryPresentation.BuildPreviewPresentation({
 				record = accessoryEntry,
 			})
+			selectionKey = makePartInfoSelectionKey("accessory", selectedAccessorySlot, accessoryEntry.ownedId, accessoryEntry.accessoryId)
 		end
 	else
 		local entry = selectedRegion and self:_getEquippedEntries()[selectedRegion] or nil
@@ -875,6 +971,7 @@ function PlayerInspectController:_syncPartInfo()
 				appearanceUserId = self._inspectedUserId,
 			})
 			existingLookupKey = previewPresentation and previewPresentation.pieceId or entry.pieceId
+			selectionKey = makePartInfoSelectionKey("bodyPart", selectedRegion, entry.ownedId, entry.pieceId)
 		end
 	end
 
@@ -883,6 +980,9 @@ function PlayerInspectController:_syncPartInfo()
 		self:_setPartInfoVisible(false)
 		return
 	end
+
+	local shouldAnimate = selectionKey ~= nil and selectionKey ~= self._partInfoSelectionKey
+	self._partInfoSelectionKey = selectionKey
 
 	self:_applyPartInfoLabelStyles(previewPresentation)
 	TranslationHelper.setLiteralText(ui.partInfoLabels.Bundle, previewPresentation.bundleText)
@@ -906,7 +1006,7 @@ function PlayerInspectController:_syncPartInfo()
 	end
 	TranslationHelper.setLiteralText(ui.partInfoLabels.Cash, previewPresentation.cashText)
 	TranslationHelper.setLiteralText(ui.partInfoLabels.Chance, previewPresentation.chanceText)
-	self:_setPartInfoVisible(true)
+	self:_setPartInfoVisible(true, shouldAnimate)
 end
 
 function PlayerInspectController:_syncModalContents()

@@ -6,6 +6,7 @@ local gui: ScreenGui? = nil
 local frame: Frame? = nil
 local label: TextLabel? = nil
 local labelStroke: UIStroke? = nil
+local DEFAULT_DISPLAY_ORDER = 1000
 
 function TutorialTextGui.Init(playerGui: PlayerGui)
 	if gui then
@@ -16,7 +17,7 @@ function TutorialTextGui.Init(playerGui: PlayerGui)
 	gui.Name = "TutorialGui"
 	gui.ResetOnSpawn = false
 	gui.IgnoreGuiInset = true
-	gui.DisplayOrder = 1000
+	gui.DisplayOrder = DEFAULT_DISPLAY_ORDER
 	gui:SetAttribute("KeepEnabledDuringHatch", true)
 	gui.Parent = playerGui
 
@@ -44,6 +45,14 @@ function TutorialTextGui.Init(playerGui: PlayerGui)
 	labelStroke.Thickness = 1.5
 	labelStroke.Transparency = 1
 	labelStroke.Parent = label
+end
+
+function TutorialTextGui.LayerAboveDisplayOrder(displayOrder: number?)
+	if not gui then
+		return
+	end
+
+	gui.DisplayOrder = math.max(DEFAULT_DISPLAY_ORDER, math.floor(tonumber(displayOrder) or DEFAULT_DISPLAY_ORDER) + 1)
 end
 
 function TutorialTextGui.SetText(text: string)

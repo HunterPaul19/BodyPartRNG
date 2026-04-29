@@ -17,11 +17,19 @@ local Constants = {
 		AGRYNOTH_BONE_BREAKER_EXPLOSION_LIFETIME_SECONDS = 3,
 		AGRYNOTH_BONE_BREAKER_EXPLOSION_SCALE = 18,
 	},
+	Placement = {
+		AGRYNOTH_BONE_BREAKER_GROUND_RAYCAST_DISTANCE = 700,
+		AGRYNOTH_BONE_BREAKER_GROUND_RAYCAST_LIFT = 80,
+		AGRYNOTH_BONE_BREAKER_GROUND_VISUAL_OFFSET = 0.5,
+	},
 }
 
 local AGRYNOTH_BONE_BREAKER_EXPLOSION_LIFETIME_SECONDS = Constants.Timing.AGRYNOTH_BONE_BREAKER_EXPLOSION_LIFETIME_SECONDS
 local AGRYNOTH_BONE_BREAKER_EXPLOSION_NAME_PREFIX = Constants.Vfx.AGRYNOTH_BONE_BREAKER_EXPLOSION_NAME_PREFIX
 local AGRYNOTH_BONE_BREAKER_EXPLOSION_SCALE = Constants.Timing.AGRYNOTH_BONE_BREAKER_EXPLOSION_SCALE
+local AGRYNOTH_BONE_BREAKER_GROUND_RAYCAST_DISTANCE = Constants.Placement.AGRYNOTH_BONE_BREAKER_GROUND_RAYCAST_DISTANCE
+local AGRYNOTH_BONE_BREAKER_GROUND_RAYCAST_LIFT = Constants.Placement.AGRYNOTH_BONE_BREAKER_GROUND_RAYCAST_LIFT
+local AGRYNOTH_BONE_BREAKER_GROUND_VISUAL_OFFSET = Constants.Placement.AGRYNOTH_BONE_BREAKER_GROUND_VISUAL_OFFSET
 local AGRYNOTH_BONE_BREAKER_LEFT_HAND_VFX_NAME = Constants.Vfx.AGRYNOTH_BONE_BREAKER_LEFT_HAND_VFX_NAME
 local AGRYNOTH_BONE_BREAKER_MODULE_ID = Constants.ModuleIds.AGRYNOTH_BONE_BREAKER_MODULE_ID
 local AGRYNOTH_BONE_BREAKER_ROOT_PART_VFX_NAME = Constants.Vfx.AGRYNOTH_BONE_BREAKER_ROOT_PART_VFX_NAME
@@ -66,48 +74,54 @@ local function withYPosition(cframe: CFrame, yPosition: number): CFrame
 	return CFrame.new(x, yPosition, z, r00, r01, r02, r10, r11, r12, r20, r21, r22)
 end
 
-local function buildGroundRaycastParams(playersService: Players, bossModel: Model?): RaycastParams
+local function resolvePayloadTargetCharacter(playersService: Players, payload: any): Model?
+	if typeof(payload) ~= "table" then
+		return nil
+	end
+
+	local targetUserId = tonumber(payload.targetUserId)
+	if targetUserId == nil then
+		return nil
+	end
+
+	local targetPlayer = playersService:GetPlayerByUserId(targetUserId)
+	return if targetPlayer then targetPlayer.Character else nil
+end
+
+local function buildGroundRaycastParams(bossModel: Model?, targetCharacter: Model?): RaycastParams
 	local exclude = {}
+	local seen = {}
 	local params = RaycastParams.new()
 	params.IgnoreWater = false
 	params.FilterType = Enum.RaycastFilterType.Exclude
 
 	if bossModel ~= nil then
+		seen[bossModel] = true
 		table.insert(exclude, bossModel)
 	end
 
-	local localPlayer = playersService.LocalPlayer
-	local localCharacter = localPlayer and localPlayer.Character
-	if localCharacter ~= nil then
-		table.insert(exclude, localCharacter)
+	if targetCharacter ~= nil and seen[targetCharacter] ~= true then
+		seen[targetCharacter] = true
+		table.insert(exclude, targetCharacter)
 	end
 
 	params.FilterDescendantsInstances = exclude
 	return params
 end
 
-local function resolveGroundedImpactCFrame(self, authoredCFrame: CFrame, bossModel: Model?): CFrame
-	local rayOrigin = authoredCFrame.Position + Vector3.new(0, 10, 0)
-	local rayDirection = Vector3.new(0, -270, 0)
-	local result = self.Workspace:Raycast(rayOrigin, rayDirection, buildGroundRaycastParams(self.Players, bossModel))
+local function resolveGroundedImpactCFrame(self, authoredCFrame: CFrame, bossModel: Model?, targetCharacter: Model?): CFrame
+	local rayOrigin = authoredCFrame.Position + Vector3.new(0, AGRYNOTH_BONE_BREAKER_GROUND_RAYCAST_LIFT, 0)
+	local rayDirection = Vector3.new(
+		0,
+		-(AGRYNOTH_BONE_BREAKER_GROUND_RAYCAST_LIFT + AGRYNOTH_BONE_BREAKER_GROUND_RAYCAST_DISTANCE),
+		0
+	)
+	local result = self.Workspace:Raycast(rayOrigin, rayDirection, buildGroundRaycastParams(bossModel, targetCharacter))
 	if result then
-		return withYPosition(authoredCFrame, result.Position.Y + 0.5)
+		return withYPosition(authoredCFrame, result.Position.Y + AGRYNOTH_BONE_BREAKER_GROUND_VISUAL_OFFSET)
 	end
 
 	return authoredCFrame
-end
-
-local function resolvePayloadFloorCFrame(payload: any): CFrame?
-	if typeof(payload) ~= "table" then
-		return nil
-	end
-
-	local floorCFrame = payload.floorCFrame
-	if typeof(floorCFrame) == "CFrame" then
-		return floorCFrame
-	end
-
-	return nil
 end
 
 local function getSoundDelay(sound: Sound): number
@@ -165,28 +179,26 @@ function Handler:_emitAuthoredExplosion(record: ActiveRecord, event: Presentatio
 
 	local payload = event.payload
 	local scaleMultiplier = math.max(0.1, tonumber(payload and payload.scaleMultiplier) or 1)
-	local groundedCFrame = resolvePayloadFloorCFrame(payload)
-	if groundedCFrame == nil then
-		local bossRootPart = self:resolveBossRootPart(bossModel)
-		if bossRootPart == nil then
-			self:warnWithPrefix("Agrynoth Bone Breaker presentation could not resolve the live boss RootPart.")
-			self:_cleanupRecord(record)
-			return
-		end
-
-		local rootPartSource = self:resolveBossVfxModel(
-			AGRYNOTH_VFX_FOLDER_NAME,
-			AGRYNOTH_BONE_BREAKER_VFX_NAME,
-			AGRYNOTH_BONE_BREAKER_ROOT_PART_VFX_NAME
-		)
-		if rootPartSource == nil then
-			self:warnWithPrefix("Agrynoth Bone Breaker RootPart reference VFX model is missing from ReplicatedStorage.GameAssets.Effects.Bosses.")
-			return
-		end
-
-		local authoredCFrame = resolveScaledAuthoredCFrame(bossRootPart, rootPartSource, explosionSource, scaleMultiplier)
-		groundedCFrame = resolveGroundedImpactCFrame(self, authoredCFrame, bossModel)
+	local bossRootPart = self:resolveBossRootPart(bossModel)
+	if bossRootPart == nil then
+		self:warnWithPrefix("Agrynoth Bone Breaker presentation could not resolve the live boss RootPart.")
+		self:_cleanupRecord(record)
+		return
 	end
+
+	local rootPartSource = self:resolveBossVfxModel(
+		AGRYNOTH_VFX_FOLDER_NAME,
+		AGRYNOTH_BONE_BREAKER_VFX_NAME,
+		AGRYNOTH_BONE_BREAKER_ROOT_PART_VFX_NAME
+	)
+	if rootPartSource == nil then
+		self:warnWithPrefix("Agrynoth Bone Breaker RootPart reference VFX model is missing from ReplicatedStorage.GameAssets.Effects.Bosses.")
+		return
+	end
+
+	local authoredCFrame = resolveScaledAuthoredCFrame(bossRootPart, rootPartSource, explosionSource, scaleMultiplier)
+	local targetCharacter = resolvePayloadTargetCharacter(self.Players, payload)
+	local groundedCFrame = resolveGroundedImpactCFrame(self, authoredCFrame, bossModel, targetCharacter)
 
 	local explosionModel = explosionSource:Clone()
 	explosionModel:ScaleTo(AGRYNOTH_BONE_BREAKER_EXPLOSION_SCALE)

@@ -10,6 +10,7 @@ GameAssetPaths.Animations = {
 GameAssetPaths.Models = {
 	BodyParts = { "Models", "BodyParts" },
 	Bosses = { "Models", "Bosses" },
+	Chests = { "Models", "Chests" },
 	Gear = { "Models", "Gear" },
 	HeadAccessories = { "Models", "HeadAccessories" },
 	Worlds = {
@@ -29,6 +30,7 @@ GameAssetPaths.Tools = {
 }
 
 GameAssetPaths.Audio = {
+	Chests = { "Audio", "Chests" },
 	Combat = { "Audio", "Combat" },
 	Footsteps = { "Audio", "Footsteps" },
 }
@@ -37,6 +39,7 @@ GameAssetPaths.UI = {
 	Index = { "UI", "Index" },
 	Icons = { "UI", "Icons" },
 	RollCutscene = { "UI", "RollCutscene" },
+	ScreenDarkener = { "UI", "ScreenDarkener" },
 }
 
 GameAssetPaths.Legacy = {

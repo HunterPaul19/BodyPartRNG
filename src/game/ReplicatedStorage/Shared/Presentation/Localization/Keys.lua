@@ -81,6 +81,18 @@ local Keys = {
 				fallback = "Sell {BodyPartName}?",
 			},
 		},
+		SellAccessory = {
+			Confirm = {
+				key = "Inventory.SellAccessory.Confirm",
+				fallback = "Sell {AccessoryName} for ${Payout}?",
+			},
+		},
+		SellMaterialStack = {
+			Confirm = {
+				key = "Inventory.SellMaterialStack.Confirm",
+				fallback = "Sell all x{Quantity} {MaterialName} for ${Payout}? Each sells for ${SellPrice}.",
+			},
+		},
 		PotionSell = {
 			Title = { key = "Inventory.PotionSell.Title", fallback = "Sell {PotionName}" },
 			Owned = { key = "Inventory.PotionSell.Owned", fallback = "Owned: x{OwnedAmount}" },

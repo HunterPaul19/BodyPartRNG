@@ -165,6 +165,10 @@ local ACTION_CONFIGS: { [string]: ActionConfig } = {
 		limit = 1,
 		windowSeconds = 1,
 	},
+	["remote.audio.set_music_enabled"] = {
+		limit = 3,
+		windowSeconds = 1,
+	},
 	["remote.potions.get_state"] = {
 		limit = 2,
 		windowSeconds = 1,

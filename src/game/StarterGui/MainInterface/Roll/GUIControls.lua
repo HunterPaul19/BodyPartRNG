@@ -23,6 +23,7 @@ GUIControls.RollPreviewSessionId = 0
 GUIControls.ActiveRollPreviewSessionId = nil
 GUIControls.ActiveMutationLoopSound = nil
 GUIControls.RollCooldownUntil = 0
+GUIControls.RollPresentationPending = false
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -158,6 +159,7 @@ local BASE_SEQUENCE_DURATION = 2.5
 local BASE_AUTO_RESULT_HOLD = 0.8
 local AUTO_ROLL_MIN_RETRY_DELAY = 0.05
 local PREVIEW_SEQUENCE_LENGTH = 10
+local ROLL_NOTIFICATION_HOLD_KEY = "rollResult"
 local BasePosition = UDim2.fromScale(0.5, 0.358)
 local OffsetPosition = BasePosition + UDim2.fromScale(0, 0.1)
 local DropdownTweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
@@ -539,6 +541,30 @@ end
 local function isInventoryFullMessage(message)
 	return typeof(message) == "string"
 		and string.find(string.lower(message), "inventory is full", 1, true) ~= nil
+end
+
+local function showAutoCraftNotification(rollResult)
+	if typeof(rollResult) ~= "table" or rollResult.autoCraftCommitted ~= true then
+		return
+	end
+
+	Notify.Show(tostring(rollResult.autoCraftMessage or "Added roll to crafting."), {
+		channel = "inventory",
+		duration = 4,
+		tone = "good",
+	})
+end
+
+local function beginRollNotificationHold()
+	if typeof(Notify.BeginHold) == "function" then
+		Notify.BeginHold(ROLL_NOTIFICATION_HOLD_KEY)
+	end
+end
+
+local function endRollNotificationHold()
+	if typeof(Notify.EndHold) == "function" then
+		Notify.EndHold(ROLL_NOTIFICATION_HOLD_KEY)
+	end
 end
 
 local function clearViewport()
@@ -1371,6 +1397,64 @@ function GUIControls:RebuildRollDropdown()
 	end
 end
 
+function GUIControls:PrepareTutorialTarget(targetId)
+	if targetId ~= "roll2Selection" then
+		return false
+	end
+	if GUIControls.CurrentlyRolling == true then
+		return false
+	end
+
+	local resultPresentationVisible = Main.Visible == true
+		or Main.SubInfo.Visible == true
+		or Main.SkipButton.Visible == true
+		or Main.EquipButton.Visible == true
+		or MainButtons.RollButton.Visible ~= true
+
+	if resultPresentationVisible then
+		GUIControls.CurrentRollResult = nil
+		GUIControls.CurrentRollResultEquipped = false
+		GUIControls.EquipDebounce = false
+		GUIControls.EquipStatusToken += 1
+		restoreIdleRollUi()
+		GUIControls:RefreshEquipButton()
+		GUIControls:RefreshRollControls()
+		GUIControls:SetButtonCooldown()
+	end
+
+	return true
+end
+
+function GUIControls:IsRollPresentationPending()
+	return GUIControls.RollPresentationPending == true
+end
+
+function GUIControls:GetTutorialTarget(targetId)
+	if targetId == "rollButton" then
+		return RollButton
+	end
+	if targetId == "rollResultSkipButton" then
+		if Main.Visible == true and Main.SkipButton.Visible == true then
+			return Main.SkipButton
+		end
+		return nil
+	end
+	if targetId == "rollDropdownButton" then
+		return DropdownButton
+	end
+	if targetId == "roll2Entry" then
+		if RollDropdown.Visible ~= true then
+			return nil
+		end
+
+		local entry = RollDropdownScrollingFrame:FindFirstChild("roll_2")
+		local button = entry and entry:FindFirstChild("Button")
+		return if button and button:IsA("GuiObject") then button else nil
+	end
+
+	return nil
+end
+
 function GUIControls:RollSequence(previewSequence, previewCount)
 	Main.SubInfo.Visible = false
 	Main.DisplayFrame.Position = BasePosition
@@ -1501,7 +1585,9 @@ function GUIControls:ShowRollResults(rollInfo)
 	end
 
 	renderRollInfo(resolvedRollInfo, GUIControls.ActiveRollPreviewSessionId)
+	GUIControls.RollPresentationPending = false
 	GUIControls:RefreshEquipButton()
+	endRollNotificationHold()
 	syncRollResultScreenEffect(resolvedRollInfo)
 	stopActiveMutationLoop()
 	RollResultAudio.PlayRarity(resolvedRollInfo)
@@ -1522,6 +1608,7 @@ function GUIControls:HideRollResults()
 	GUIControls.CurrentRollResultEquipped = false
 	GUIControls.EquipDebounce = false
 	GUIControls.EquipStatusToken += 1
+	GUIControls.RollPresentationPending = false
 	restoreIdleRollUi()
 	GUIControls:RefreshEquipButton()
 	GUIControls:RefreshRollControls()
@@ -1553,6 +1640,7 @@ function GUIControls:Roll(triggerSource)
 		GUIControls.CurrentRollResultEquipped = false
 		GUIControls.EquipDebounce = false
 		GUIControls.EquipStatusToken += 1
+		GUIControls.RollPresentationPending = true
 		if not predictedSkippedPresentation then
 			stopActiveMutationLoop()
 			ScreenEffects.HideAll()
@@ -1562,15 +1650,20 @@ function GUIControls:Roll(triggerSource)
 		if resolvedTriggerSource ~= "auto" then
 			GUIControls:SetDropdownOpen(false)
 		end
+		beginRollNotificationHold()
 		local rollResponse = invokeRemote(PerformRollRemote, {
 			triggerSource = resolvedTriggerSource,
 		})
 		if not rollResponse then
+			GUIControls.RollPresentationPending = false
+			endRollNotificationHold()
 			GUIControls:SetTemporaryStatus("Failed to reach the server.")
 			return
 		end
 
 		if not rollResponse.ok or typeof(rollResponse.rollResult) ~= "table" then
+			GUIControls.RollPresentationPending = false
+			endRollNotificationHold()
 			local failureMessage = rollResponse.message or "Roll failed."
 			if typeof(rollResponse.state) == "table" then
 				GUIControls:ApplyRollingState(rollResponse.state)
@@ -1597,6 +1690,7 @@ function GUIControls:Roll(triggerSource)
 
 		GUIControls:ApplyRollingState(rollResponse.state)
 		local rollResult = rollResponse.rollResult
+		showAutoCraftNotification(rollResult)
 		playRollStartSound()
 		if rollResult.skipPresentation == true then
 			playRollCutsceneIfNeeded(rollResult, rollResult.finalResult)
@@ -1604,6 +1698,7 @@ function GUIControls:Roll(triggerSource)
 			GUIControls.CurrentRollResultEquipped = false
 			GUIControls.EquipDebounce = false
 			GUIControls.CurrentlyRolling = false
+			GUIControls.RollPresentationPending = false
 			if predictedSkippedPresentation then
 				Main.Visible = false
 				Main.SkipButton.Visible = false
@@ -1624,6 +1719,7 @@ function GUIControls:Roll(triggerSource)
 				GUIControls:ScheduleNextAutoRoll(GUIControls:GetRollCooldownDuration())
 			end
 			GUIControls:SetTemporaryStatus(rollResponse.message or "Roll complete.")
+			endRollNotificationHold()
 			return
 		end
 
@@ -1650,6 +1746,8 @@ function GUIControls:Roll(triggerSource)
 				GUIControls:ShowRollResults(finalResult)
 			else
 				restoreIdleRollUi()
+				GUIControls.RollPresentationPending = false
+				endRollNotificationHold()
 				GUIControls:RefreshEquipButton()
 				GUIControls:RefreshRollControls()
 				GUIControls:SetButtonCooldown()
@@ -1666,6 +1764,8 @@ function GUIControls:Roll(triggerSource)
 				GUIControls:ShowRollResults(finalResult)
 			else
 				restoreIdleRollUi()
+				GUIControls.RollPresentationPending = false
+				endRollNotificationHold()
 				GUIControls:RefreshEquipButton()
 				GUIControls:RefreshRollControls()
 				GUIControls:SetButtonCooldown()

@@ -178,4 +178,21 @@ function ConfirmationWarning.Prompt(message: string?): boolean
 	return request.resultSignal:Wait() == true
 end
 
+function ConfirmationWarning.GetTutorialTarget(targetId: string): GuiObject?
+	local self = ConfirmationWarning
+	local ui = self:_cacheUi()
+	if not ui or self._currentRequest == nil or ui.frame.Visible ~= true then
+		return nil
+	end
+
+	if targetId == "frame" then
+		return ui.frame
+	end
+	if targetId == "confirmButton" and ui.confirmButton.Visible == true and ui.confirmButton.Active == true then
+		return ui.confirmButton
+	end
+
+	return nil
+end
+
 return ConfirmationWarning

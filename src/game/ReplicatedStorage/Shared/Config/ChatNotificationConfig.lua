@@ -5,6 +5,8 @@ local ChatNotificationConfig = {
 	FolderName = "ChatNotifications",
 	RareRollRemoteName = "RareRoll",
 	MinimumRareRollRarity = "Prime",
+	MinimumGlobalRollRarity = "Apex",
+	GlobalRollTopicName = "BodyPartRNG.ApexRoll.v1",
 	RareRollKind = "rareRoll",
 	RarityColors = {
 		Prime = Color3.fromRGB(255, 179, 0),
@@ -19,6 +21,7 @@ for rank, rarity in ipairs(RollingConfig.DisplayRarityOrder) do
 end
 
 local MINIMUM_RANK = RARITY_RANKS[ChatNotificationConfig.MinimumRareRollRarity] or math.huge
+local GLOBAL_MINIMUM_RANK = RARITY_RANKS[ChatNotificationConfig.MinimumGlobalRollRarity] or math.huge
 
 function ChatNotificationConfig.NormalizeDisplayRarity(value: any): string
 	return RollingConfig.NormalizeDisplayRarity(value)
@@ -31,6 +34,10 @@ end
 
 function ChatNotificationConfig.IsRareRollRarity(value: any): boolean
 	return ChatNotificationConfig.GetRarityRank(value) >= MINIMUM_RANK
+end
+
+function ChatNotificationConfig.IsGlobalRollRarity(value: any): boolean
+	return ChatNotificationConfig.GetRarityRank(value) >= GLOBAL_MINIMUM_RANK
 end
 
 function ChatNotificationConfig.GetRarityColor(value: any): Color3

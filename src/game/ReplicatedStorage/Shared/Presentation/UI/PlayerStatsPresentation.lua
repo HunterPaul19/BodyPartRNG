@@ -306,6 +306,7 @@ function PlayerStatsPresentation.BuildAdminSections(summary: any): { [string]: s
 			string.format("Auto Equip Best Toggles: %s", formatNumberish(settings.autoEquipBestToggleCount)),
 			string.format("Auto-Sell Toggles: %s", formatNumberish(settings.autoSellToggleCount)),
 			string.format("Cutscene Toggles: %s", formatNumberish(settings.cutsceneToggleCount)),
+			string.format("Music Toggles: %s", formatNumberish(settings.musicToggleCount)),
 		}, "\n"),
 	}
 end

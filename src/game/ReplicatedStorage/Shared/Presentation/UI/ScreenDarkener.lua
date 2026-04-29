@@ -1,22 +1,80 @@
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+
+local GameAssetPaths = require(ReplicatedStorage.Shared.Assets.GameAssetPaths)
+local GameAssetResolver = require(ReplicatedStorage.Shared.Assets.GameAssetResolver)
 
 local ScreenDarkener = {}
 ScreenDarkener.__index = ScreenDarkener
 
-local function getCanvasGroup()
+local RUNTIME_GUI_NAME = "Visuals"
+local TEMPLATE_NAME = "Visuals"
+local DEFAULT_DISPLAY_ORDER = 950
+
+local function configureRuntimeGui(runtimeGui: ScreenGui, displayOrder: number?)
+	runtimeGui.ResetOnSpawn = false
+	runtimeGui.Enabled = true
+	runtimeGui.IgnoreGuiInset = true
+	runtimeGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	runtimeGui.DisplayOrder = math.max(0, math.floor(displayOrder or DEFAULT_DISPLAY_ORDER))
+end
+
+local function findAncestorScreenGui(instance: Instance?): ScreenGui?
+	local current = instance
+	while current do
+		if current:IsA("ScreenGui") then
+			return current
+		end
+		current = current.Parent
+	end
+
+	return nil
+end
+
+local function resolveVisibleRect(minX: number, minY: number, maxX: number, maxY: number, screenWidth: number, screenHeight: number)
+	local clampedMinX = math.clamp(math.floor(minX + 0.5), 0, screenWidth)
+	local clampedMinY = math.clamp(math.floor(minY + 0.5), 0, screenHeight)
+	local clampedMaxX = math.clamp(math.floor(maxX + 0.5), 0, screenWidth)
+	local clampedMaxY = math.clamp(math.floor(maxY + 0.5), 0, screenHeight)
+
+	if clampedMaxX <= clampedMinX or clampedMaxY <= clampedMinY then
+		return nil
+	end
+
+	return clampedMinX, clampedMinY, clampedMaxX, clampedMaxY
+end
+
+local function getTemplate(): ScreenGui?
+	local screenDarkenerFolder = GameAssetResolver.Find(GameAssetPaths.UI.ScreenDarkener)
+	if not (screenDarkenerFolder and screenDarkenerFolder:IsA("Folder")) then
+		return nil
+	end
+
+	local template = screenDarkenerFolder:FindFirstChild(TEMPLATE_NAME)
+	if template and template:IsA("ScreenGui") then
+		return template
+	end
+
+	return nil
+end
+
+local function getPlayerGui(): PlayerGui?
 	local player = Players.LocalPlayer
 	if not player then
 		return nil
 	end
 
 	local playerGui = player:FindFirstChildOfClass("PlayerGui")
-	if not playerGui then
-		return nil
+	if playerGui then
+		return playerGui
 	end
 
-	local visuals = playerGui:FindFirstChild("Visuals")
+	return nil
+end
+
+local function getCanvasGroupFromGui(visuals: Instance?): CanvasGroup?
 	if not visuals then
 		return nil
 	end
@@ -29,22 +87,78 @@ local function getCanvasGroup()
 	return nil
 end
 
+local function getGuiObjectChild(parent: Instance?, name: string): GuiObject?
+	if not parent then
+		return nil
+	end
+
+	local child = parent:FindFirstChild(name)
+	if child and child:IsA("GuiObject") then
+		return child
+	end
+
+	return nil
+end
+
+local function ensureRuntimeGui(): ScreenGui?
+	local playerGui = getPlayerGui()
+	if not playerGui then
+		return nil
+	end
+
+	local existing = playerGui:FindFirstChild(RUNTIME_GUI_NAME)
+	if existing then
+		if existing:IsA("ScreenGui") and getCanvasGroupFromGui(existing) then
+			configureRuntimeGui(existing)
+			return existing
+		end
+
+		return nil
+	end
+
+	local template = getTemplate()
+	if not template then
+		return nil
+	end
+
+	local runtimeGui = template:Clone()
+	runtimeGui.Name = RUNTIME_GUI_NAME
+	configureRuntimeGui(runtimeGui)
+	runtimeGui.Parent = playerGui
+
+	return runtimeGui
+end
+
+local function refreshReferences(self)
+	self.Player = Players.LocalPlayer
+	self.Camera = workspace.CurrentCamera
+	self.Visuals = ensureRuntimeGui()
+	self.CanvasGroup = getCanvasGroupFromGui(self.Visuals)
+	self.TopFrame = getGuiObjectChild(self.CanvasGroup, "Top")
+	self.BottomFrame = getGuiObjectChild(self.CanvasGroup, "Bottom")
+	self.LeftFrame = getGuiObjectChild(self.CanvasGroup, "Left")
+	self.RightFrame = getGuiObjectChild(self.CanvasGroup, "Right")
+end
+
 function ScreenDarkener.New(padding: number?, tweenTime: number?)
 	local self = setmetatable({}, ScreenDarkener)
 
-	self.Player = Players.LocalPlayer
-	self.Camera = workspace.CurrentCamera
-	self.CanvasGroup = getCanvasGroup()
-	self.TopFrame = self.CanvasGroup and self.CanvasGroup:FindFirstChild("Top") or nil
-	self.BottomFrame = self.CanvasGroup and self.CanvasGroup:FindFirstChild("Bottom") or nil
-	self.LeftFrame = self.CanvasGroup and self.CanvasGroup:FindFirstChild("Left") or nil
-	self.RightFrame = self.CanvasGroup and self.CanvasGroup:FindFirstChild("Right") or nil
+	self.Player = nil
+	self.Camera = nil
+	self.Visuals = nil
+	self.CanvasGroup = nil
+	self.TopFrame = nil
+	self.BottomFrame = nil
+	self.LeftFrame = nil
+	self.RightFrame = nil
 	self.Padding = padding or 5
 	self.TweenTime = tweenTime or 0.2
 	self.Tweens = {}
 	self.LastGoal = {}
 	self.Target = nil
 	self.Connection = nil
+
+	refreshReferences(self)
 
 	return self
 end
@@ -99,26 +213,25 @@ function ScreenDarkener:UpdateLoop()
 		local minX, minY, maxX, maxY
 		local anyOnScreen = true
 
-		local guiService = game:GetService("GuiService")
-		local inset = guiService:GetGuiInset()
-
 		if self.Target:IsA("GuiObject") then
-			local absPos = self.Target.AbsolutePosition
+			local canvasPosition = self.CanvasGroup.AbsolutePosition
+			local absPos = self.Target.AbsolutePosition - canvasPosition
 			local absSize = self.Target.AbsoluteSize
-			local parent = self.Target.Parent
-			while parent do
-				if parent:IsA("ScrollingFrame") then
-					absPos -= Vector2.new(parent.CanvasPosition.X, parent.CanvasPosition.Y)
-				end
-				parent = parent.Parent
+
+			minX = absPos.X - self.Padding
+			minY = absPos.Y - self.Padding
+			maxX = absPos.X + absSize.X + self.Padding
+			maxY = absPos.Y + absSize.Y + self.Padding
+		elseif self.Target:IsA("BasePart") then
+			local part = self.Target
+			local camera = workspace.CurrentCamera
+			self.Camera = camera
+			if not camera then
+				goals = self:OffScreenGoals()
+				anyOnScreen = false
+				return
 			end
 
-			minX = absPos.X + inset.X - self.Padding
-			minY = absPos.Y + inset.Y - self.Padding
-			maxX = absPos.X + inset.X + absSize.X + self.Padding
-			maxY = absPos.Y + inset.Y + absSize.Y + self.Padding
-		elseif self.Target:IsA("BasePart") and self.Camera then
-			local part = self.Target
 			local corners = {
 				part.Position + Vector3.new(part.Size.X / 2, part.Size.Y / 2, part.Size.Z / 2),
 				part.Position + Vector3.new(-part.Size.X / 2, part.Size.Y / 2, part.Size.Z / 2),
@@ -134,7 +247,7 @@ function ScreenDarkener:UpdateLoop()
 			anyOnScreen = false
 
 			for _, corner in ipairs(corners) do
-				local screenPos, onScreen = self.Camera:WorldToViewportPoint(corner)
+				local screenPos, onScreen = camera:WorldToViewportPoint(corner)
 				if onScreen then
 					anyOnScreen = true
 					minX = math.min(minX, screenPos.X)
@@ -153,22 +266,29 @@ function ScreenDarkener:UpdateLoop()
 		end
 
 		if anyOnScreen then
-			goals[self.TopFrame] = {
-				Position = UDim2.fromOffset(0, 0),
-				Size = UDim2.fromOffset(screenWidth, math.max(math.ceil(minY), 0)),
-			}
-			goals[self.BottomFrame] = {
-				Position = UDim2.fromOffset(0, math.min(maxY, screenHeight)),
-				Size = UDim2.fromOffset(screenWidth, screenHeight - maxY),
-			}
-			goals[self.LeftFrame] = {
-				Position = UDim2.fromOffset(0, 0),
-				Size = UDim2.fromOffset(math.max(math.ceil(minX), 0), screenHeight),
-			}
-			goals[self.RightFrame] = {
-				Position = UDim2.fromOffset(math.min(maxX, screenWidth), 0),
-				Size = UDim2.fromOffset(screenWidth - maxX, screenHeight),
-			}
+			local clampedMinX, clampedMinY, clampedMaxX, clampedMaxY =
+				resolveVisibleRect(minX, minY, maxX, maxY, screenWidth, screenHeight)
+
+			if not clampedMinX then
+				goals = self:OffScreenGoals()
+			else
+				goals[self.TopFrame] = {
+					Position = UDim2.fromOffset(0, 0),
+					Size = UDim2.fromOffset(screenWidth, clampedMinY),
+				}
+				goals[self.BottomFrame] = {
+					Position = UDim2.fromOffset(0, clampedMaxY),
+					Size = UDim2.fromOffset(screenWidth, screenHeight - clampedMaxY),
+				}
+				goals[self.LeftFrame] = {
+					Position = UDim2.fromOffset(0, 0),
+					Size = UDim2.fromOffset(clampedMinX, screenHeight),
+				}
+				goals[self.RightFrame] = {
+					Position = UDim2.fromOffset(clampedMaxX, 0),
+					Size = UDim2.fromOffset(screenWidth - clampedMaxX, screenHeight),
+				}
+			end
 		end
 
 		for frame, goal in pairs(goals) do
@@ -181,7 +301,39 @@ function ScreenDarkener:UpdateLoop()
 	end)
 end
 
+function ScreenDarkener:LayerAbove(target: Instance?)
+	if not self:IsReady() then
+		refreshReferences(self)
+	end
+
+	local visuals = self.Visuals
+	if not (visuals and visuals:IsA("ScreenGui")) then
+		return
+	end
+
+	local targetGui = findAncestorScreenGui(target)
+	local displayOrder = DEFAULT_DISPLAY_ORDER
+	if targetGui then
+		displayOrder = math.max(displayOrder, targetGui.DisplayOrder + 1)
+	end
+
+	configureRuntimeGui(visuals, displayOrder)
+end
+
+function ScreenDarkener:GetDisplayOrder(): number
+	local visuals = self.Visuals
+	if visuals and visuals:IsA("ScreenGui") then
+		return visuals.DisplayOrder
+	end
+
+	return DEFAULT_DISPLAY_ORDER
+end
+
 function ScreenDarkener:Activate(target, padding: number?)
+	if not self:IsReady() then
+		refreshReferences(self)
+	end
+
 	if not self:IsReady() then
 		return
 	end

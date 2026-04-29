@@ -22,6 +22,9 @@ type BossHitConfirmedPayload = {
 	bossId: string,
 	damage: number,
 	attackerUserId: number,
+	targetType: string?,
+	targetModel: Model?,
+	targetPosition: Vector3?,
 	serverTime: number,
 }
 
@@ -76,10 +79,10 @@ function BossHitFlashController:_resolveActiveBoss(): Model?
 	return nil
 end
 
-function BossHitFlashController:_ensureHighlight(bossModel: Model): Highlight
-	local existing = bossModel:FindFirstChild(HIT_FLASH_HIGHLIGHT_NAME)
+function BossHitFlashController:_ensureHighlight(targetModel: Model): Highlight
+	local existing = targetModel:FindFirstChild(HIT_FLASH_HIGHLIGHT_NAME)
 	if existing and existing:IsA("Highlight") then
-		existing.Adornee = bossModel
+		existing.Adornee = targetModel
 		return existing
 	end
 	if existing then
@@ -88,20 +91,19 @@ function BossHitFlashController:_ensureHighlight(bossModel: Model): Highlight
 
 	local highlight = Instance.new("Highlight")
 	highlight.Name = HIT_FLASH_HIGHLIGHT_NAME
-	highlight.Adornee = bossModel
+	highlight.Adornee = targetModel
 	highlight.DepthMode = Enum.HighlightDepthMode.Occluded
 	highlight.FillColor = FLASH_COLOR
 	highlight.OutlineColor = FLASH_COLOR
 	highlight.FillTransparency = 1
 	highlight.OutlineTransparency = 1
 	highlight.Enabled = false
-	highlight.Parent = bossModel
+	highlight.Parent = targetModel
 	return highlight
 end
 
-function BossHitFlashController:_flashBoss()
-	local bossModel = self:_resolveActiveBoss()
-	if bossModel == nil then
+function BossHitFlashController:_flashTarget(targetModel: Model?)
+	if targetModel == nil or targetModel.Parent == nil then
 		return
 	end
 
@@ -110,7 +112,7 @@ function BossHitFlashController:_flashBoss()
 		self._activeTween = nil
 	end
 
-	local highlight = self:_ensureHighlight(bossModel)
+	local highlight = self:_ensureHighlight(targetModel)
 	highlight.FillColor = FLASH_COLOR
 	highlight.OutlineColor = FLASH_COLOR
 	highlight.FillTransparency = FLASH_FILL_TRANSPARENCY
@@ -135,12 +137,28 @@ function BossHitFlashController:_flashBoss()
 	tween:Play()
 end
 
+function BossHitFlashController:_resolveHitTarget(hitPayload: BossHitConfirmedPayload): Model?
+	local targetType = hitPayload.targetType
+	if targetType == nil or targetType == "boss" then
+		return self:_resolveActiveBoss()
+	end
+
+	if targetType == "minion" then
+		local targetModel = hitPayload.targetModel
+		if typeof(targetModel) == "Instance" and targetModel:IsA("Model") then
+			return targetModel
+		end
+	end
+
+	return nil
+end
+
 function BossHitFlashController:_handleBossHitConfirmed(hitPayload: BossHitConfirmedPayload)
 	if typeof(hitPayload) ~= "table" or typeof(hitPayload.damage) ~= "number" or hitPayload.damage <= 0 then
 		return
 	end
 
-	self:_flashBoss()
+	self:_flashTarget(self:_resolveHitTarget(hitPayload))
 end
 
 function BossHitFlashController:OnStart()

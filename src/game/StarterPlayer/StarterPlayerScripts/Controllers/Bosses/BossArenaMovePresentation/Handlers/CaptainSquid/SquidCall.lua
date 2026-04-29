@@ -10,6 +10,7 @@ local Constants = {
 		CAPTAIN_SQUID_VFX_FOLDER_NAME = "CaptainSquid",
 		SQUID_CALL_CANNONBALL_MODEL_NAME = "CannonBall",
 		SQUID_CALL_CANNON_MODEL_NAME = "Cannon",
+		SQUID_CALL_CANNON_REAL_MODEL_NAME = "CannonReal",
 		SQUID_CALL_CANNON_MUZZLE_ATTACHMENT_NAME = "CannonBall",
 		SQUID_CALL_LEFT_HAND_MODEL_NAME = "LeftHand",
 		SQUID_CALL_PROJECTILE_FLY_ATTACHMENT_NAME = "FlyAtt",
@@ -29,6 +30,7 @@ local CAPTAIN_SQUID_VFX_FOLDER_NAME = Constants.Vfx.CAPTAIN_SQUID_VFX_FOLDER_NAM
 local SQUID_CALL_CANNONBALL_MODEL_NAME = Constants.Vfx.SQUID_CALL_CANNONBALL_MODEL_NAME
 local SQUID_CALL_CANNON_MIDDLE_NAME = Constants.Values.SQUID_CALL_CANNON_MIDDLE_NAME
 local SQUID_CALL_CANNON_MODEL_NAME = Constants.Vfx.SQUID_CALL_CANNON_MODEL_NAME
+local SQUID_CALL_CANNON_REAL_MODEL_NAME = Constants.Vfx.SQUID_CALL_CANNON_REAL_MODEL_NAME
 local SQUID_CALL_CANNON_MUZZLE_ATTACHMENT_NAME = Constants.Vfx.SQUID_CALL_CANNON_MUZZLE_ATTACHMENT_NAME
 local SQUID_CALL_IMPACT_LIFETIME_SECONDS = Constants.Timing.SQUID_CALL_IMPACT_LIFETIME_SECONDS
 local SQUID_CALL_LEFT_HAND_LIFETIME_SECONDS = Constants.Timing.SQUID_CALL_LEFT_HAND_LIFETIME_SECONDS
@@ -140,11 +142,11 @@ function Handler:_beginSquidCallFade(record: ActiveRecord, fadeSeconds: number)
 end
 
 function Handler:_applySquidCallCannonPose(record: ActiveRecord, targetPosition: Vector3?, alpha: number)
-	local cannonModel = record.cannonModel
+	local cannonRealModel = record.cannonRealModel
 	local cannonMiddle = record.cannonMiddle
 	local aimData = record.squidCallAimData
 	local bossRootPart = self:resolveBossRootPart(record.bossModel)
-	if cannonModel == nil or cannonMiddle == nil or aimData == nil or bossRootPart == nil then
+	if cannonRealModel == nil or cannonMiddle == nil or aimData == nil or bossRootPart == nil then
 		return
 	end
 
@@ -155,7 +157,7 @@ function Handler:_applySquidCallCannonPose(record: ActiveRecord, targetPosition:
 	)
 	local desiredModelCFrame = resolveSquidCallModelCFrame(desiredBaseCFrame, aimData.middleLocalCFrame, targetPosition)
 	local modelCFrame = aimData.initialBaseCFrame:Lerp(desiredModelCFrame, math.clamp(alpha, 0, 1))
-	cannonModel:PivotTo(modelCFrame)
+	cannonRealModel:PivotTo(modelCFrame)
 end
 
 function Handler:_updateSquidCallMotion(record: ActiveRecord, nowServerTime: number)
@@ -257,26 +259,35 @@ function Handler:_summonSquidCall(record: ActiveRecord, event: PresentationEvent
 	local cannonModel = cannonSource:Clone()
 	cannonModel:ScaleTo(scaleMultiplier)
 	self:prepareMovingEffectModel(cannonModel)
+	self:destroyWeldConstraints(cannonModel)
 
-	local cannonMiddle = cannonModel:FindFirstChild(SQUID_CALL_CANNON_MIDDLE_NAME, true)
+	local cannonRealModel = cannonModel:FindFirstChild(SQUID_CALL_CANNON_REAL_MODEL_NAME)
+	if not (cannonRealModel and cannonRealModel:IsA("Model")) then
+		self:warnWithPrefix("Squid Call cannon VFX model is missing the CannonReal model.")
+		self:_cleanupRecord(record)
+		return
+	end
+
+	local cannonMiddle = cannonRealModel:FindFirstChild(SQUID_CALL_CANNON_MIDDLE_NAME)
 	if not (cannonMiddle and cannonMiddle:IsA("BasePart")) then
-		self:warnWithPrefix("Squid Call cannon VFX model is missing the Middle part.")
+		self:warnWithPrefix("Squid Call CannonReal VFX model is missing the Middle part.")
 		self:_cleanupRecord(record)
 		return
 	end
 
 	local cannonMuzzleAttachment = cannonMiddle:FindFirstChild(SQUID_CALL_CANNON_MUZZLE_ATTACHMENT_NAME)
 	if not (cannonMuzzleAttachment and cannonMuzzleAttachment:IsA("Attachment")) then
-		self:warnWithPrefix("Squid Call cannon VFX model is missing Middle.CannonBall attachment.")
+		self:warnWithPrefix("Squid Call CannonReal VFX model is missing Middle.CannonBall attachment.")
 		self:_cleanupRecord(record)
 		return
 	end
 
 	local initialBaseCFrame = self:resolveCannonBaseCFrame(bossRootPart.Position, nil, bossRootPart.CFrame.LookVector)
-	cannonModel:PivotTo(initialBaseCFrame)
-	local middleLocalCFrame = cannonModel:GetPivot():ToObjectSpace(cannonMiddle.CFrame)
+	cannonRealModel:PivotTo(initialBaseCFrame)
+	local middleLocalCFrame = cannonRealModel:GetPivot():ToObjectSpace(cannonMiddle.CFrame)
 
 	record.cannonModel = cannonModel
+	record.cannonRealModel = cannonRealModel
 	record.cannonMiddle = cannonMiddle
 	record.cannonMuzzleAttachment = cannonMuzzleAttachment
 	record.rootModel = cannonModel
@@ -328,16 +339,16 @@ function Handler:_fireSquidCall(record: ActiveRecord, event: PresentationEvent)
 
 	local storedAimData = record.squidCallAimData
 	record.squidCallAimData = nil
-	if record.cannonModel and record.cannonMiddle then
+	if record.cannonRealModel and record.cannonMiddle then
 		local bossRootPart = self:resolveBossRootPart(record.bossModel)
 		if bossRootPart then
 			local baseCFrame = self:resolveCannonBaseCFrame(
 				bossRootPart.Position,
 				impactPosition,
-				record.cannonModel:GetPivot().RightVector
+				record.cannonRealModel:GetPivot().RightVector
 			)
-			local middleLocalCFrame = if storedAimData then storedAimData.middleLocalCFrame else record.cannonModel:GetPivot():ToObjectSpace(record.cannonMiddle.CFrame)
-			record.cannonModel:PivotTo(resolveSquidCallModelCFrame(baseCFrame, middleLocalCFrame, impactPosition))
+			local middleLocalCFrame = if storedAimData then storedAimData.middleLocalCFrame else record.cannonRealModel:GetPivot():ToObjectSpace(record.cannonMiddle.CFrame)
+			record.cannonRealModel:PivotTo(resolveSquidCallModelCFrame(baseCFrame, middleLocalCFrame, impactPosition))
 		end
 	end
 

@@ -91,12 +91,20 @@ type AppraisalUi = {
 	rollButtonLabel: TextLabel?,
 	viewportFrame: ViewportFrame?,
 	messageRoot: GuiButton,
+	messageFrame: GuiObject?,
 	messageTitle: TextLabel?,
 	messageDescription: TextLabel?,
 	messageClose: GuiButton?,
 }
 
 local AppraisalController = {}
+
+local function isUsableGuiObject(guiObject: GuiObject?): boolean
+	return guiObject ~= nil
+		and guiObject.Visible == true
+		and guiObject.AbsoluteSize.X > 0
+		and guiObject.AbsoluteSize.Y > 0
+end
 
 local function setOutlineColor(button: GuiButton?, color: Color3, transparency: number)
 	if not button then
@@ -206,6 +214,7 @@ function AppraisalController:_ensureState()
 	self._remotes = nil :: AppraisalRemotes?
 	self._appraisalState = AppraisalState.CreateEmptyState()
 	self._speakerModel = nil :: Model?
+	self._tutorialSlotButtonsByRegion = {} :: { [string]: GuiButton }
 end
 
 function AppraisalController:_getOwnedLookup(): { [string]: any }
@@ -484,11 +493,18 @@ function AppraisalController:_syncSlots()
 					if isSelected then SELECTED_COLOR else DEFAULT_OUTLINE_COLOR,
 					if isSelected then 0 else 0.22
 				)
+				if mountedButton and mountedButton:IsA("GuiButton") then
+					self._tutorialSlotButtonsByRegion[region] = mountedButton
+				else
+					self._tutorialSlotButtonsByRegion[region] = nil
+				end
 			else
 				self._slotCardRenderer:Hide(string.format("appraisal_%s", region))
+				self._tutorialSlotButtonsByRegion[region] = nil
 			end
 		elseif self._slotCardRenderer then
 			self._slotCardRenderer:Hide(string.format("appraisal_%s", region))
+			self._tutorialSlotButtonsByRegion[region] = nil
 		end
 
 		setOutlineColor(
@@ -497,6 +513,59 @@ function AppraisalController:_syncSlots()
 			if isSelected then 0 else if entry then 0.1 else 0.45
 		)
 	end
+end
+
+function AppraisalController:GetTutorialTarget(targetId: string): GuiObject?
+	local ok = pcall(function()
+		self:_ensureState()
+		if self._ui and self._ui.root.Visible == true then
+			self:_syncUi()
+		end
+	end)
+	if not ok or not self._ui or self._ui.root.Visible ~= true then
+		return nil
+	end
+
+	if targetId == "messageRoot" then
+		local messageFrame = self._ui.messageFrame
+		if self._ui.messageRoot.Visible == true and isUsableGuiObject(messageFrame) then
+			return messageFrame
+		end
+		return nil
+	end
+
+	if targetId == "messageClose" then
+		local closeButton = self._ui.messageClose
+		if self._ui.messageRoot.Visible == true and isUsableGuiObject(closeButton) then
+			return closeButton
+		end
+		return nil
+	end
+
+	if targetId == "appraiseButton" then
+		if self:_canAppraise() and isUsableGuiObject(self._ui.rollButton) then
+			return self._ui.rollButton
+		end
+		return nil
+	end
+
+	if targetId == "firstEquippedSlot" then
+		for _, region in ipairs(BodyPartRegions.Order) do
+			if self:_getEntryForRegion(region) ~= nil then
+				local mountedButton = self._tutorialSlotButtonsByRegion[region]
+				if isUsableGuiObject(mountedButton) then
+					return mountedButton
+				end
+
+				local slotButton = self._ui.slotButtons[region]
+				if isUsableGuiObject(slotButton) then
+					return slotButton
+				end
+			end
+		end
+	end
+
+	return nil
 end
 
 function AppraisalController:_syncDialogueName()
@@ -903,6 +972,7 @@ function AppraisalController:_cacheUi(playerGui: PlayerGui)
 		rollButtonLabel = rollButton:FindFirstChildWhichIsA("TextLabel"),
 		viewportFrame = viewportFrame,
 		messageRoot = messageRoot,
+		messageFrame = if messageFrame and messageFrame:IsA("GuiObject") then messageFrame else nil,
 		messageTitle = if messageTitle and messageTitle:IsA("TextLabel") then messageTitle else nil,
 		messageDescription = if messageDescription and messageDescription:IsA("TextLabel") then messageDescription else nil,
 		messageClose = if messageClose and messageClose:IsA("GuiButton") then messageClose else nil,
@@ -1023,6 +1093,10 @@ function AppraisalController:OnStart()
 
 	self:_resetSelectionState()
 	self:_syncUi()
+end
+
+function AppraisalController:IsOpen(): boolean
+	return self._isOpen == true
 end
 
 return AppraisalController

@@ -416,7 +416,9 @@ function BossArenaPlayerM1Service:_spawnHitboxForSwing(player: Player, swingId: 
 					return
 				end
 			else
-				targetHumanoid:TakeDamage(damage)
+				if BossArenaRuntimeService:ApplyPlayerDamageToActiveBossMinion(player, targetModel, damage) <= 0 then
+					return
+				end
 			end
 
 			damagedTarget = true

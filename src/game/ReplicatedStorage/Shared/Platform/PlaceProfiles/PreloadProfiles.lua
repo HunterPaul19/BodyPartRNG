@@ -12,8 +12,8 @@ export type PreloadSpec = {
 }
 
 type FeaturePreloadContribution = {
-	mainInterfaceRoots: { string }?,
-	modalRootRoots: { string }?,
+	mainInterfaceRoots: { string | PreloadRootSpec }?,
+	modalRootRoots: { string | PreloadRootSpec }?,
 	gameAssetPaths: { string }?,
 }
 
@@ -52,58 +52,18 @@ local FEATURE_TO_PRELOAD_CONTRIBUTIONS: { [string]: FeaturePreloadContribution }
 	main_hub = {
 		mainInterfaceRoots = { "Main" },
 	},
-	dialogue = {
-		mainInterfaceRoots = { "DialogueUI" },
-	},
-	leaderboard = {
-		mainInterfaceRoots = { "Leaderboard" },
-	},
 	rolling = {
 		mainInterfaceRoots = { "Roll", "RollWarning" },
-		modalRootRoots = { "AutoSell" },
 		gameAssetPaths = { "UI/RollCutscene" },
 	},
-	appraisal = {
-		mainInterfaceRoots = { "RollWarning" },
-		modalRootRoots = { "AppraisalUI", "ConfirmationFrame" },
-		gameAssetPaths = { "Models/BodyParts", "UI/Index" },
-	},
-	inventory = {
-		modalRootRoots = { "Inventory", "PotionSellFrame", "SellWarningFrame", "ConfirmationFrame" },
-		gameAssetPaths = { "Models/BodyParts", "Effects/Auras", "UI/Icons/Auras", "Tools/Potions", "UI/Index", "Effects/Mutations" },
-	},
-	loadout = {
-		modalRootRoots = { "Inventory" },
-		gameAssetPaths = { "Models/BodyParts", "UI/Index", "Effects/Mutations" },
-	},
-	merchant_shop = {
-		modalRootRoots = { "MerchantTeleportFrame", "ShopUI" },
-		gameAssetPaths = { "Tools/Potions" },
-	},
-	marketplace = {
-		mainInterfaceRoots = { "Gifting", "RobuxStore" },
-	},
-	titles = {
-		modalRootRoots = { "Titles" },
-	},
 	potions = {
-		mainInterfaceRoots = { "BuffsHolder", "StatusEffectHover" },
-		gameAssetPaths = { "Tools/Potions", "Effects/Screen" },
-	},
-	help = {
-		modalRootRoots = { "Help" },
-	},
-	index = {
-		modalRootRoots = { "Index", "ConfirmationFrame" },
-		gameAssetPaths = { "Models/BodyParts", "UI/Index" },
-	},
-	player_inspect = {
-		modalRootRoots = { "PlayerInfo" },
-		gameAssetPaths = { "Models/BodyParts", "Effects/Auras", "UI/Icons/Auras", "UI/Index", "Effects/Mutations" },
+		mainInterfaceRoots = {
+			{ name = "BuffsHolder", required = false },
+			{ name = "StatusEffectHover", required = false },
+		},
 	},
 	boss_fight_flow = {
 		mainInterfaceRoots = { "BossHealthBar", "CombatHUD" },
-		gameAssetPaths = { "Models/Bosses", "Models/Worlds/BossArenas" },
 	},
 }
 
@@ -119,17 +79,28 @@ local function freezeStringArray(values: { string }): { string }
 	return table.freeze(values)
 end
 
-local function addRootSpecs(target: { PreloadRootSpec }, seen: { [string]: boolean }, rootNames: { string }?)
-	if typeof(rootNames) ~= "table" then
+local function addRootSpecs(target: { PreloadRootSpec }, seen: { [string]: boolean }, rootSpecs: { string | PreloadRootSpec }?)
+	if typeof(rootSpecs) ~= "table" then
 		return
 	end
 
-	for _, rootName in ipairs(rootNames) do
+	for _, rootSpec in ipairs(rootSpecs) do
+		local rootName: string? = nil
+		local isRequired = true
+
+		if typeof(rootSpec) == "string" then
+			rootName = rootSpec
+		elseif typeof(rootSpec) == "table" then
+			local typedRootSpec = rootSpec :: PreloadRootSpec
+			rootName = typedRootSpec.name
+			isRequired = typedRootSpec.required == true
+		end
+
 		if typeof(rootName) == "string" and rootName ~= "" and seen[rootName] ~= true then
 			seen[rootName] = true
 			table.insert(target, {
 				name = rootName,
-				required = true,
+				required = isRequired,
 			})
 		end
 	end

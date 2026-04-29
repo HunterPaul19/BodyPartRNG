@@ -100,6 +100,12 @@ function PassiveIncomeService:OnPlayerAdded(player: Player)
 	refreshPassiveIncomeRate(player, state)
 end
 
+function PassiveIncomeService:GetPassiveIncomePerSecond(player: Player): number
+	local state = getOrCreatePlayerState(player)
+	refreshPassiveIncomeRate(player, state)
+	return math.max(0, tonumber(state.passiveIncomePerSecond) or 0)
+end
+
 function PassiveIncomeService:OnPlayerRemoving(player: Player)
 	playerStateByPlayer[player] = nil
 end

@@ -130,10 +130,20 @@ local FLOOR_PRESETS: { [string]: LootFloorPreset } = {
 		{ displayRarity = "Apex", probability = 0.000408 },
 	}),
 	["Elite+"] = createFloorPreset("Elite+", { "Elite", "Apex" }, {
-		{ displayRarity = "Elite", probability = 0.9975 },
-		{ displayRarity = "Apex", probability = 0.0025 },
+		{ displayRarity = "Elite", probability = 0.9995045272866096 },
+		{ displayRarity = "Apex", probability = 0.000495472713390365 },
 	}),
 }
+
+local CHEST_VISUAL_BY_LOOT_FLOOR = table.freeze({
+	["Basic+"] = "BossTier1",
+	["Clean+"] = "BossTier1",
+	["Prime+"] = "BossTier2",
+	["Elite+"] = "BossTier3",
+})
+
+local DEFAULT_BOSS_PART_CHANCE = 0.01
+local ELITE_PLUS_BOSS_PART_CHANCE = 0.00199791031654431
 
 local PROFILE_SPECS = {
 	{
@@ -277,7 +287,7 @@ for _, spec in ipairs(PROFILE_SPECS) do
 		lootFloorId = spec.lootFloorId,
 		allowedRarities = freezeStringArray(allowedRarities),
 		slotCount = 5,
-		bossPartChance = 0.01,
+		bossPartChance = if spec.lootFloorId == "Elite+" then ELITE_PLUS_BOSS_PART_CHANCE else DEFAULT_BOSS_PART_CHANCE,
 	})
 
 	if PROFILES_BY_BOSS_ID[frozenProfile.bossId] ~= nil then
@@ -340,6 +350,19 @@ function BossRewards.GetBossRewardProfile(bossId: string): BossRewardProfile?
 	end
 
 	return PROFILES_BY_BOSS_ID[bossId]
+end
+
+function BossRewards.GetBossChestVisualId(bossId: string): string
+	local profile = BossRewards.GetBossRewardProfile(bossId)
+	local lootFloorId = if profile then profile.lootFloorId else nil
+	if typeof(lootFloorId) == "string" then
+		local visualId = CHEST_VISUAL_BY_LOOT_FLOOR[lootFloorId]
+		if typeof(visualId) == "string" and visualId ~= "" then
+			return visualId
+		end
+	end
+
+	return "BossTier1"
 end
 
 function BossRewards.GetAllBossRewardProfiles(): { BossRewardProfile }

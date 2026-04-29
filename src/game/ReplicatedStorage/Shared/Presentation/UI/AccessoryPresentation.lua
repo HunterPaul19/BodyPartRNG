@@ -260,6 +260,15 @@ local function wrapAccessoryForPreview(config: AccessoryConfig.AccessoryConfigEn
 
 	local wrapper = Instance.new("Model")
 	wrapper.Name = config.label
+	wrapper:SetAttribute("AccessoryId", config.id)
+	if typeof(config.assetModelName) == "string" then
+		wrapper:SetAttribute("AccessoryAssetModelName", config.assetModelName)
+	end
+	local sourceAssetName = accessory:GetAttribute("SourceAssetName")
+	wrapper:SetAttribute(
+		"AccessorySourceAssetName",
+		if typeof(sourceAssetName) == "string" then sourceAssetName else accessory.Name
+	)
 
 	local clone = accessory:Clone()
 	sanitizePreviewClone(clone)

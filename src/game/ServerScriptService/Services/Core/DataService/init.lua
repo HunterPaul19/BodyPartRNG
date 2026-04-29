@@ -14,10 +14,13 @@ local OwnedAccessories = require(ReplicatedStorage.Shared.Character.OwnedAccesso
 local OwnedAuras = require(ReplicatedStorage.Shared.Character.OwnedAuras)
 local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
 local OwnedCraftingMaterials = require(ReplicatedStorage.Shared.Character.OwnedCraftingMaterials)
+local CraftingProgress = require(ReplicatedStorage.Shared.Character.CraftingProgress)
 local OwnedPotions = require(ReplicatedStorage.Shared.Character.OwnedPotions)
 local OwnedRollTypes = require(ReplicatedStorage.Shared.Character.OwnedRollTypes)
 local RollTargetRegions = require(ReplicatedStorage.Shared.Character.RollTargetRegions)
 local TimeShardState = require(ReplicatedStorage.Shared.Character.TimeShardState)
+local DailyChestState = require(ReplicatedStorage.Shared.Character.DailyChestState)
+local TutorialState = require(ReplicatedStorage.Shared.Character.TutorialState)
 local PlayerStats = require(ReplicatedStorage.Shared.Stats.PlayerStats)
 local AchievementState = require(ReplicatedStorage.Shared.Titles.AchievementState)
 local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
@@ -52,6 +55,8 @@ local LEGACY_OWNED_ROLL_TYPES_KEY = "ownedRollTypes"
 local MONEY_KEY = Schema.Money and Schema.Money.key or nil
 local TIME_PLAYED_KEY = Schema.TimePlayed and Schema.TimePlayed.key or nil
 local TIME_SHARDS_KEY = Schema.TimeShards and Schema.TimeShards.key or nil
+local DAILY_CHESTS_KEY = Schema.DailyChests and Schema.DailyChests.key or nil
+local TUTORIAL_KEY = Schema.Tutorial and Schema.Tutorial.key or nil
 local DIAGNOSTICS_KEY = Schema.Diagnostics and Schema.Diagnostics.key or nil
 local STATS_KEY = Schema.Stats and Schema.Stats.key or nil
 local BODY_PARTS_KEY = Schema.BodyParts and Schema.BodyParts.key or nil
@@ -59,6 +64,7 @@ local AURAS_KEY = Schema.Auras and Schema.Auras.key or nil
 local ACCESSORIES_KEY = Schema.Accessories and Schema.Accessories.key or nil
 local EQUIPPED_ACCESSORIES_KEY = Schema.EquippedAccessories and Schema.EquippedAccessories.key or nil
 local CRAFTING_MATERIALS_KEY = Schema.CraftingMaterials and Schema.CraftingMaterials.key or nil
+local CRAFTING_PROGRESS_KEY = Schema.CraftingProgress and Schema.CraftingProgress.key or nil
 local POTIONS_KEY = Schema.Potions and Schema.Potions.key or nil
 local EQUIPPED_LOADOUT_KEY = Schema.EquippedLoadout and Schema.EquippedLoadout.key or nil
 local SUCCESSFUL_ROLL_COUNT_KEY = Schema.SuccessfulRollCount and Schema.SuccessfulRollCount.key or nil
@@ -72,6 +78,7 @@ local SELECTED_ROLL_REGION_KEY = Schema.SelectedRollRegion and Schema.SelectedRo
 local QUICK_ROLL_ENABLED_KEY = Schema.QuickRollEnabled and Schema.QuickRollEnabled.key or nil
 local AUTO_EQUIP_BEST_ENABLED_KEY = Schema.AutoEquipBestEnabled and Schema.AutoEquipBestEnabled.key or nil
 local AUTO_SIZE_ENABLED_KEY = Schema.AutoSizeEnabled and Schema.AutoSizeEnabled.key or nil
+local MUSIC_ENABLED_KEY = Schema.MusicEnabled and Schema.MusicEnabled.key or nil
 local AUTO_SELL_RARITIES_KEY = Schema.AutoSellRarities and Schema.AutoSellRarities.key or nil
 local CUTSCENE_RARITIES_KEY = Schema.CutsceneRarities and Schema.CutsceneRarities.key or nil
 
@@ -788,6 +795,37 @@ local function cloneOwnedPotionsState(state: OwnedPotions.OwnedPotionsState?): O
 	}
 end
 
+local function profileLooksPreTutorial(data: any): boolean
+	if typeof(data) ~= "table" then
+		return false
+	end
+
+	if SUCCESSFUL_ROLL_COUNT_KEY and (tonumber(data[SUCCESSFUL_ROLL_COUNT_KEY]) or 0) > 0 then
+		return true
+	end
+	if MONEY_KEY and (tonumber(data[MONEY_KEY]) or 0) > (Schema.Money and Schema.Money.value or 200) then
+		return true
+	end
+	if BODY_PARTS_KEY and OwnedBodyParts.CountOwned(data[BODY_PARTS_KEY]) > 0 then
+		return true
+	end
+	if ACCESSORIES_KEY and OwnedAccessories.CountOwned(data[ACCESSORIES_KEY]) > 0 then
+		return true
+	end
+	if CRAFTING_MATERIALS_KEY and OwnedCraftingMaterials.CountTotal(data[CRAFTING_MATERIALS_KEY]) > 0 then
+		return true
+	end
+	if POTIONS_KEY
+		and typeof(data[POTIONS_KEY]) == "table"
+		and typeof(data[POTIONS_KEY].ownedByPotionId) == "table"
+		and next(data[POTIONS_KEY].ownedByPotionId) ~= nil
+	then
+		return true
+	end
+
+	return false
+end
+
 local function normalizeProfileData(profile: any)
 	if not profile or typeof(profile.Data) ~= "table" then
 		return
@@ -809,6 +847,9 @@ local function normalizeProfileData(profile: any)
 	end
 	if TIME_SHARDS_KEY then
 		data[TIME_SHARDS_KEY] = TimeShardState.Normalize(data[TIME_SHARDS_KEY])
+	end
+	if DAILY_CHESTS_KEY then
+		data[DAILY_CHESTS_KEY] = DailyChestState.Normalize(data[DAILY_CHESTS_KEY])
 	end
 
 	data[LEGACY_OWNED_ROLL_TYPES_KEY] = nil
@@ -833,11 +874,17 @@ local function normalizeProfileData(profile: any)
 	if VIP_OWNED_KEY then
 		data[VIP_OWNED_KEY] = data[VIP_OWNED_KEY] == true
 	end
+	if VIP_PLUS_OWNED_KEY then
+		data[VIP_PLUS_OWNED_KEY] = data[VIP_PLUS_OWNED_KEY] == true
+	end
 	if QUICK_ROLL_ENABLED_KEY then
 		data[QUICK_ROLL_ENABLED_KEY] = data[QUICK_ROLL_ENABLED_KEY] == true
 	end
 	if AUTO_EQUIP_BEST_ENABLED_KEY then
 		data[AUTO_EQUIP_BEST_ENABLED_KEY] = data[AUTO_EQUIP_BEST_ENABLED_KEY] == true
+	end
+	if MUSIC_ENABLED_KEY then
+		data[MUSIC_ENABLED_KEY] = data[MUSIC_ENABLED_KEY] ~= false
 	end
 	if AUTO_SELL_RARITIES_KEY then
 		data[AUTO_SELL_RARITIES_KEY] = RollingConfig.NormalizeAutoSellState(data[AUTO_SELL_RARITIES_KEY])
@@ -863,11 +910,21 @@ local function normalizeProfileData(profile: any)
 	if CRAFTING_MATERIALS_KEY then
 		data[CRAFTING_MATERIALS_KEY] = cloneCraftingMaterialsState(data[CRAFTING_MATERIALS_KEY])
 	end
+	if CRAFTING_PROGRESS_KEY then
+		data[CRAFTING_PROGRESS_KEY] = CraftingProgress.NormalizeState(data[CRAFTING_PROGRESS_KEY])
+	end
 	if POTIONS_KEY then
 		data[POTIONS_KEY] = cloneOwnedPotionsState(data[POTIONS_KEY])
 	end
 	if EQUIPPED_LOADOUT_KEY then
 		data[EQUIPPED_LOADOUT_KEY] = BodyPartLoadout.NormalizeEquippedState(data[EQUIPPED_LOADOUT_KEY])
+	end
+	if TUTORIAL_KEY then
+		local tutorialState = TutorialState.Normalize(data[TUTORIAL_KEY])
+		if tutorialState.completed ~= true and tutorialState.adminReplay ~= true and profileLooksPreTutorial(data) then
+			tutorialState = TutorialState.CreateCompletedState()
+		end
+		data[TUTORIAL_KEY] = tutorialState
 	end
 	if STATS_KEY then
 		data[STATS_KEY] = PlayerStats.Normalize(data[STATS_KEY], {
@@ -1226,6 +1283,29 @@ function DataService:GetCraftingMaterialAmounts(player: Player): { [string]: num
 	return self:GetCraftingMaterialsState(player).amountByMaterialId
 end
 
+function DataService:GetCraftingProgress(player: Player): CraftingProgress.CraftingProgressState
+	if not CRAFTING_PROGRESS_KEY then
+		return CraftingProgress.CreateEmptyState()
+	end
+
+	return CraftingProgress.NormalizeState(self:Get(player, CRAFTING_PROGRESS_KEY))
+end
+
+function DataService:SetCraftingProgress(
+	player: Player,
+	state: CraftingProgress.CraftingProgressState
+): (boolean, string?)
+	if not CRAFTING_PROGRESS_KEY then
+		return false, "Crafting progress persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return false, "Player data is not loaded."
+	end
+
+	self:Set(player, CRAFTING_PROGRESS_KEY, CraftingProgress.NormalizeState(state))
+	return true, nil
+end
+
 function DataService:GetOwnedPotions(player: Player): { [string]: OwnedPotions.OwnedPotionRecord }
 	if not POTIONS_KEY then
 		return {}
@@ -1298,6 +1378,48 @@ end
 
 function DataService:GetTimeShardsBalance(player: Player): number
 	return self:GetTimeShardsState(player).balance
+end
+
+function DataService:GetDailyChestState(player: Player): DailyChestState.DailyChestStateValue
+	if not DAILY_CHESTS_KEY then
+		return DailyChestState.CreateEmptyState()
+	end
+
+	return DailyChestState.Normalize(self:Get(player, DAILY_CHESTS_KEY))
+end
+
+function DataService:SetDailyChestState(player: Player, state: any): DailyChestState.DailyChestStateValue
+	local normalizedState = DailyChestState.Normalize(state)
+	if not DAILY_CHESTS_KEY then
+		return normalizedState
+	end
+	if not getActiveReplica(player) then
+		return normalizedState
+	end
+
+	self:Set(player, DAILY_CHESTS_KEY, normalizedState)
+	return normalizedState
+end
+
+function DataService:GetTutorialState(player: Player): TutorialState.TutorialStateValue
+	if not TUTORIAL_KEY then
+		return TutorialState.CreateCompletedState()
+	end
+
+	return TutorialState.Normalize(self:Get(player, TUTORIAL_KEY))
+end
+
+function DataService:SetTutorialState(player: Player, state: any): TutorialState.TutorialStateValue
+	local normalizedState = TutorialState.Normalize(state)
+	if not TUTORIAL_KEY then
+		return normalizedState
+	end
+	if not getActiveReplica(player) then
+		return normalizedState
+	end
+
+	self:Set(player, TUTORIAL_KEY, normalizedState)
+	return normalizedState
 end
 
 function DataService:AdjustTimeShardsBalance(player: Player, delta: number, _source: string?): number
@@ -1582,6 +1704,26 @@ function DataService:SetAutoSizeEnabled(player: Player, enabled: boolean): (bool
 	return true, "Regular scale updated."
 end
 
+function DataService:GetMusicEnabled(player: Player): boolean
+	if not MUSIC_ENABLED_KEY then
+		return true
+	end
+
+	return self:Get(player, MUSIC_ENABLED_KEY) ~= false
+end
+
+function DataService:SetMusicEnabled(player: Player, enabled: boolean): (boolean, string?)
+	if not MUSIC_ENABLED_KEY then
+		return false, "Music preference persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return false, "Player data is not loaded."
+	end
+
+	self:Set(player, MUSIC_ENABLED_KEY, enabled ~= false)
+	return true, "Music preference updated."
+end
+
 function DataService:GetAutoSellRarities(player: Player): { [string]: boolean }
 	if not AUTO_SELL_RARITIES_KEY then
 		return RollingConfig.CreateDefaultAutoSellState()
@@ -1843,6 +1985,27 @@ function DataService:GetTotalInExistenceForPiece(pieceId: string): (number?, str
 	end
 
 	return BodyPartSerialStore:GetTotalInExistenceForPiece(normalizedPieceId)
+end
+
+function DataService:GetTotalInExistenceForPieces(pieceIds: { string }): ({ [string]: number }?, string?)
+	if typeof(pieceIds) ~= "table" then
+		return nil, "pieceIds must be a table."
+	end
+
+	local normalizedPieceIds = {}
+	local seenPieceIds = {}
+	for _, pieceId in ipairs(pieceIds) do
+		local normalizedPieceId = BodyPartLegacyIds.NormalizePieceId(pieceId)
+		if normalizedPieceId == nil then
+			return nil, "pieceId is required."
+		end
+		if seenPieceIds[normalizedPieceId] ~= true then
+			seenPieceIds[normalizedPieceId] = true
+			table.insert(normalizedPieceIds, normalizedPieceId)
+		end
+	end
+
+	return BodyPartSerialStore:GetTotalInExistenceForPieces(normalizedPieceIds)
 end
 
 function DataService:GetNextSerialForAura(auraId: string): (number?, string?)
@@ -2152,6 +2315,32 @@ function DataService:AddOwnedAccessory(
 	return deepCopy(createdRecord), nil
 end
 
+function DataService:RemoveOwnedAccessory(player: Player, ownedId: string): (OwnedAccessories.OwnedAccessoryRecord?, string?)
+	if not ACCESSORIES_KEY then
+		return nil, "Accessory persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return nil, "Player data is not loaded."
+	end
+	if typeof(ownedId) ~= "string" or ownedId == "" then
+		return nil, "ownedId is required."
+	end
+
+	local accessoriesState = getReplicaValue(player, ACCESSORIES_KEY)
+	local ownedById = if typeof(accessoriesState) == "table" then accessoriesState.ownedById else nil
+	local removedRecord = normalizeOwnedAccessoryRecord(
+		typeof(ownedById) == "table" and ownedById[ownedId] or nil,
+		ownedId
+	)
+	if not removedRecord then
+		return nil, string.format("Owned accessory '%s' was not found.", ownedId)
+	end
+
+	setReplicaPathValue(player, ACCESSORIES_KEY, { "ownedById", ownedId }, nil)
+
+	return deepCopy(removedRecord), nil
+end
+
 function DataService:AddOwnedPotionUses(player: Player, potionId: string, amount: number): (OwnedPotions.OwnedPotionRecord?, string?)
 	if not POTIONS_KEY then
 		return nil, "Potion persistence is not configured."
@@ -2353,6 +2542,31 @@ function DataService:SetCraftingMaterialAmounts(
 		amountByMaterialId = amountByMaterialId,
 	}))
 	return true, "Crafting materials updated."
+end
+
+function DataService:RemoveCraftingMaterialStack(player: Player, materialId: string): (number?, string?)
+	if not CRAFTING_MATERIALS_KEY then
+		return nil, "Crafting material persistence is not configured."
+	end
+	if not getActiveReplica(player) then
+		return nil, "Player data is not loaded."
+	end
+
+	local normalizedMaterialId = CraftingMaterialConfig.NormalizeId(materialId)
+	if not normalizedMaterialId then
+		return nil, "materialId is required."
+	end
+
+	local state = self:GetCraftingMaterialsState(player)
+	local removedAmount = math.max(0, math.floor(tonumber(state.amountByMaterialId[normalizedMaterialId]) or 0))
+	if removedAmount <= 0 then
+		return nil, "You do not own that crafting material."
+	end
+
+	state.amountByMaterialId[normalizedMaterialId] = nil
+	self:Set(player, CRAFTING_MATERIALS_KEY, state)
+
+	return removedAmount, nil
 end
 
 function DataService:SetOwnedBodyPartFavorite(player: Player, ownedId: string, isFavorite: boolean): (OwnedBodyParts.OwnedBodyPartRecord?, string?)

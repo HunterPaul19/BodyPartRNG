@@ -3,12 +3,15 @@ local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 
 local Schema = require(ReplicatedStorage.Lists.Schema)
 local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local CraftingMaterialConfig = require(ReplicatedStorage.Shared.Config.CraftingMaterialConfig)
 local CraftingRecipeConfig = require(ReplicatedStorage.Shared.Config.CraftingRecipeConfig)
+local TutorialConfig = require(ReplicatedStorage.Shared.Config.TutorialConfig)
+local CraftingProgress = require(ReplicatedStorage.Shared.Character.CraftingProgress)
 local BodyPartLoadout = require(ReplicatedStorage.Shared.Character.BodyPartLoadout)
 local OwnedAccessories = require(ReplicatedStorage.Shared.Character.OwnedAccessories)
 local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
@@ -19,6 +22,7 @@ local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelR
 
 local DataController = require(script.Parent.DataController)
 local MerchantPresentationController = require(script.Parent.MerchantPresentationController)
+local ObjectiveGuideController = require(script.Parent.ObjectiveGuideController)
 local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
@@ -27,13 +31,21 @@ local REMOTES_FOLDER_NAME = "Remotes"
 local CRAFTING_FOLDER_NAME = "Crafting"
 local GET_STATE_REMOTE_NAME = "GetCraftingState"
 local CRAFT_RECIPE_REMOTE_NAME = "CraftRecipe"
+local SET_AUTO_CRAFT_RECIPE_REMOTE_NAME = "SetAutoCraftRecipe"
+local ADD_BODY_PART_INGREDIENT_REMOTE_NAME = "AddBodyPartIngredient"
+local ADD_MATERIAL_INGREDIENT_REMOTE_NAME = "AddMaterialIngredient"
+local ADD_ALL_ELIGIBLE_INGREDIENTS_REMOTE_NAME = "AddAllEligibleIngredients"
 local BODY_PARTS_DATA_KEY = Schema.BodyParts and Schema.BodyParts.key or "bodyParts"
 local EQUIPPED_LOADOUT_KEY = Schema.EquippedLoadout and Schema.EquippedLoadout.key or "equippedLoadout"
 local ACCESSORIES_DATA_KEY = Schema.Accessories and Schema.Accessories.key or "accessories"
 local EQUIPPED_ACCESSORIES_DATA_KEY = Schema.EquippedAccessories and Schema.EquippedAccessories.key or "equippedAccessories"
 local CRAFTING_MATERIALS_DATA_KEY = Schema.CraftingMaterials and Schema.CraftingMaterials.key or "craftingMaterials"
+local CRAFTING_PROGRESS_DATA_KEY = Schema.CraftingProgress and Schema.CraftingProgress.key or "craftingProgress"
+local TUTORIAL_DATA_KEY = Schema.Tutorial and Schema.Tutorial.key or "tutorial"
 local MONEY_DATA_KEY = Schema.Money and Schema.Money.key or "money"
 
+local HEAD_FILTER = "HeadAccessory"
+local GEAR_FILTER = "GearAccessory"
 local SELECTED_ROW_TRANSPARENCY = 0
 local DEFAULT_ROW_TRANSPARENCY = 0.16
 local DISABLED_ROW_TRANSPARENCY = 0.45
@@ -41,11 +53,31 @@ local ENABLED_BUTTON_TEXT_TRANSPARENCY = 0
 local DISABLED_BUTTON_TEXT_TRANSPARENCY = 0.35
 local VIEWPORT_ROTATION_SPEED_RADIANS = math.rad(24)
 local ITEM_STAT_ROW_PREFIX = "CraftingItemStat_"
-local ITEM_STAT_TEXT_SIZE_BOOST = 1
+local SELECT_PART_PREFIX = "CraftingSelectPart_"
+local INGREDIENT_ROW_PREFIX = "CraftingIngredient_"
+local AUTO_ON_COLOR = Color3.fromRGB(86, 220, 116)
+local AUTO_OFF_COLOR = Color3.fromRGB(255, 255, 255)
+local SELECT_PART_SELECTED_OUTLINE_COLOR = Color3.fromRGB(116, 192, 255)
+local SELECT_PART_DEFAULT_OUTLINE_COLOR = Color3.fromRGB(255, 255, 255)
+local SELECT_PART_SELECTED_OUTLINE_TRANSPARENCY = 0
+local SELECT_PART_DEFAULT_OUTLINE_TRANSPARENCY = 0.51
+local SELECT_PART_FALLBACK_STROKE_NAME = "CraftingSelectedOutline"
+local AUTO_CRAFT_BACKGROUND_NAMES = {
+	Cover = true,
+	Cover2 = true,
+}
+local HELP_MENU_CLOSE_INPUT_TYPES = {
+	[Enum.UserInputType.MouseButton1] = true,
+	[Enum.UserInputType.Touch] = true,
+}
 
 type CraftingRemotes = {
 	getState: RemoteFunction,
 	craftRecipe: RemoteFunction,
+	setAutoCraftRecipe: RemoteFunction,
+	addBodyPartIngredient: RemoteFunction,
+	addMaterialIngredient: RemoteFunction,
+	addAllEligibleIngredients: RemoteFunction,
 }
 
 type CraftingUi = {
@@ -58,8 +90,33 @@ type CraftingUi = {
 	viewportFrame: ViewportFrame?,
 	requirementList: ScrollingFrame,
 	requirementTemplate: GuiObject,
-	craftButton: GuiButton,
-	craftButtonLabel: TextLabel?,
+	openRecipeButton: GuiButton?,
+	autoCraftButton: GuiButton?,
+	autoCraftLabel: TextLabel?,
+	autoCraftUsage: TextLabel?,
+	accessoriesFilterButton: GuiButton?,
+	gearsFilterButton: GuiButton?,
+	ingredientSelect: GuiObject?,
+	ingredientMain: GuiObject?,
+	ingredientList: ScrollingFrame?,
+	bodyPartIngredientTemplate: GuiObject?,
+	materialIngredientTemplate: GuiObject?,
+	ingredientCraftButton: GuiButton?,
+	ingredientCraftButtonLabel: TextLabel?,
+	addEverythingButton: GuiButton?,
+	ingredientCloseButton: GuiButton?,
+	confirmationFrame: GuiObject?,
+	confirmationCancelButton: GuiButton?,
+	confirmationConfirmButton: GuiButton?,
+	selectPartsFrame: GuiObject?,
+	selectPartsList: ScrollingFrame?,
+	selectPartsTemplate: GuiObject?,
+	selectPartsConfirmButton: GuiButton?,
+	selectPartsCancelButton: GuiButton?,
+	selectPartsCloseButton: GuiButton?,
+	helpButton: GuiButton?,
+	helpMenu: GuiObject?,
+	helpCloseButton: GuiButton?,
 	storeButton: GuiButton?,
 }
 
@@ -70,11 +127,20 @@ local CraftingController = {
 	_promptConnection = nil :: RBXScriptConnection?,
 	_searchConnection = nil :: RBXScriptConnection?,
 	_viewportRotationConnection = nil :: RBXScriptConnection?,
+	_helpMenuCloseConnection = nil :: RBXScriptConnection?,
 	_ui = nil :: CraftingUi?,
 	_remotes = nil :: CraftingRemotes?,
 	_state = nil :: any,
 	_selectedRecipeId = nil :: string?,
+	_selectedFilterSlot = HEAD_FILTER,
 	_recipeRowsById = {} :: { [string]: ImageButton },
+	_selectingIngredientKey = nil :: string?,
+	_selectedPartIds = {} :: { [string]: boolean },
+	_selectedPartOrder = {} :: { string },
+	_maxSelectedParts = 0,
+	_selectPartCardsByOwnedId = {} :: { [string]: any },
+	_materialAmountDrafts = {} :: { [string]: string },
+	_focusedMaterialAmountDraftKey = nil :: string?,
 }
 
 local function showNotification(text: string, tone: string?)
@@ -89,50 +155,14 @@ local function formatWholeNumber(value: any): string
 	return BodyPartPresentation.FormatNumberish(math.max(0, math.floor(tonumber(value) or 0)))
 end
 
-local function buildRecipeItemStatRows(recipe: any): { any }
-	local recipeYield = if typeof(recipe) == "table" then recipe.yield else nil
-	if typeof(recipeYield) ~= "table" or recipeYield.kind ~= "accessory" then
-		return {}
-	end
-
-	return AccessoryPresentation.BuildStatRows(recipeYield.accessoryId)
-end
-
-local function countDictionary(dictionary: any): number
-	if typeof(dictionary) ~= "table" then
-		return 0
-	end
-
-	local count = 0
-	for _ in pairs(dictionary) do
-		count += 1
-	end
-	return count
-end
-
-local function normalizeMaterialAmounts(materials: any): { [string]: number }
-	local source = materials
-	if typeof(source) == "table" and typeof(source.amountByMaterialId) == "table" then
-		source = source.amountByMaterialId
-	end
-
-	local amounts = {}
-	if typeof(source) ~= "table" then
-		return amounts
-	end
-
-	for materialId, amount in pairs(source) do
-		local normalizedId = CraftingMaterialConfig.NormalizeId(materialId)
-		if normalizedId then
-			amounts[normalizedId] = math.max(0, math.floor(tonumber(amount) or 0))
-		end
-	end
-	return amounts
-end
-
 local function getFirstTextLabel(root: Instance, name: string): TextLabel?
 	local label = root:FindFirstChild(name, true)
 	return if label and label:IsA("TextLabel") then label else nil
+end
+
+local function getFirstTextBox(root: Instance, name: string): TextBox?
+	local textBox = root:FindFirstChild(name, true)
+	return if textBox and textBox:IsA("TextBox") then textBox else nil
 end
 
 local function hideGeneratedChildren(container: Instance, prefix: string)
@@ -143,7 +173,11 @@ local function hideGeneratedChildren(container: Instance, prefix: string)
 	end
 end
 
-local function hideNativeTemplates(container: Instance, template: GuiObject)
+local function hideNativeTemplates(container: Instance, template: GuiObject?)
+	if not template then
+		return
+	end
+
 	for _, child in ipairs(container:GetChildren()) do
 		if child.Name == template.Name and child:IsA("GuiObject") then
 			child.Visible = false
@@ -153,6 +187,109 @@ local function hideNativeTemplates(container: Instance, template: GuiObject)
 			end
 		end
 	end
+end
+
+local function setGuiButtonEnabled(button: GuiButton?, enabled: boolean)
+	if not button then
+		return
+	end
+
+	button.Active = enabled
+	button.Selectable = enabled
+	button.AutoButtonColor = false
+
+	local label = button:FindFirstChildWhichIsA("TextLabel")
+	if label then
+		label.TextTransparency = if enabled then ENABLED_BUTTON_TEXT_TRANSPARENCY else DISABLED_BUTTON_TEXT_TRANSPARENCY
+	end
+
+	for _, child in ipairs(button:GetChildren()) do
+		if child:IsA("ImageLabel") then
+			if child.Name == "Rays" then
+				child.ImageTransparency = if enabled then 0 else 0.45
+			else
+				child.ImageTransparency = if enabled then 0 else 0.28
+			end
+		end
+	end
+end
+
+local function setAutoCraftButtonColor(button: GuiButton?, enabled: boolean)
+	if not button then
+		return
+	end
+
+	local color = if enabled then AUTO_ON_COLOR else AUTO_OFF_COLOR
+	if button:IsA("ImageButton") then
+		button.ImageColor3 = color
+	elseif button:IsA("TextButton") then
+		button.BackgroundColor3 = color
+	end
+
+	for _, descendant in ipairs(button:GetDescendants()) do
+		if AUTO_CRAFT_BACKGROUND_NAMES[descendant.Name] then
+			if descendant:IsA("ImageLabel") or descendant:IsA("ImageButton") then
+				descendant.ImageColor3 = color
+			elseif descendant:IsA("Frame") then
+				descendant.BackgroundColor3 = color
+			end
+		end
+	end
+end
+
+local function parsePositiveWholeAmount(text: string?): number
+	local normalized = tostring(text or ""):match("^%s*(.-)%s*$")
+	local parsed = tonumber(normalized)
+	if not parsed or parsed < 1 then
+		return 1
+	end
+	return math.max(1, math.floor(parsed))
+end
+
+local function clampMaterialAmountText(text: string?, maxAmount: number): string
+	if maxAmount <= 0 then
+		return "0"
+	end
+
+	return tostring(math.min(parsePositiveWholeAmount(text), maxAmount))
+end
+
+local function getMaterialAmountDraftKey(recipeId: string, materialId: string): string
+	return string.format("%s:%s", recipeId, materialId)
+end
+
+local function removeFirstValue(values: { string }, value: string)
+	for index, existingValue in ipairs(values) do
+		if existingValue == value then
+			table.remove(values, index)
+			return
+		end
+	end
+end
+
+local function applySelectPartOutline(button: GuiButton, isSelected: boolean)
+	local outline = button:FindFirstChild("Outline")
+	if outline and outline:IsA("ImageLabel") then
+		outline.Visible = true
+		outline.ImageColor3 = if isSelected then SELECT_PART_SELECTED_OUTLINE_COLOR else SELECT_PART_DEFAULT_OUTLINE_COLOR
+		outline.ImageTransparency = if isSelected
+			then SELECT_PART_SELECTED_OUTLINE_TRANSPARENCY
+			else SELECT_PART_DEFAULT_OUTLINE_TRANSPARENCY
+		outline.ZIndex = math.max(outline.ZIndex, button.ZIndex + 3)
+		return
+	end
+
+	local stroke = button:FindFirstChild(SELECT_PART_FALLBACK_STROKE_NAME)
+	if not (stroke and stroke:IsA("UIStroke")) then
+		stroke = Instance.new("UIStroke")
+		stroke.Name = SELECT_PART_FALLBACK_STROKE_NAME
+		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		stroke.Parent = button
+	end
+	stroke.Color = SELECT_PART_SELECTED_OUTLINE_COLOR
+	stroke.Thickness = 3
+	stroke.Transparency = if isSelected then 0 else 1
+	stroke.Enabled = isSelected
 end
 
 local function ensureItemStatLayout(container: TextLabel): UIListLayout
@@ -172,19 +309,6 @@ local function ensureItemStatLayout(container: TextLabel): UIListLayout
 	return layout
 end
 
-local function applyItemStatLabelStyle(source: TextLabel, target: TextLabel, color: Color3)
-	target.BackgroundTransparency = 1
-	target.BorderSizePixel = 0
-	target.FontFace = source.FontFace
-	target.RichText = false
-	target.TextColor3 = color
-	target.TextSize = source.TextSize + ITEM_STAT_TEXT_SIZE_BOOST
-	target.TextTransparency = source.TextTransparency
-	target.TextTruncate = Enum.TextTruncate.AtEnd
-	target.TextWrapped = false
-	target.TextYAlignment = Enum.TextYAlignment.Center
-end
-
 local function clearRecipeItemStatRows(container: TextLabel)
 	container.Text = ""
 	hideGeneratedChildren(container, ITEM_STAT_ROW_PREFIX)
@@ -194,7 +318,7 @@ local function renderRecipeItemStatRows(container: TextLabel, rows: { any })
 	clearRecipeItemStatRows(container)
 	ensureItemStatLayout(container)
 
-	local statTextSize = container.TextSize + ITEM_STAT_TEXT_SIZE_BOOST
+	local statTextSize = container.TextSize + 1
 	local rowHeight = math.max(18, math.ceil(statTextSize + 4))
 	for index, rowData in ipairs(rows) do
 		local row = Instance.new("Frame")
@@ -208,12 +332,61 @@ local function renderRecipeItemStatRows(container: TextLabel, rows: { any })
 
 		local statLabel = Instance.new("TextLabel")
 		statLabel.Name = "Stat"
+		statLabel.BackgroundTransparency = 1
+		statLabel.BorderSizePixel = 0
+		statLabel.FontFace = container.FontFace
+		statLabel.RichText = false
 		statLabel.Position = UDim2.fromOffset(0, 0)
 		statLabel.Size = UDim2.new(1, 0, 1, 0)
 		statLabel.Text = string.format("%s %s", rowData.valueText, rowData.labelText)
+		statLabel.TextColor3 = rowData.color
+		statLabel.TextSize = statTextSize
+		statLabel.TextTransparency = container.TextTransparency
+		statLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		statLabel.TextWrapped = false
 		statLabel.TextXAlignment = Enum.TextXAlignment.Left
-		applyItemStatLabelStyle(container, statLabel, rowData.color)
+		statLabel.TextYAlignment = Enum.TextYAlignment.Center
 		statLabel.Parent = row
+	end
+end
+
+local function buildRecipeItemStatRows(recipe: any): { any }
+	local recipeYield = if typeof(recipe) == "table" then recipe.yield else nil
+	if typeof(recipeYield) ~= "table" or recipeYield.kind ~= "accessory" then
+		return {}
+	end
+
+	return AccessoryPresentation.BuildStatRows(recipeYield.accessoryId)
+end
+
+local function getRecipeCardColor(recipe: any): Color3?
+	local recipeYield = if typeof(recipe) == "table" then recipe.yield else nil
+	if typeof(recipeYield) ~= "table" or recipeYield.kind ~= "accessory" then
+		return nil
+	end
+
+	local config = AccessoryConfig.Get(recipeYield.accessoryId)
+	if not config then
+		return nil
+	end
+
+	return config.recipeCardColor or config.displayColor
+end
+
+local function applyRecipeRowColor(row: ImageButton, color: Color3?)
+	if not color then
+		return
+	end
+
+	row.ImageColor3 = color
+	for _, descendant in ipairs(row:GetDescendants()) do
+		if descendant.Name == "Cover" or descendant.Name == "Cover2" or descendant.Name == "Rays" then
+			if descendant:IsA("ImageLabel") or descendant:IsA("ImageButton") then
+				descendant.ImageColor3 = color
+			elseif descendant:IsA("GuiObject") then
+				descendant.BackgroundColor3 = color
+			end
+		end
 	end
 end
 
@@ -245,32 +418,52 @@ local function cloneRecipeEntries(entries: any): { any }
 	return results
 end
 
-local function getYieldInfo(recipe: any): (string, string, Model?)
+local function getYieldInfo(recipe: any): (string, string, Model?, string?)
 	local recipeYield = if typeof(recipe) == "table" then recipe.yield else nil
 	if typeof(recipeYield) ~= "table" then
-		return tostring(recipe and recipe.label or "Recipe"), "[Recipe]", nil
+		return tostring(recipe and recipe.label or "Recipe"), "[Recipe]", nil, nil
 	end
 
 	if recipeYield.kind == "accessory" then
 		local config = AccessoryConfig.Get(recipeYield.accessoryId)
 		if not config then
-			return tostring(recipe.label or recipe.id or "Accessory"), "[Accessory]", nil
+			return tostring(recipe.label or recipe.id or "Accessory"), "[Accessory]", nil, nil
 		end
 
-		local slotText = if config.slot == "HeadAccessory" then "[Head]" else "[Gear]"
-		return config.label, slotText, AccessoryPresentation.GetPlaceholderModel(config)
+		local slotText = if config.slot == HEAD_FILTER then "[Head]" else "[Gear]"
+		return config.label, slotText, AccessoryPresentation.GetPlaceholderModel(config), config.slot
 	end
 
 	if recipeYield.kind == "bodyPart" and typeof(recipeYield.bodyPartGrant) == "table" then
 		local piece = BodyPartsCatalog.GetPiece(recipeYield.bodyPartGrant.pieceId)
 		if not piece then
-			return tostring(recipe.label or recipe.id or "Body Part"), "[Body Part]", nil
+			return tostring(recipe.label or recipe.id or "Body Part"), "[Body Part]", nil, nil
 		end
 
-		return piece.displayName, "[Body Part]", BodyPartsCatalog.ResolveBundleModel(piece.id)
+		return piece.displayName, "[Body Part]", BodyPartsCatalog.ResolveBundleModel(piece.id), nil
 	end
 
-	return tostring(recipe.label or recipe.id or "Recipe"), "[Recipe]", nil
+	return tostring(recipe.label or recipe.id or "Recipe"), "[Recipe]", nil, nil
+end
+
+local function normalizeMaterialAmounts(materials: any): { [string]: number }
+	local source = materials
+	if typeof(source) == "table" and typeof(source.amountByMaterialId) == "table" then
+		source = source.amountByMaterialId
+	end
+
+	local amounts = {}
+	if typeof(source) ~= "table" then
+		return amounts
+	end
+
+	for materialId, amount in pairs(source) do
+		local normalizedId = CraftingMaterialConfig.NormalizeId(materialId)
+		if normalizedId then
+			amounts[normalizedId] = math.max(0, math.floor(tonumber(amount) or 0))
+		end
+	end
+	return amounts
 end
 
 local function isBodyPartEquipped(equippedLoadout: any, ownedId: string): boolean
@@ -284,90 +477,6 @@ local function isBodyPartEquipped(equippedLoadout: any, ownedId: string): boolea
 		end
 	end
 	return false
-end
-
-local function getBodyPartSortValue(record: any): (number, number, number, string)
-	local rarity = math.max(1, tonumber(record and record.rarityDenominator) or math.huge)
-	local income = math.max(0, tonumber(record and record.finalPassiveIncomePerSecond) or 0)
-	local serial = math.max(0, tonumber(record and record.serialNumber) or 0)
-	local ownedId = tostring(record and record.ownedId or "")
-	return rarity, income, serial, ownedId
-end
-
-local function sortBodyPartIngredients(left: any, right: any): boolean
-	local leftRarity, leftIncome, leftSerial, leftId = getBodyPartSortValue(left)
-	local rightRarity, rightIncome, rightSerial, rightId = getBodyPartSortValue(right)
-	if leftRarity ~= rightRarity then
-		return leftRarity < rightRarity
-	end
-	if leftIncome ~= rightIncome then
-		return leftIncome < rightIncome
-	end
-	if leftSerial ~= rightSerial then
-		return leftSerial < rightSerial
-	end
-	return leftId < rightId
-end
-
-local function getBodyPartIngredientAmount(ingredient: any): number
-	return math.max(1, math.floor(tonumber(ingredient and ingredient.amount) or 1))
-end
-
-local function getBodyPartIngredientKey(ingredient: any): string
-	if typeof(ingredient) ~= "table" then
-		return "unknown"
-	end
-	if typeof(ingredient.pieceId) == "string" and ingredient.pieceId ~= "" then
-		return "piece:" .. ingredient.pieceId
-	end
-	if typeof(ingredient.setId) == "string" and ingredient.setId ~= "" then
-		if typeof(ingredient.region) == "string" and ingredient.region ~= "" then
-			return string.format("set:%s:%s", ingredient.setId, ingredient.region)
-		end
-		return "set:" .. ingredient.setId
-	end
-	return "unknown"
-end
-
-local function getBodyPartRequirementSpecificity(requirement: any): number
-	if typeof(requirement) ~= "table" then
-		return 0
-	end
-	if typeof(requirement.pieceId) == "string" and requirement.pieceId ~= "" then
-		return 3
-	end
-	if typeof(requirement.setId) == "string" and requirement.setId ~= "" and typeof(requirement.region) == "string" and requirement.region ~= "" then
-		return 2
-	end
-	if typeof(requirement.setId) == "string" and requirement.setId ~= "" then
-		return 1
-	end
-	return 0
-end
-
-local function buildExpandedBodyPartRequirements(recipe: any): { any }
-	local requirements = {}
-	for _, ingredient in ipairs(if typeof(recipe) == "table" and typeof(recipe.bodyParts) == "table" then recipe.bodyParts else {}) do
-		for _ = 1, getBodyPartIngredientAmount(ingredient) do
-			table.insert(requirements, {
-				pieceId = ingredient.pieceId,
-				setId = ingredient.setId,
-				region = ingredient.region,
-				amount = 1,
-			})
-		end
-	end
-
-	table.sort(requirements, function(left, right)
-		local leftSpecificity = getBodyPartRequirementSpecificity(left)
-		local rightSpecificity = getBodyPartRequirementSpecificity(right)
-		if leftSpecificity ~= rightSpecificity then
-			return leftSpecificity > rightSpecificity
-		end
-		return getBodyPartIngredientKey(left) < getBodyPartIngredientKey(right)
-	end)
-
-	return requirements
 end
 
 local function bodyPartRecordMatchesIngredient(record: any, ingredient: any): boolean
@@ -413,34 +522,34 @@ local function getBodyPartIngredientLabel(ingredient: any): string
 	return "Body Part"
 end
 
-local function getBodyPartIngredientSetConfig(ingredient: any): any?
-	if typeof(ingredient) ~= "table" or typeof(ingredient.setId) ~= "string" or ingredient.setId == "" then
-		return nil
+local function sortBodyPartIngredients(left: any, right: any): boolean
+	local leftRarity = math.max(1, tonumber(left and left.rarityDenominator) or math.huge)
+	local rightRarity = math.max(1, tonumber(right and right.rarityDenominator) or math.huge)
+	if leftRarity ~= rightRarity then
+		return leftRarity < rightRarity
 	end
-
-	return BodyPartsCatalog.GetSet(ingredient.setId)
+	local leftIncome = math.max(0, tonumber(left and left.finalPassiveIncomePerSecond) or 0)
+	local rightIncome = math.max(0, tonumber(right and right.finalPassiveIncomePerSecond) or 0)
+	if leftIncome ~= rightIncome then
+		return leftIncome < rightIncome
+	end
+	return tostring(left and left.ownedId or "") < tostring(right and right.ownedId or "")
 end
 
-local function applySetRollDisplayStyle(label: TextLabel, setConfig: any?)
-	local rollDisplay = if typeof(setConfig) == "table" then setConfig.rollDisplay else nil
-	if typeof(rollDisplay) ~= "table" then
-		return
+local function countDictionary(dictionary: any): number
+	if typeof(dictionary) ~= "table" then
+		return 0
 	end
 
-	if typeof(rollDisplay.color) == "Color3" then
-		label.TextColor3 = rollDisplay.color
+	local count = 0
+	for _ in pairs(dictionary) do
+		count += 1
 	end
+	return count
+end
 
-	local fontFace = rollDisplay.fontFace
-	if typeof(fontFace) ~= "Font" then
-		return
-	end
-
-	if typeof(rollDisplay.fontWeight) == "EnumItem" then
-		label.FontFace = Font.new(fontFace.Family, rollDisplay.fontWeight, fontFace.Style)
-	else
-		label.FontFace = fontFace
-	end
+local function getRecordPassiveIncome(record: any, piece: any): number
+	return math.max(0, tonumber(record and record.finalPassiveIncomePerSecond) or tonumber(piece and piece.passiveIncomePerSecond) or 0)
 end
 
 function CraftingController:_getPlayerGui(): PlayerGui
@@ -484,6 +593,30 @@ function CraftingController:_getMaterialAmounts(): { [string]: number }
 	return normalizeMaterialAmounts(DataController:Get(CRAFTING_MATERIALS_DATA_KEY))
 end
 
+function CraftingController:_getCraftingProgress()
+	local state = self._state
+	if typeof(state) == "table" and typeof(state.craftingProgress) == "table" then
+		return CraftingProgress.NormalizeState(state.craftingProgress)
+	end
+
+	return CraftingProgress.NormalizeState(DataController:Get(CRAFTING_PROGRESS_DATA_KEY))
+end
+
+function CraftingController:_getRecipeProgress(recipeId: string)
+	return CraftingProgress.GetRecipeProgress(self:_getCraftingProgress(), recipeId)
+end
+
+function CraftingController:_shouldWaiveTutorialCraftCost(recipe: any): boolean
+	if typeof(recipe) ~= "table" or recipe.id ~= TutorialConfig.TargetRecipeId then
+		return false
+	end
+
+	local tutorialState = DataController:Get(TUTORIAL_DATA_KEY)
+	return typeof(tutorialState) == "table"
+		and tutorialState.completed ~= true
+		and tutorialState.stepId == TutorialConfig.Steps.CraftHolidayCrown
+end
+
 function CraftingController:_getMoney(): number
 	local state = self._state
 	if typeof(state) == "table" and state.money ~= nil then
@@ -516,6 +649,20 @@ function CraftingController:_findRecipe(recipeId: string?): any?
 	return nil
 end
 
+function CraftingController:_findBodyPartIngredient(recipe: any, ingredientKey: string?): any?
+	if typeof(recipe) ~= "table" or typeof(ingredientKey) ~= "string" then
+		return nil
+	end
+
+	for _, ingredient in ipairs(if typeof(recipe.bodyParts) == "table" then recipe.bodyParts else {}) do
+		if CraftingProgress.GetBodyPartIngredientKey(ingredient) == ingredientKey then
+			return ingredient
+		end
+	end
+
+	return nil
+end
+
 function CraftingController:_getEligibleBodyPartsForIngredient(ingredient: any): { any }
 	local ownedBodyParts = self:_getOwnedBodyParts()
 	local equippedLoadout = self:_getEquippedLoadout()
@@ -535,76 +682,56 @@ function CraftingController:_getEligibleBodyPartsForIngredient(ingredient: any):
 	return eligible
 end
 
-function CraftingController:_buildAutoPickedBodyPartIds(recipe: any): ({ string }, { [string]: number })
-	local pickedIds = {}
-	local availableCounts = {}
-	local reservedByOwnedId = {}
-
-	for _, ingredient in ipairs(if typeof(recipe.bodyParts) == "table" then recipe.bodyParts else {}) do
-		availableCounts[getBodyPartIngredientKey(ingredient)] = #(self:_getEligibleBodyPartsForIngredient(ingredient))
+function CraftingController:_getCraftability(recipe: any): (boolean, string)
+	if typeof(recipe) ~= "table" then
+		return false, "Select a recipe."
 	end
 
-	for _, requirement in ipairs(buildExpandedBodyPartRequirements(recipe)) do
-		for _, record in ipairs(self:_getEligibleBodyPartsForIngredient(requirement)) do
-			local ownedId = record.ownedId
-			if ownedId and not reservedByOwnedId[ownedId] then
-				reservedByOwnedId[ownedId] = true
-				table.insert(pickedIds, ownedId)
-				break
-			end
+	local recipeProgress = self:_getRecipeProgress(recipe.id)
+	for _, ingredient in ipairs(if typeof(recipe.bodyParts) == "table" then recipe.bodyParts else {}) do
+		local ingredientKey = CraftingProgress.GetBodyPartIngredientKey(ingredient)
+		local requiredAmount = math.max(1, math.floor(tonumber(ingredient.amount) or 1))
+		if (recipeProgress.bodyPartsByIngredientKey[ingredientKey] or 0) < requiredAmount then
+			return false, "Missing body part ingredients."
 		end
 	end
 
-	return pickedIds, availableCounts
-end
-
-function CraftingController:_getCraftability(recipe: any): (boolean, string, { string }, { [string]: number })
-	if typeof(recipe) ~= "table" then
-		return false, "Select a recipe.", {}, {}
-	end
-
-	local pickedIds, bodyPartCounts = self:_buildAutoPickedBodyPartIds(recipe)
-	local requiredBodyPartCount = #buildExpandedBodyPartRequirements(recipe)
-	if #pickedIds < requiredBodyPartCount then
-		return false, "Missing body part ingredients.", pickedIds, bodyPartCounts
-	end
-
-	local materialAmounts = self:_getMaterialAmounts()
 	for _, ingredient in ipairs(if typeof(recipe.materials) == "table" then recipe.materials else {}) do
 		local materialId = tostring(ingredient.materialId or "")
 		local requiredAmount = math.max(1, math.floor(tonumber(ingredient.amount) or 1))
-		if (materialAmounts[materialId] or 0) < requiredAmount then
-			return false, "Missing crafting materials.", pickedIds, bodyPartCounts
+		if (recipeProgress.materialsByMaterialId[materialId] or 0) < requiredAmount then
+			return false, "Missing crafting materials."
 		end
 	end
 
-	local moneyCost = math.max(0, math.floor(tonumber(recipe.moneyCost) or 0))
+	local moneyCost = if self:_shouldWaiveTutorialCraftCost(recipe)
+		then 0
+		else math.max(0, math.floor(tonumber(recipe.moneyCost) or 0))
 	if self:_getMoney() < moneyCost then
-		return false, "Not enough money.", pickedIds, bodyPartCounts
+		return false, "Not enough money."
 	end
 
 	local recipeYield = recipe.yield
 	if typeof(recipeYield) ~= "table" then
-		return false, "Recipe yield is invalid.", pickedIds, bodyPartCounts
+		return false, "Recipe yield is invalid."
 	end
 
 	if recipeYield.kind == "accessory" then
 		if not AccessoryConfig.Get(recipeYield.accessoryId) then
-			return false, "Recipe yield is invalid.", pickedIds, bodyPartCounts
+			return false, "Recipe yield is invalid."
 		end
 		if countDictionary(self:_getOwnedAccessories()) >= OwnedAccessories.MAX_OWNED_COUNT then
-			return false, "Accessory inventory is full.", pickedIds, bodyPartCounts
+			return false, "Accessory inventory is full."
 		end
 	elseif recipeYield.kind == "bodyPart" then
-		local projectedCount = countDictionary(self:_getOwnedBodyParts()) - requiredBodyPartCount + 1
-		if projectedCount > OwnedBodyParts.MAX_OWNED_COUNT then
-			return false, "Body part inventory is full.", pickedIds, bodyPartCounts
+		if countDictionary(self:_getOwnedBodyParts()) + 1 > OwnedBodyParts.MAX_OWNED_COUNT then
+			return false, "Body part inventory is full."
 		end
 	else
-		return false, "Recipe yield is invalid.", pickedIds, bodyPartCounts
+		return false, "Recipe yield is invalid."
 	end
 
-	return true, "Ready to craft.", pickedIds, bodyPartCounts
+	return true, "Ready to craft."
 end
 
 function CraftingController:_ensureUi(): CraftingUi
@@ -628,6 +755,10 @@ function CraftingController:_ensureUi(): CraftingUi
 
 	local recipeTemplate = recipeList:FindFirstChild("Template")
 	assert(recipeTemplate and recipeTemplate:IsA("ImageButton"), "CraftingMenu.ItemSelect.ScrollingFrame.Template is missing.")
+
+	local sortButtons = itemSelect:FindFirstChild("SortButtons")
+	local accessoriesFilterButton = sortButtons and sortButtons:FindFirstChild("Accessories")
+	local gearsFilterButton = sortButtons and sortButtons:FindFirstChild("Gears")
 
 	local recipeRoot = root:WaitForChild("Recipe", 30)
 	assert(recipeRoot and recipeRoot:IsA("Frame"), "CraftingMenu.Recipe is missing.")
@@ -654,9 +785,35 @@ function CraftingController:_ensureUi(): CraftingUi
 	local requirementTemplate = requirementList:FindFirstChild("Template")
 	assert(requirementTemplate and requirementTemplate:IsA("GuiObject"), "CraftingMenu.Recipe.Frame.RecipeList.Template is missing.")
 
-	local craftButton = recipeRoot:WaitForChild("CraftButton", 30)
-	assert(craftButton and craftButton:IsA("GuiButton"), "CraftingMenu.Recipe.CraftButton is missing.")
+	local ingredientSelect = root:FindFirstChild("IngredientSelect")
+	local ingredientMain = ingredientSelect and ingredientSelect:FindFirstChild("Main")
+	local ingredientList = ingredientMain and ingredientMain:FindFirstChild("ScrollingFrame")
+	local bodyPartIngredientTemplate = ingredientList and ingredientList:FindFirstChild("Basic")
+	local materialIngredientTemplate = ingredientList and ingredientList:FindFirstChild("Clean")
+	local ingredientCraftButton = ingredientMain and ingredientMain:FindFirstChild("CraftButton")
+	local addEverythingButton = ingredientMain and ingredientMain:FindFirstChild("AddEverythingButton")
+	local ingredientTopbar = ingredientMain and ingredientMain:FindFirstChild("Topbar")
+	local ingredientCloseButton = ingredientTopbar and ingredientTopbar:FindFirstChild("CloseButton")
+	local confirmationFrame = ingredientSelect and ingredientSelect:FindFirstChild("Confirmation")
+	local confirmationCancelButton = confirmationFrame and confirmationFrame:FindFirstChild("AddEverythingButton")
+	local confirmationConfirmButton = confirmationFrame and confirmationFrame:FindFirstChild("CraftButton")
+	local selectPartsFrame = ingredientSelect and ingredientSelect:FindFirstChild("SelectParts")
+	local selectPartsList = selectPartsFrame and selectPartsFrame:FindFirstChild("ScrollingFrame")
+	local selectPartsTemplate = selectPartsList and selectPartsList:FindFirstChild("Template")
+	local selectPartsConfirmButton = selectPartsFrame and selectPartsFrame:FindFirstChild("ConfirmButton")
+	local selectPartsCancelButton = selectPartsFrame and selectPartsFrame:FindFirstChild("CancelButton")
+	local selectPartsTopbar = selectPartsFrame and selectPartsFrame:FindFirstChild("Topbar")
+	local selectPartsCloseButton = selectPartsTopbar and selectPartsTopbar:FindFirstChild("CloseButton")
+	local helpButton = root:FindFirstChild("HelpButton") or root:FindFirstChild("HelpButton", true)
+	local helpMenu = root:FindFirstChild("HelpMenu")
+	local helpTopbar = helpMenu and helpMenu:FindFirstChild("Topbar")
+	local helpCloseButton = if helpTopbar then helpTopbar:FindFirstChild("CloseButton") else nil
+	if not helpCloseButton and helpMenu then
+		helpCloseButton = helpMenu:FindFirstChild("CloseButton", true)
+	end
 
+	local openRecipeButton = recipeRoot:FindFirstChild("OpenRecipe")
+	local autoCraftButton = recipeRoot:FindFirstChild("AutoCraft")
 	local storeButton = recipeRoot:FindFirstChild("Store")
 
 	self._ui = {
@@ -669,13 +826,58 @@ function CraftingController:_ensureUi(): CraftingUi
 		viewportFrame = viewportFrame :: ViewportFrame?,
 		requirementList = requirementList,
 		requirementTemplate = requirementTemplate,
-		craftButton = craftButton,
-		craftButtonLabel = craftButton:FindFirstChildWhichIsA("TextLabel"),
+		openRecipeButton = if openRecipeButton and openRecipeButton:IsA("GuiButton") then openRecipeButton else nil,
+		autoCraftButton = if autoCraftButton and autoCraftButton:IsA("GuiButton") then autoCraftButton else nil,
+		autoCraftLabel = if autoCraftButton then autoCraftButton:FindFirstChildWhichIsA("TextLabel") else nil,
+		autoCraftUsage = if autoCraftButton then getFirstTextLabel(autoCraftButton, "Usage") else nil,
+		accessoriesFilterButton = if accessoriesFilterButton and accessoriesFilterButton:IsA("GuiButton")
+			then accessoriesFilterButton
+			else nil,
+		gearsFilterButton = if gearsFilterButton and gearsFilterButton:IsA("GuiButton") then gearsFilterButton else nil,
+		ingredientSelect = if ingredientSelect and ingredientSelect:IsA("GuiObject") then ingredientSelect else nil,
+		ingredientMain = if ingredientMain and ingredientMain:IsA("GuiObject") then ingredientMain else nil,
+		ingredientList = if ingredientList and ingredientList:IsA("ScrollingFrame") then ingredientList else nil,
+		bodyPartIngredientTemplate = if bodyPartIngredientTemplate and bodyPartIngredientTemplate:IsA("GuiObject")
+			then bodyPartIngredientTemplate
+			else nil,
+		materialIngredientTemplate = if materialIngredientTemplate and materialIngredientTemplate:IsA("GuiObject")
+			then materialIngredientTemplate
+			else nil,
+		ingredientCraftButton = if ingredientCraftButton and ingredientCraftButton:IsA("GuiButton") then ingredientCraftButton else nil,
+		ingredientCraftButtonLabel = if ingredientCraftButton then ingredientCraftButton:FindFirstChildWhichIsA("TextLabel") else nil,
+		addEverythingButton = if addEverythingButton and addEverythingButton:IsA("GuiButton") then addEverythingButton else nil,
+		ingredientCloseButton = if ingredientCloseButton and ingredientCloseButton:IsA("GuiButton") then ingredientCloseButton else nil,
+		confirmationFrame = if confirmationFrame and confirmationFrame:IsA("GuiObject") then confirmationFrame else nil,
+		confirmationCancelButton = if confirmationCancelButton and confirmationCancelButton:IsA("GuiButton")
+			then confirmationCancelButton
+			else nil,
+		confirmationConfirmButton = if confirmationConfirmButton and confirmationConfirmButton:IsA("GuiButton")
+			then confirmationConfirmButton
+			else nil,
+		selectPartsFrame = if selectPartsFrame and selectPartsFrame:IsA("GuiObject") then selectPartsFrame else nil,
+		selectPartsList = if selectPartsList and selectPartsList:IsA("ScrollingFrame") then selectPartsList else nil,
+		selectPartsTemplate = if selectPartsTemplate and selectPartsTemplate:IsA("GuiObject") then selectPartsTemplate else nil,
+		selectPartsConfirmButton = if selectPartsConfirmButton and selectPartsConfirmButton:IsA("GuiButton")
+			then selectPartsConfirmButton
+			else nil,
+		selectPartsCancelButton = if selectPartsCancelButton and selectPartsCancelButton:IsA("GuiButton")
+			then selectPartsCancelButton
+			else nil,
+		selectPartsCloseButton = if selectPartsCloseButton and selectPartsCloseButton:IsA("GuiButton")
+			then selectPartsCloseButton
+			else nil,
+		helpButton = if helpButton and helpButton:IsA("GuiButton") then helpButton else nil,
+		helpMenu = if helpMenu and helpMenu:IsA("GuiObject") then helpMenu else nil,
+		helpCloseButton = if helpCloseButton and helpCloseButton:IsA("GuiButton") then helpCloseButton else nil,
 		storeButton = if storeButton and storeButton:IsA("GuiButton") then storeButton else nil,
 	}
 
 	hideNativeTemplates(recipeList, recipeTemplate)
 	hideNativeTemplates(requirementList, requirementTemplate)
+	hideNativeTemplates(self._ui.ingredientList or recipeList, self._ui.bodyPartIngredientTemplate)
+	hideNativeTemplates(self._ui.ingredientList or recipeList, self._ui.materialIngredientTemplate)
+	hideNativeTemplates(self._ui.selectPartsList or recipeList, self._ui.selectPartsTemplate)
+	self:_hideIngredientPanels()
 
 	if self._ui.itemDescription then
 		self._ui.itemDescription.RichText = false
@@ -689,9 +891,76 @@ function CraftingController:_ensureUi(): CraftingUi
 		self._ui.storeButton.Active = false
 	end
 
-	UIController:CreateButton(craftButton, function()
-		self:_craftSelectedRecipe()
-	end)
+	if self._ui.openRecipeButton then
+		UIController:CreateButton(self._ui.openRecipeButton, function()
+			self:_openIngredientSelect()
+		end)
+	end
+	if self._ui.autoCraftButton then
+		UIController:CreateButton(self._ui.autoCraftButton, function()
+			self:_toggleAutoCraftSelectedRecipe()
+		end)
+	end
+	if self._ui.ingredientCraftButton then
+		UIController:CreateButton(self._ui.ingredientCraftButton, function()
+			self:_craftSelectedRecipe()
+		end)
+	end
+	if self._ui.addEverythingButton then
+		UIController:CreateButton(self._ui.addEverythingButton, function()
+			self:_showAddEverythingConfirmation()
+		end)
+	end
+	if self._ui.helpButton then
+		UIController:CreateButton(self._ui.helpButton, function()
+			self:_showHelpMenu()
+		end)
+	end
+	if self._ui.helpCloseButton then
+		UIController:CreateButton(self._ui.helpCloseButton, function()
+			self:_hideHelpMenu()
+		end)
+	end
+	if self._ui.ingredientCloseButton then
+		UIController:CreateButton(self._ui.ingredientCloseButton, function()
+			self:_hideIngredientPanels()
+		end)
+	end
+	if self._ui.confirmationCancelButton then
+		UIController:CreateButton(self._ui.confirmationCancelButton, function()
+			self:_hideConfirmation()
+		end)
+	end
+	if self._ui.confirmationConfirmButton then
+		UIController:CreateButton(self._ui.confirmationConfirmButton, function()
+			self:_confirmAddEverything()
+		end)
+	end
+	if self._ui.selectPartsCancelButton then
+		UIController:CreateButton(self._ui.selectPartsCancelButton, function()
+			self:_hideSelectParts()
+		end)
+	end
+	if self._ui.selectPartsCloseButton then
+		UIController:CreateButton(self._ui.selectPartsCloseButton, function()
+			self:_hideSelectParts()
+		end)
+	end
+	if self._ui.selectPartsConfirmButton then
+		UIController:CreateButton(self._ui.selectPartsConfirmButton, function()
+			self:_confirmSelectedParts()
+		end)
+	end
+	if self._ui.accessoriesFilterButton then
+		UIController:CreateButton(self._ui.accessoriesFilterButton, function()
+			self:_setRecipeFilter(HEAD_FILTER)
+		end)
+	end
+	if self._ui.gearsFilterButton then
+		UIController:CreateButton(self._ui.gearsFilterButton, function()
+			self:_setRecipeFilter(GEAR_FILTER)
+		end)
+	end
 
 	if self._ui.searchBox then
 		self._searchConnection = self._ui.searchBox:GetPropertyChangedSignal("Text"):Connect(function()
@@ -705,7 +974,14 @@ function CraftingController:_ensureUi(): CraftingUi
 end
 
 function CraftingController:_ensureRemotes(): boolean
-	if self._remotes and self._remotes.getState and self._remotes.craftRecipe then
+	if self._remotes
+		and self._remotes.getState
+		and self._remotes.craftRecipe
+		and self._remotes.setAutoCraftRecipe
+		and self._remotes.addBodyPartIngredient
+		and self._remotes.addMaterialIngredient
+		and self._remotes.addAllEligibleIngredients
+	then
 		return true
 	end
 
@@ -721,16 +997,36 @@ function CraftingController:_ensureRemotes(): boolean
 
 	local getState = craftingFolder:FindFirstChild(GET_STATE_REMOTE_NAME)
 	local craftRecipe = craftingFolder:FindFirstChild(CRAFT_RECIPE_REMOTE_NAME)
+	local setAutoCraftRecipe = craftingFolder:FindFirstChild(SET_AUTO_CRAFT_RECIPE_REMOTE_NAME)
+	local addBodyPartIngredient = craftingFolder:FindFirstChild(ADD_BODY_PART_INGREDIENT_REMOTE_NAME)
+	local addMaterialIngredient = craftingFolder:FindFirstChild(ADD_MATERIAL_INGREDIENT_REMOTE_NAME)
+	local addAllEligibleIngredients = craftingFolder:FindFirstChild(ADD_ALL_ELIGIBLE_INGREDIENTS_REMOTE_NAME)
 	if not (getState and getState:IsA("RemoteFunction")) then
 		return false
 	end
 	if not (craftRecipe and craftRecipe:IsA("RemoteFunction")) then
 		return false
 	end
+	if not (setAutoCraftRecipe and setAutoCraftRecipe:IsA("RemoteFunction")) then
+		return false
+	end
+	if not (addBodyPartIngredient and addBodyPartIngredient:IsA("RemoteFunction")) then
+		return false
+	end
+	if not (addMaterialIngredient and addMaterialIngredient:IsA("RemoteFunction")) then
+		return false
+	end
+	if not (addAllEligibleIngredients and addAllEligibleIngredients:IsA("RemoteFunction")) then
+		return false
+	end
 
 	self._remotes = {
 		getState = getState,
 		craftRecipe = craftRecipe,
+		setAutoCraftRecipe = setAutoCraftRecipe,
+		addBodyPartIngredient = addBodyPartIngredient,
+		addMaterialIngredient = addMaterialIngredient,
+		addAllEligibleIngredients = addAllEligibleIngredients,
 	}
 	return true
 end
@@ -766,32 +1062,30 @@ function CraftingController:_hydrateStateFromData(key: string?)
 			state.ownedBodyParts = bodyPartsState.ownedById
 		end
 	end
-
 	if key == nil or key == ACCESSORIES_DATA_KEY then
 		local accessoryState = DataController:Get(ACCESSORIES_DATA_KEY)
 		if typeof(accessoryState) == "table" and typeof(accessoryState.ownedById) == "table" then
 			state.ownedAccessories = accessoryState.ownedById
 		end
 	end
-
 	if key == nil or key == EQUIPPED_ACCESSORIES_DATA_KEY then
 		local equippedAccessories = DataController:Get(EQUIPPED_ACCESSORIES_DATA_KEY)
 		if typeof(equippedAccessories) == "table" then
 			state.equippedAccessories = equippedAccessories
 		end
 	end
-
 	if key == nil or key == CRAFTING_MATERIALS_DATA_KEY then
 		local craftingMaterials = DataController:Get(CRAFTING_MATERIALS_DATA_KEY)
 		if typeof(craftingMaterials) == "table" and typeof(craftingMaterials.amountByMaterialId) == "table" then
 			state.craftingMaterials = craftingMaterials.amountByMaterialId
 		end
 	end
-
+	if key == nil or key == CRAFTING_PROGRESS_DATA_KEY then
+		state.craftingProgress = CraftingProgress.NormalizeState(DataController:Get(CRAFTING_PROGRESS_DATA_KEY))
+	end
 	if key == nil or key == MONEY_DATA_KEY then
 		state.money = math.max(0, math.floor(tonumber(DataController:Get(MONEY_DATA_KEY)) or 0))
 	end
-
 	if state.recipes == nil then
 		state.recipes = CraftingRecipeConfig.GetAll()
 	end
@@ -823,6 +1117,18 @@ function CraftingController:_requestCraftingState(showFailureMessage: boolean?):
 	return result.ok == true
 end
 
+function CraftingController:_setRecipeFilter(slot: string?)
+	self._selectedFilterSlot = slot
+	self:_hideIngredientPanels()
+	self:_syncFilterButtons()
+	self:_syncRecipeRows()
+end
+
+function CraftingController:_syncFilterButtons()
+	-- Filter button colors are authored in Studio. Keep this hook so filter
+	-- sync call sites stay simple without tinting the configured visuals.
+end
+
 function CraftingController:_recipeMatchesSearch(recipe: any, query: string): boolean
 	if query == "" then
 		return true
@@ -848,41 +1154,28 @@ function CraftingController:_recipeMatchesSearch(recipe: any, query: string): bo
 	return string.find(string.lower(table.concat(searchableParts, " ")), query, 1, true) ~= nil
 end
 
+function CraftingController:_recipeMatchesFilter(recipe: any): boolean
+	if self._selectedFilterSlot == nil then
+		return true
+	end
+
+	local recipeYield = typeof(recipe) == "table" and recipe.yield or nil
+	if typeof(recipeYield) ~= "table" or recipeYield.kind ~= "accessory" then
+		return false
+	end
+
+	local config = AccessoryConfig.Get(recipeYield.accessoryId)
+	return config ~= nil and config.slot == self._selectedFilterSlot
+end
+
 function CraftingController:_selectRecipe(recipeId: string?)
+	local changed = self._selectedRecipeId ~= recipeId
 	self._selectedRecipeId = recipeId
+	if changed then
+		self:_hideIngredientPanels()
+	end
 	self:_syncDetail()
 	self:_refreshRecipeRowStates()
-end
-
-function CraftingController:_setCraftButtonEnabled(enabled: boolean)
-	local ui = self:_ensureUi()
-	ui.craftButton.Active = enabled
-	ui.craftButton.Selectable = enabled
-	ui.craftButton.AutoButtonColor = false
-
-	if ui.craftButtonLabel then
-		ui.craftButtonLabel.TextTransparency = if enabled then ENABLED_BUTTON_TEXT_TRANSPARENCY else DISABLED_BUTTON_TEXT_TRANSPARENCY
-	end
-
-	for _, child in ipairs(ui.craftButton:GetChildren()) do
-		if child:IsA("ImageLabel") then
-			if child.Name == "Rays" then
-				child.ImageTransparency = if enabled then 0 else 0.45
-			else
-				child.ImageTransparency = if enabled then 0 else 0.28
-			end
-		end
-	end
-end
-
-function CraftingController:_setCraftButtonText(recipe: any?)
-	local ui = self:_ensureUi()
-	if not ui.craftButtonLabel then
-		return
-	end
-
-	local moneyCost = if typeof(recipe) == "table" then math.max(0, math.floor(tonumber(recipe.moneyCost) or 0)) else 0
-	ui.craftButtonLabel.Text = if moneyCost > 0 then string.format("Craft ($%s)", formatWholeNumber(moneyCost)) else "Craft"
 end
 
 function CraftingController:_refreshRecipeRowStates()
@@ -918,15 +1211,13 @@ function CraftingController:_syncRecipeRows()
 
 	local visibleRecipes = {}
 	for _, recipe in ipairs(self:_getRecipes()) do
-		if self:_recipeMatchesSearch(recipe, query) then
+		if self:_recipeMatchesFilter(recipe) and self:_recipeMatchesSearch(recipe, query) then
 			table.insert(visibleRecipes, recipe)
 		end
 	end
 
 	local selectedStillVisible = false
-	local firstCraftableRecipe = nil
 	local firstVisibleRecipe = nil
-
 	for index, recipe in ipairs(visibleRecipes) do
 		local row = ui.recipeTemplate:Clone()
 		row.Name = "CraftingRecipe_" .. recipe.id
@@ -934,6 +1225,7 @@ function CraftingController:_syncRecipeRows()
 		row.Visible = true
 		row.Active = true
 		row.AutoButtonColor = false
+		applyRecipeRowColor(row, getRecipeCardColor(recipe))
 
 		local yieldLabel, typeLabel = getYieldInfo(recipe)
 		local nameLabel = getFirstTextLabel(row, "AccessoryName")
@@ -960,15 +1252,11 @@ function CraftingController:_syncRecipeRows()
 		if recipe.id == self._selectedRecipeId then
 			selectedStillVisible = true
 		end
-		local canCraft = self:_getCraftability(recipe)
-		if canCraft and firstCraftableRecipe == nil then
-			firstCraftableRecipe = recipe
-		end
 	end
 
 	if not selectedStillVisible then
-		local nextRecipe = firstCraftableRecipe or firstVisibleRecipe
-		self._selectedRecipeId = if nextRecipe then nextRecipe.id else nil
+		self._selectedRecipeId = if firstVisibleRecipe then firstVisibleRecipe.id else nil
+		self:_hideIngredientPanels()
 	end
 
 	self:_refreshRecipeRowStates()
@@ -1026,24 +1314,15 @@ function CraftingController:_renderYieldViewport(recipe: any)
 	end
 end
 
-function CraftingController:_addRequirementRow(
-	labelText: string,
-	ownedAmount: number,
-	requiredAmount: number,
-	layoutOrder: number,
-	setConfig: any?
-)
+function CraftingController:_addRequirementRow(labelText: string, ownedAmount: number, requiredAmount: number, layoutOrder: number)
 	local ui = self:_ensureUi()
 	local row = ui.requirementTemplate:Clone()
-	row.Name = string.format("CraftingIngredient_%03d", layoutOrder)
+	row.Name = string.format("%s%03d", INGREDIENT_ROW_PREFIX, layoutOrder)
 	row.LayoutOrder = layoutOrder
 	row.Visible = true
 
 	local label = getFirstTextLabel(row, "MaterialName")
 	if label then
-		if setConfig then
-			applySetRollDisplayStyle(label, setConfig)
-		end
 		label.Text = labelText
 	end
 
@@ -1055,36 +1334,68 @@ function CraftingController:_addRequirementRow(
 	row.Parent = ui.requirementList
 end
 
-function CraftingController:_syncRequirements(recipe: any, bodyPartCounts: { [string]: number })
+function CraftingController:_syncRequirements(recipe: any)
 	local ui = self:_ensureUi()
-	hideGeneratedChildren(ui.requirementList, "CraftingIngredient_")
+	hideGeneratedChildren(ui.requirementList, INGREDIENT_ROW_PREFIX)
 	hideNativeTemplates(ui.requirementList, ui.requirementTemplate)
 
+	if typeof(recipe) ~= "table" then
+		return
+	end
+
+	local recipeProgress = self:_getRecipeProgress(recipe.id)
 	local layoutOrder = 1
 	for _, ingredient in ipairs(if typeof(recipe.bodyParts) == "table" then recipe.bodyParts else {}) do
 		local requiredAmount = math.max(1, math.floor(tonumber(ingredient.amount) or 1))
+		local ingredientKey = CraftingProgress.GetBodyPartIngredientKey(ingredient)
 		self:_addRequirementRow(
 			getBodyPartIngredientLabel(ingredient),
-			bodyPartCounts[getBodyPartIngredientKey(ingredient)] or 0,
+			recipeProgress.bodyPartsByIngredientKey[ingredientKey] or 0,
 			requiredAmount,
-			layoutOrder,
-			getBodyPartIngredientSetConfig(ingredient)
+			layoutOrder
 		)
 		layoutOrder += 1
 	end
 
-	local materialAmounts = self:_getMaterialAmounts()
 	for _, ingredient in ipairs(if typeof(recipe.materials) == "table" then recipe.materials else {}) do
 		local material = CraftingMaterialConfig.Get(ingredient.materialId)
 		local requiredAmount = math.max(1, math.floor(tonumber(ingredient.amount) or 1))
 		self:_addRequirementRow(
 			if material then material.label else tostring(ingredient.materialId or "Material"),
-			materialAmounts[ingredient.materialId] or 0,
+			recipeProgress.materialsByMaterialId[ingredient.materialId] or 0,
 			requiredAmount,
-			layoutOrder,
-			nil
+			layoutOrder
 		)
 		layoutOrder += 1
+	end
+end
+
+function CraftingController:_setCraftButtonText(recipe: any?)
+	local ui = self:_ensureUi()
+	local label = ui.ingredientCraftButtonLabel
+	if not label then
+		return
+	end
+
+	local moneyCost = if typeof(recipe) == "table" and not self:_shouldWaiveTutorialCraftCost(recipe)
+		then math.max(0, math.floor(tonumber(recipe.moneyCost) or 0))
+		else 0
+	label.Text = if moneyCost > 0 then string.format("Craft ($%s)", formatWholeNumber(moneyCost)) else "Craft"
+end
+
+function CraftingController:_syncAutoCraftButton(recipe: any?)
+	local ui = self:_ensureUi()
+	local enabled = false
+	if typeof(recipe) == "table" then
+		enabled = self:_getCraftingProgress().autoRecipeIds[recipe.id] == true
+	end
+
+	setAutoCraftButtonColor(ui.autoCraftButton, enabled)
+	if ui.autoCraftUsage then
+		ui.autoCraftUsage.Text = string.format(
+			"<b>Auto Craft [%s]</b> <br /> This item will automatically take matching rolled body parts before auto sell. When it is ready, visit Crafting and press Craft.",
+			if enabled then "ON" else "OFF"
+		)
 	end
 end
 
@@ -1097,31 +1408,696 @@ function CraftingController:_syncDetail()
 			renderRecipeItemStatRows(ui.itemDescription, {})
 		end
 		self:_setCraftButtonText(nil)
-		hideGeneratedChildren(ui.requirementList, "CraftingIngredient_")
-		hideNativeTemplates(ui.requirementList, ui.requirementTemplate)
+		self:_syncRequirements(nil)
+		self:_syncAutoCraftButton(nil)
 		if ui.viewportFrame then
 			self:_stopViewportRotation()
 			ViewportModelRenderer.Clear(ui.viewportFrame)
 			ui.viewportFrame.Visible = false
 		end
-		self:_setCraftButtonEnabled(false)
+		setGuiButtonEnabled(ui.ingredientCraftButton, false)
 		return
 	end
 
 	local yieldLabel = getYieldInfo(recipe)
-	local canCraft, _, _, bodyPartCounts = self:_getCraftability(recipe)
+	local canCraft = self:_getCraftability(recipe)
 	ui.itemName.Text = yieldLabel
 	if ui.itemDescription then
 		renderRecipeItemStatRows(ui.itemDescription, buildRecipeItemStatRows(recipe))
 	end
 	self:_setCraftButtonText(recipe)
-	self:_syncRequirements(recipe, bodyPartCounts)
+	self:_syncRequirements(recipe)
 	self:_renderYieldViewport(recipe)
-	self:_setCraftButtonEnabled(canCraft and not self._requestInFlight)
+	self:_syncAutoCraftButton(recipe)
+	setGuiButtonEnabled(ui.ingredientCraftButton, canCraft and not self._requestInFlight)
+	if ui.ingredientSelect and ui.ingredientSelect.Visible then
+		self:_syncIngredientSelect()
+	end
 end
 
-function CraftingController:_syncUi()
-	self:_syncRecipeRows()
+function CraftingController:GetTutorialTarget(targetId: string): GuiObject?
+	local ok = pcall(function()
+		self:_ensureUi()
+	end)
+	if not ok or not self._ui or self._ui.root.Visible ~= true then
+		return nil
+	end
+
+	if targetId == "accessoriesFilter" then
+		local button = self._ui.accessoriesFilterButton
+		return if button and button.Visible == true and button.Active == true then button else nil
+	end
+	if targetId == "holidayCrownRecipe" then
+		self:_syncRecipeRows()
+		local row = self._recipeRowsById["holiday_crown"]
+		if row and row:IsA("GuiButton") and row.Visible == true and row.Active == true then
+			self:_scrollTutorialRecipeIntoView(row)
+			return row
+		end
+		return nil
+	end
+	if targetId == "autoCraft" then
+		if self._selectedRecipeId ~= "holiday_crown" then
+			return nil
+		end
+		local button = self._ui.autoCraftButton
+		return if button and button.Visible == true and button.Active == true then button else nil
+	end
+	if targetId == "craftButton" then
+		if self._selectedRecipeId ~= "holiday_crown" then
+			return nil
+		end
+		local button = self._ui.ingredientCraftButton
+		return if button and button.Visible == true and button.Active == true then button else nil
+	end
+
+	return nil
+end
+
+function CraftingController:_scrollTutorialRecipeIntoView(row: GuiObject)
+	local ui = self._ui
+	local recipeList = ui and ui.recipeList
+	if not (recipeList and row:IsDescendantOf(recipeList)) then
+		return
+	end
+
+	local viewTop = recipeList.AbsolutePosition.Y
+	local viewBottom = viewTop + recipeList.AbsoluteSize.Y
+	local rowTop = row.AbsolutePosition.Y
+	local rowBottom = rowTop + row.AbsoluteSize.Y
+	local deltaY = 0
+	if rowTop < viewTop then
+		deltaY = rowTop - viewTop
+	elseif rowBottom > viewBottom then
+		deltaY = rowBottom - viewBottom
+	end
+
+	if math.abs(deltaY) < 1 then
+		return
+	end
+
+	local current = recipeList.CanvasPosition
+	recipeList.CanvasPosition = Vector2.new(current.X, math.max(0, current.Y + deltaY))
+end
+
+function CraftingController:_hideConfirmation()
+	local ui = self:_ensureUi()
+	if ui.confirmationFrame then
+		ui.confirmationFrame.Visible = false
+	end
+	if
+		ui.ingredientSelect
+		and ui.ingredientSelect.Visible
+		and ui.ingredientMain
+		and not (ui.selectPartsFrame and ui.selectPartsFrame.Visible)
+		and not (ui.helpMenu and ui.helpMenu.Visible)
+	then
+		ui.ingredientMain.Visible = true
+	end
+end
+
+function CraftingController:_disconnectHelpMenuCloseListener()
+	if self._helpMenuCloseConnection then
+		self._helpMenuCloseConnection:Disconnect()
+		self._helpMenuCloseConnection = nil
+	end
+end
+
+function CraftingController:_bindHelpMenuCloseListener()
+	self:_disconnectHelpMenuCloseListener()
+	self._helpMenuCloseConnection = UserInputService.InputBegan:Connect(function(input: InputObject)
+		if not HELP_MENU_CLOSE_INPUT_TYPES[input.UserInputType] then
+			return
+		end
+
+		local ui = self._ui
+		if not self._isOpen or not ui or not ui.helpMenu or not ui.helpMenu.Visible then
+			self:_disconnectHelpMenuCloseListener()
+			return
+		end
+
+		self:_hideHelpMenu()
+	end)
+end
+
+function CraftingController:_hideHelpMenu()
+	self:_disconnectHelpMenuCloseListener()
+	local ui = self:_ensureUi()
+	if ui.helpMenu then
+		ui.helpMenu.Visible = false
+	end
+end
+
+function CraftingController:_showHelpMenu()
+	local ui = self:_ensureUi()
+	if not ui.helpMenu then
+		showNotification("Crafting help is not ready right now.")
+		return
+	end
+
+	if ui.ingredientSelect then
+		ui.ingredientSelect.Visible = false
+	end
+	if ui.ingredientMain then
+		ui.ingredientMain.Visible = false
+	end
+	if ui.confirmationFrame then
+		ui.confirmationFrame.Visible = false
+	end
+	if ui.selectPartsFrame then
+		ui.selectPartsFrame.Visible = false
+	end
+	if ui.selectPartsList then
+		hideGeneratedChildren(ui.selectPartsList, SELECT_PART_PREFIX)
+		hideNativeTemplates(ui.selectPartsList, ui.selectPartsTemplate)
+	end
+	self._selectingIngredientKey = nil
+	self._selectedPartIds = {}
+	self._selectedPartOrder = {}
+	self._maxSelectedParts = 0
+	self._selectPartCardsByOwnedId = {}
+	self._materialAmountDrafts = {}
+	self._focusedMaterialAmountDraftKey = nil
+	ui.helpMenu.Visible = true
+	self:_bindHelpMenuCloseListener()
+end
+
+function CraftingController:_hideSelectParts()
+	local ui = self:_ensureUi()
+	if ui.selectPartsFrame then
+		ui.selectPartsFrame.Visible = false
+	end
+	if ui.helpMenu then
+		ui.helpMenu.Visible = false
+	end
+	if ui.selectPartsList then
+		hideGeneratedChildren(ui.selectPartsList, SELECT_PART_PREFIX)
+		hideNativeTemplates(ui.selectPartsList, ui.selectPartsTemplate)
+	end
+	self._selectingIngredientKey = nil
+	self._selectedPartIds = {}
+	self._selectedPartOrder = {}
+	self._maxSelectedParts = 0
+	self._selectPartCardsByOwnedId = {}
+	if ui.ingredientSelect and ui.ingredientSelect.Visible and ui.ingredientMain then
+		ui.ingredientMain.Visible = true
+		self:_syncIngredientSelect()
+	end
+end
+
+function CraftingController:_hideIngredientPanels()
+	local ui = self._ui
+	if not ui then
+		self._materialAmountDrafts = {}
+		self._focusedMaterialAmountDraftKey = nil
+		return
+	end
+	if ui.ingredientSelect then
+		ui.ingredientSelect.Visible = false
+	end
+	if ui.helpMenu then
+		ui.helpMenu.Visible = false
+	end
+	if ui.ingredientMain then
+		ui.ingredientMain.Visible = false
+	end
+	if ui.confirmationFrame then
+		ui.confirmationFrame.Visible = false
+	end
+	if ui.selectPartsFrame then
+		ui.selectPartsFrame.Visible = false
+	end
+	if ui.selectPartsList then
+		hideGeneratedChildren(ui.selectPartsList, SELECT_PART_PREFIX)
+		hideNativeTemplates(ui.selectPartsList, ui.selectPartsTemplate)
+	end
+	self._selectingIngredientKey = nil
+	self._selectedPartIds = {}
+	self._selectedPartOrder = {}
+	self._maxSelectedParts = 0
+	self._selectPartCardsByOwnedId = {}
+	self._materialAmountDrafts = {}
+	self._focusedMaterialAmountDraftKey = nil
+end
+
+function CraftingController:_openIngredientSelect()
+	local ui = self:_ensureUi()
+	if not self:_findRecipe(self._selectedRecipeId) then
+		showNotification("Select a recipe first.")
+		return
+	end
+	if ui.ingredientSelect then
+		ui.ingredientSelect.Visible = true
+	end
+	if ui.ingredientMain then
+		ui.ingredientMain.Visible = true
+	end
+	self:_hideHelpMenu()
+	self:_hideConfirmation()
+	self:_hideSelectParts()
+	self:_syncIngredientSelect()
+end
+
+function CraftingController:_addBodyPartIngredientRow(recipe: any, ingredient: any, layoutOrder: number)
+	local ui = self:_ensureUi()
+	if not ui.ingredientList or not ui.bodyPartIngredientTemplate then
+		return
+	end
+
+	local row = ui.bodyPartIngredientTemplate:Clone()
+	row.Name = string.format("%sBody_%03d", INGREDIENT_ROW_PREFIX, layoutOrder)
+	row.LayoutOrder = layoutOrder
+	row.Visible = true
+
+	local ingredientKey = CraftingProgress.GetBodyPartIngredientKey(ingredient)
+	local requiredAmount = math.max(1, math.floor(tonumber(ingredient.amount) or 1))
+	local currentAmount = self:_getRecipeProgress(recipe.id).bodyPartsByIngredientKey[ingredientKey] or 0
+	local label = getFirstTextLabel(row, "AuraName") or getFirstTextLabel(row, "MaterialName")
+	if label then
+		label.Text = getBodyPartIngredientLabel(ingredient)
+	end
+	local countLabel = getFirstTextLabel(row, "Content") or getFirstTextLabel(row, "MaterialCount")
+	if countLabel then
+		countLabel.Text = string.format("%s/%s", formatWholeNumber(currentAmount), formatWholeNumber(requiredAmount))
+	end
+
+	local selectButton = row:FindFirstChild("Disabled", true)
+	if selectButton and selectButton:IsA("GuiButton") then
+		local missingAmount = math.max(0, requiredAmount - currentAmount)
+		selectButton.Visible = true
+		selectButton.Active = missingAmount > 0
+		UIController:CreateButton(selectButton, function()
+			self:_openSelectParts(ingredientKey)
+		end)
+	end
+	local enabledButton = row:FindFirstChild("Enabled", true)
+	if enabledButton and enabledButton:IsA("GuiObject") then
+		enabledButton.Visible = false
+	end
+	row.Parent = ui.ingredientList
+end
+
+function CraftingController:_addMaterialIngredientRow(recipe: any, ingredient: any, layoutOrder: number)
+	local ui = self:_ensureUi()
+	if not ui.ingredientList or not ui.materialIngredientTemplate then
+		return
+	end
+
+	local row = ui.materialIngredientTemplate:Clone()
+	row.Name = string.format("%sMaterial_%03d", INGREDIENT_ROW_PREFIX, layoutOrder)
+	row.LayoutOrder = layoutOrder
+	row.Visible = true
+
+	local material = CraftingMaterialConfig.Get(ingredient.materialId)
+	local materialId = tostring(ingredient.materialId or "")
+	local requiredAmount = math.max(1, math.floor(tonumber(ingredient.amount) or 1))
+	local currentAmount = self:_getRecipeProgress(recipe.id).materialsByMaterialId[materialId] or 0
+	local missingAmount = math.max(0, requiredAmount - currentAmount)
+	local ownedAmount = self:_getMaterialAmounts()[materialId] or 0
+	local materialLabel = if material then material.label else tostring(ingredient.materialId or "Material")
+	local label = getFirstTextLabel(row, "AuraName") or getFirstTextLabel(row, "MaterialName")
+	if label then
+		label.Text = string.format("%s - %s owned", materialLabel, formatWholeNumber(ownedAmount))
+	end
+	local countLabel = getFirstTextLabel(row, "Content") or getFirstTextLabel(row, "MaterialCount")
+	if countLabel then
+		countLabel.Text = string.format("%s/%s", formatWholeNumber(currentAmount), formatWholeNumber(requiredAmount))
+	end
+
+	local amountBox = getFirstTextBox(row, "AmountBox")
+	local draftKey = getMaterialAmountDraftKey(tostring(recipe.id), materialId)
+	if amountBox then
+		local draftText = self._materialAmountDrafts[draftKey]
+		if draftText == nil then
+			draftText = if missingAmount > 0 then "1" else "0"
+			self._materialAmountDrafts[draftKey] = draftText
+		end
+		amountBox.Text = draftText
+		amountBox:GetPropertyChangedSignal("Text"):Connect(function()
+			self._materialAmountDrafts[draftKey] = amountBox.Text
+		end)
+		amountBox.Focused:Connect(function()
+			self._focusedMaterialAmountDraftKey = draftKey
+		end)
+		amountBox.FocusLost:Connect(function()
+			local normalizedText = clampMaterialAmountText(amountBox.Text, missingAmount)
+			self._materialAmountDrafts[draftKey] = normalizedText
+			amountBox.Text = normalizedText
+			if self._focusedMaterialAmountDraftKey == draftKey then
+				self._focusedMaterialAmountDraftKey = nil
+			end
+		end)
+	end
+
+	local addButton = row:FindFirstChild("AddButton", true)
+	if addButton and addButton:IsA("GuiButton") then
+		UIController:CreateButton(addButton, function()
+			if missingAmount <= 0 then
+				showNotification("This material is already filled.")
+				return
+			end
+
+			if amountBox then
+				amountBox:ReleaseFocus()
+			end
+			if self._focusedMaterialAmountDraftKey == draftKey then
+				self._focusedMaterialAmountDraftKey = nil
+			end
+
+			local normalizedText = clampMaterialAmountText(if amountBox then amountBox.Text else self._materialAmountDrafts[draftKey], missingAmount)
+			local commitAmount = math.max(0, tonumber(normalizedText) or 0)
+			if amountBox then
+				amountBox.Text = normalizedText
+			end
+			self._materialAmountDrafts[draftKey] = normalizedText
+			self:_addMaterialIngredient(materialId, commitAmount)
+		end)
+	end
+	row.Parent = ui.ingredientList
+end
+
+function CraftingController:_syncIngredientSelect()
+	local ui = self:_ensureUi()
+	local recipe = self:_findRecipe(self._selectedRecipeId)
+	if not recipe or not ui.ingredientList then
+		return
+	end
+
+	if self._focusedMaterialAmountDraftKey ~= nil then
+		local canCraft = self:_getCraftability(recipe)
+		setGuiButtonEnabled(ui.ingredientCraftButton, canCraft and not self._requestInFlight)
+		return
+	end
+
+	hideGeneratedChildren(ui.ingredientList, INGREDIENT_ROW_PREFIX)
+	hideNativeTemplates(ui.ingredientList, ui.bodyPartIngredientTemplate)
+	hideNativeTemplates(ui.ingredientList, ui.materialIngredientTemplate)
+
+	local layoutOrder = 1
+	for _, ingredient in ipairs(if typeof(recipe.bodyParts) == "table" then recipe.bodyParts else {}) do
+		self:_addBodyPartIngredientRow(recipe, ingredient, layoutOrder)
+		layoutOrder += 1
+	end
+	for _, ingredient in ipairs(if typeof(recipe.materials) == "table" then recipe.materials else {}) do
+		self:_addMaterialIngredientRow(recipe, ingredient, layoutOrder)
+		layoutOrder += 1
+	end
+
+	local canCraft = self:_getCraftability(recipe)
+	setGuiButtonEnabled(ui.ingredientCraftButton, canCraft and not self._requestInFlight)
+end
+
+function CraftingController:_buildBodyPartCardPayload(record: any): any?
+	local piece = record and record.pieceId and BodyPartsCatalog.GetPiece(record.pieceId)
+	if not piece then
+		return nil
+	end
+
+	local setConfig = BodyPartsCatalog.GetSetForPiece(piece.id)
+	local rarityStyle = BodyPartPresentation.ResolveBodyPartRarityStyle({
+		record = record,
+		piece = piece,
+		setConfig = setConfig,
+	}) or {}
+
+	return {
+		nameText = BodyPartPresentation.FormatInventoryNameText(piece.displayName, record),
+		usageText = string.format("$%s/s", formatWholeNumber(getRecordPassiveIncome(record, piece))),
+		bundleModel = BodyPartsCatalog.ResolveBundleModel(piece.id),
+		region = piece.region,
+		previewScale = record.sizeMultiplier or 1,
+		appearanceUserId = LOCAL_PLAYER and LOCAL_PLAYER.UserId or nil,
+		applyPlayerClothing = setConfig == nil or setConfig.applyPlayerClothing ~= false,
+		applyPlayerBodyColors = setConfig == nil or setConfig.applyPlayerBodyColors ~= false,
+		favoriteVisible = record.isFavorite == true,
+		equippedVisible = isBodyPartEquipped(self:_getEquippedLoadout(), record.ownedId),
+		cardAccentColor = rarityStyle.accentColor,
+		baseFillColor = rarityStyle.baseFillColor,
+		selectedFillColor = rarityStyle.selectedFillColor,
+	}
+end
+
+function CraftingController:_populateSelectPartCard(frame: GuiObject, record: any)
+	local button = frame:FindFirstChild("Base")
+	if not (button and button:IsA("ImageButton")) then
+		return
+	end
+
+	local payload = self:_buildBodyPartCardPayload(record)
+	if not payload then
+		return
+	end
+	local isSelected = self._selectedPartIds[record.ownedId] == true
+	payload.isSelected = isSelected
+	BodyPartPresentation.PopulateBundleCard(button, payload)
+	applySelectPartOutline(button, isSelected)
+end
+
+function CraftingController:_refreshSelectPartCard(ownedId: string)
+	local card = self._selectPartCardsByOwnedId[ownedId]
+	if typeof(card) ~= "table" then
+		return
+	end
+	if card.frame and card.frame.Parent and card.record then
+		self:_populateSelectPartCard(card.frame, card.record)
+	end
+end
+
+function CraftingController:_setSelectedPart(ownedId: string, isSelected: boolean)
+	if isSelected then
+		if self._selectedPartIds[ownedId] == true then
+			return
+		end
+
+		while self._maxSelectedParts > 0 and #self._selectedPartOrder >= self._maxSelectedParts do
+			local removedOwnedId = table.remove(self._selectedPartOrder, 1)
+			if removedOwnedId then
+				self._selectedPartIds[removedOwnedId] = nil
+				self:_refreshSelectPartCard(removedOwnedId)
+			else
+				break
+			end
+		end
+
+		self._selectedPartIds[ownedId] = true
+		table.insert(self._selectedPartOrder, ownedId)
+	else
+		self._selectedPartIds[ownedId] = nil
+		removeFirstValue(self._selectedPartOrder, ownedId)
+	end
+
+	self:_refreshSelectPartCard(ownedId)
+end
+
+function CraftingController:_openSelectParts(ingredientKey: string)
+	local ui = self:_ensureUi()
+	local recipe = self:_findRecipe(self._selectedRecipeId)
+	local ingredient = self:_findBodyPartIngredient(recipe, ingredientKey)
+	if not recipe or not ingredient or not ui.selectPartsFrame or not ui.selectPartsList or not ui.selectPartsTemplate then
+		return
+	end
+
+	local eligible = self:_getEligibleBodyPartsForIngredient(ingredient)
+	if #eligible == 0 then
+		showNotification("No eligible parts for this ingredient.")
+		return
+	end
+
+	local requiredAmount = math.max(1, math.floor(tonumber(ingredient.amount) or 1))
+	local currentAmount = self:_getRecipeProgress(recipe.id).bodyPartsByIngredientKey[ingredientKey] or 0
+	local maxSelectedParts = math.max(0, requiredAmount - currentAmount)
+	if maxSelectedParts <= 0 then
+		showNotification("That ingredient is already full.")
+		return
+	end
+
+	self._selectingIngredientKey = ingredientKey
+	self._selectedPartIds = {}
+	self._selectedPartOrder = {}
+	self._maxSelectedParts = maxSelectedParts
+	self._selectPartCardsByOwnedId = {}
+	if ui.ingredientMain then
+		ui.ingredientMain.Visible = false
+	end
+	ui.selectPartsFrame.Visible = true
+	self:_hideConfirmation()
+
+	hideGeneratedChildren(ui.selectPartsList, SELECT_PART_PREFIX)
+	hideNativeTemplates(ui.selectPartsList, ui.selectPartsTemplate)
+
+	for index, record in ipairs(eligible) do
+		local frame = ui.selectPartsTemplate:Clone()
+		frame.Name = string.format("%s%03d", SELECT_PART_PREFIX, index)
+		frame.LayoutOrder = index
+		frame.Visible = true
+		frame.Parent = ui.selectPartsList
+		self._selectPartCardsByOwnedId[record.ownedId] = {
+			frame = frame,
+			record = record,
+		}
+		self:_populateSelectPartCard(frame, record)
+
+		local button = frame:FindFirstChild("Base")
+		if button and button:IsA("GuiButton") then
+			UIController:CreateButton(button, function()
+				self:_setSelectedPart(record.ownedId, self._selectedPartIds[record.ownedId] ~= true)
+			end)
+		end
+	end
+end
+
+function CraftingController:_collectSelectedPartIds(): { string }
+	local selectedIds = {}
+	for _, ownedId in ipairs(self._selectedPartOrder) do
+		if self._selectedPartIds[ownedId] == true then
+			table.insert(selectedIds, ownedId)
+		end
+	end
+	return selectedIds
+end
+
+function CraftingController:_handleMutationResult(result: any, fallbackFailure: string)
+	self._requestInFlight = false
+	if typeof(result) ~= "table" then
+		showNotification(fallbackFailure)
+		self:_requestCraftingState(false)
+		self:_syncUi()
+		return
+	end
+
+	self:_applyState(result.state)
+	self:_syncUi()
+	if result.ok == true then
+		showNotification(tostring(result.message or "Updated crafting."), "good")
+	else
+		showNotification(tostring(result.message or fallbackFailure))
+	end
+end
+
+function CraftingController:_confirmSelectedParts()
+	if self._requestInFlight then
+		return
+	end
+	if not self:_ensureRemotes() then
+		showNotification("Crafting is not ready right now.")
+		return
+	end
+
+	local recipe = self:_findRecipe(self._selectedRecipeId)
+	if not recipe or not self._selectingIngredientKey then
+		showNotification("Select an ingredient first.")
+		return
+	end
+
+	local selectedIds = self:_collectSelectedPartIds()
+	if #selectedIds == 0 then
+		showNotification("Select at least one body part.")
+		return
+	end
+
+	self._requestInFlight = true
+	local result = self:_invokeRemote(self._remotes.addBodyPartIngredient, {
+		recipeId = recipe.id,
+		ingredientKey = self._selectingIngredientKey,
+		bodyPartOwnedIds = selectedIds,
+	})
+	self:_hideSelectParts()
+	self:_handleMutationResult(result, "Could not add body parts.")
+end
+
+function CraftingController:_addMaterialIngredient(materialId: string, amount: number)
+	if self._requestInFlight then
+		return
+	end
+	if not self:_ensureRemotes() then
+		showNotification("Crafting is not ready right now.")
+		return
+	end
+
+	local recipe = self:_findRecipe(self._selectedRecipeId)
+	if not recipe then
+		showNotification("Select a recipe first.")
+		return
+	end
+
+	local draftKey = getMaterialAmountDraftKey(tostring(recipe.id), tostring(materialId))
+	self._requestInFlight = true
+	local result = self:_invokeRemote(self._remotes.addMaterialIngredient, {
+		recipeId = recipe.id,
+		materialId = materialId,
+		amount = amount,
+	})
+	if typeof(result) == "table" and result.ok == true then
+		self._materialAmountDrafts[draftKey] = nil
+	end
+	self:_handleMutationResult(result, "Could not add material.")
+end
+
+function CraftingController:_showAddEverythingConfirmation()
+	local ui = self:_ensureUi()
+	if not self:_findRecipe(self._selectedRecipeId) then
+		showNotification("Select a recipe first.")
+		return
+	end
+	if ui.ingredientMain then
+		ui.ingredientMain.Visible = false
+	end
+	if ui.helpMenu then
+		ui.helpMenu.Visible = false
+	end
+	if ui.confirmationFrame then
+		ui.confirmationFrame.Visible = true
+	end
+	if ui.selectPartsFrame then
+		ui.selectPartsFrame.Visible = false
+	end
+end
+
+function CraftingController:_confirmAddEverything()
+	if self._requestInFlight then
+		return
+	end
+	if not self:_ensureRemotes() then
+		showNotification("Crafting is not ready right now.")
+		return
+	end
+
+	local recipe = self:_findRecipe(self._selectedRecipeId)
+	if not recipe then
+		showNotification("Select a recipe first.")
+		return
+	end
+
+	self._requestInFlight = true
+	local result = self:_invokeRemote(self._remotes.addAllEligibleIngredients, {
+		recipeId = recipe.id,
+	})
+	self:_hideConfirmation()
+	self:_handleMutationResult(result, "Could not add ingredients.")
+end
+
+function CraftingController:_toggleAutoCraftSelectedRecipe()
+	if self._requestInFlight then
+		return
+	end
+	if not self:_ensureRemotes() then
+		showNotification("Crafting is not ready right now.")
+		return
+	end
+
+	local recipe = self:_findRecipe(self._selectedRecipeId)
+	if not recipe then
+		showNotification("Select a recipe first.")
+		return
+	end
+
+	local enabled = self:_getCraftingProgress().autoRecipeIds[recipe.id] ~= true
+	self._requestInFlight = true
+	local result = self:_invokeRemote(self._remotes.setAutoCraftRecipe, {
+		recipeId = recipe.id,
+		enabled = enabled,
+	})
+	self:_handleMutationResult(result, "Could not update auto craft.")
 end
 
 function CraftingController:_craftSelectedRecipe()
@@ -1134,7 +2110,7 @@ function CraftingController:_craftSelectedRecipe()
 	end
 
 	local recipe = self:_findRecipe(self._selectedRecipeId)
-	local canCraft, reason, bodyPartOwnedIds = self:_getCraftability(recipe)
+	local canCraft, reason = self:_getCraftability(recipe)
 	if not canCraft then
 		showNotification(reason)
 		self:_syncDetail()
@@ -1146,27 +2122,14 @@ function CraftingController:_craftSelectedRecipe()
 
 	local result = self:_invokeRemote(self._remotes.craftRecipe, {
 		recipeId = recipe.id,
-		bodyPartOwnedIds = bodyPartOwnedIds,
 	})
 
-	self._requestInFlight = false
+	self:_handleMutationResult(result, "The craft could not be completed.")
+end
 
-	if typeof(result) ~= "table" then
-		showNotification("The craft could not be completed.")
-		self:_requestCraftingState(false)
-		self:_syncUi()
-		return
-	end
-
-	self:_applyState(result.state)
-	self._selectedRecipeId = recipe.id
-	self:_syncUi()
-
-	if result.ok == true then
-		showNotification(tostring(result.message or "Crafted item."), "good")
-	else
-		showNotification(tostring(result.message or "The craft could not be completed."))
-	end
+function CraftingController:_syncUi()
+	self:_syncFilterButtons()
+	self:_syncRecipeRows()
 end
 
 function CraftingController:_openCraftingMenu(prompt: ProximityPrompt)
@@ -1193,6 +2156,7 @@ function CraftingController:_openCraftingMenu(prompt: ProximityPrompt)
 		backdropTransparency = 0.9,
 		crispContent = true,
 	})
+	ObjectiveGuideController.ClearObjective("crafting")
 end
 
 function CraftingController:_bindCraftingPrompt()
@@ -1237,11 +2201,14 @@ function CraftingController:_handlePrepared(frameName: string)
 
 	self._isOpen = true
 	self._requestInFlight = false
+	self._selectedFilterSlot = HEAD_FILTER
 	self:_ensureUi()
+	self:_hideIngredientPanels()
 	if not self:_requestCraftingState(true) then
 		self._state = self._state or {
 			recipes = CraftingRecipeConfig.GetAll(),
 			craftingMaterials = {},
+			craftingProgress = CraftingProgress.CreateEmptyState(),
 			ownedBodyParts = {},
 			ownedAccessories = {},
 			equippedAccessories = {},
@@ -1258,6 +2225,8 @@ function CraftingController:_handleClosed(frameName: string)
 
 	self._isOpen = false
 	self._requestInFlight = false
+	self:_disconnectHelpMenuCloseListener()
+	self:_hideIngredientPanels()
 	self:_stopViewportRotation()
 	if self._ui and self._ui.viewportFrame then
 		ViewportModelRenderer.Clear(self._ui.viewportFrame)
@@ -1275,6 +2244,7 @@ function CraftingController:_refreshIfOpen(key: string?)
 		and key ~= ACCESSORIES_DATA_KEY
 		and key ~= EQUIPPED_ACCESSORIES_DATA_KEY
 		and key ~= CRAFTING_MATERIALS_DATA_KEY
+		and key ~= CRAFTING_PROGRESS_DATA_KEY
 		and key ~= MONEY_DATA_KEY
 	then
 		return
@@ -1282,6 +2252,10 @@ function CraftingController:_refreshIfOpen(key: string?)
 
 	self:_hydrateStateFromData(key)
 	self:_syncUi()
+end
+
+function CraftingController:IsOpen(): boolean
+	return self._isOpen == true
 end
 
 function CraftingController:OnStart()

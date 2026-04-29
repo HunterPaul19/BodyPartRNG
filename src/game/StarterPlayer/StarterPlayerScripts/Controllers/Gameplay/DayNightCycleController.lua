@@ -8,6 +8,7 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local DayNightCycleConfig = require(ReplicatedStorage.Shared.Config.DayNightCycleConfig)
+local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 
 local EFFECT_DEFINITIONS = {
 	Atmosphere = "Atmosphere",
@@ -22,6 +23,7 @@ local SERVER_START_TIME_ATTRIBUTE = "DayNightServerStartTime"
 local INITIAL_NORMALIZED_TIME_ATTRIBUTE = "DayNightInitialNormalizedTime"
 local LOOP_DURATION_ATTRIBUTE = "DayNightLoopDuration"
 local RUNTIME_PLACE_VERSION_ATTRIBUTE = "RuntimePlaceVersion"
+local DAY_NIGHT_CYCLE_FEATURE_ID = "day_night_cycle"
 local LOCAL_PLAYER = Players.LocalPlayer
 local DEFAULT_GAME_VERSION_TEXT = "v0.00"
 
@@ -281,6 +283,10 @@ function DayNightCycleController:_getCurrentNormalizedTime(): number
 end
 
 function DayNightCycleController:OnStart()
+	if not PlaceProfile.IsFeatureEnabled(DAY_NIGHT_CYCLE_FEATURE_ID) then
+		return
+	end
+
 	task.spawn(function()
 		local timeoutAt = os.clock() + 10
 		repeat

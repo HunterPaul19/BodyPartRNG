@@ -8,16 +8,19 @@ local RateLimitTelemetry = require(script.Parent.Parent.Common.RateLimitTelemetr
 
 local STORE_NAME = "BodyPartSerials"
 local REUSABLE_STORE_NAME = "BodyPartSerialReusableRanges"
+local EXISTENCE_SNAPSHOT_STORE_NAME = "BodyPartSerialExistenceSnapshots"
+local EXISTENCE_SNAPSHOT_KEY = "all"
+local EXISTENCE_SNAPSHOT_VERSION = 1
 local SERIAL_BLOCK_SIZE = 500
 local EXISTENCE_CACHE_REFRESH_SECONDS = 60 * 60
-local EXISTENCE_REFRESH_SET_PACING_SECONDS = 0.1
-local EXISTENCE_REFRESH_PIECE_PACING_SECONDS = 0.1
-local EXISTENCE_REFRESH_WAIT_TIMEOUT_SECONDS = 30
+local EXISTENCE_BACKFILL_PACING_SECONDS = 1
+local EXISTENCE_SNAPSHOT_SAVE_DEBOUNCE_SECONDS = 10
 
 local BodyPartSerialStore = {}
 
 local serialStore = DataStoreService:GetDataStore(STORE_NAME, Globals.SCOPE)
 local reusableSerialStore = DataStoreService:GetDataStore(REUSABLE_STORE_NAME, Globals.SCOPE)
+local existenceSnapshotStore = DataStoreService:GetDataStore(EXISTENCE_SNAPSHOT_STORE_NAME, Globals.SCOPE)
 local studioFallbackCounters: { [string]: number } = {}
 local reservedSerialRangesByPieceId: {
 	[string]: {
@@ -31,7 +34,11 @@ local cachedHighWaterByPieceId: {
 		refreshedAt: number,
 	},
 } = {}
-local refreshingSetIds: { [string]: boolean } = {}
+local existenceCacheLoaded = false
+local existenceCacheRefreshedAt = 0
+local existenceSnapshotRefreshInFlight = false
+local existenceBackfillStarted = false
+local existenceSnapshotSaveScheduled = false
 local existenceRefreshLoopStarted = false
 
 local function validatePieceId(pieceId: string): string?
@@ -112,15 +119,6 @@ local function getCachedHighWater(pieceId: string): number?
 	return cachedEntry.value
 end
 
-local function waitForSetRefresh(setId: string): boolean
-	local timeoutAt = os.clock() + EXISTENCE_REFRESH_WAIT_TIMEOUT_SECONDS
-	while refreshingSetIds[setId] == true and os.clock() < timeoutAt do
-		task.wait()
-	end
-
-	return refreshingSetIds[setId] ~= true
-end
-
 local function loadExistenceForPiece(pieceId: string): (number?, string?)
 	local success, result = pcall(function()
 		return serialStore:GetAsync(pieceId)
@@ -142,47 +140,164 @@ local function loadExistenceForPiece(pieceId: string): (number?, string?)
 	return nil, tostring(result)
 end
 
-local function refreshExistenceForSet(setId: string): (boolean, string?)
-	if refreshingSetIds[setId] == true then
-		if waitForSetRefresh(setId) then
-			return true, nil
+local function normalizeSnapshotCounts(value: any): { [string]: number }
+	local sourceCounts = nil
+	if typeof(value) == "table" and typeof(value.countsByPieceId) == "table" then
+		sourceCounts = value.countsByPieceId
+	elseif typeof(value) == "table" then
+		sourceCounts = value
+	end
+
+	local countsByPieceId = {}
+	if typeof(sourceCounts) ~= "table" then
+		return countsByPieceId
+	end
+
+	for pieceId, rawValue in pairs(sourceCounts) do
+		if typeof(pieceId) == "string" and Catalog.GetPiece(pieceId) then
+			countsByPieceId[pieceId] = math.max(0, math.floor(tonumber(rawValue) or 0))
 		end
-
-		return false, string.format("Timed out waiting for body part set '%s' existence refresh.", setId)
 	end
 
-	local pieces = Catalog.GetPiecesForSet(setId)
-	if pieces == nil then
-		return false, string.format("Unknown body part setId '%s'.", setId)
+	return countsByPieceId
+end
+
+local function copyCachedCounts(): { [string]: number }
+	local countsByPieceId = {}
+	for _, pieceConfig in ipairs(Catalog.GetAllPieces()) do
+		local pieceId = pieceConfig.id
+		if typeof(pieceId) == "string" and pieceId ~= "" then
+			countsByPieceId[pieceId] = getCachedHighWater(pieceId) or 0
+		end
 	end
 
-	refreshingSetIds[setId] = true
-	local success, didRefreshAny, lastError = pcall(function()
-		local refreshedAny = false
-		local refreshError = nil
+	return countsByPieceId
+end
 
-		for _, pieceConfig in ipairs(pieces) do
+local function markExistenceCacheRefreshed()
+	existenceCacheLoaded = true
+	existenceCacheRefreshedAt = os.clock()
+end
+
+local function applySnapshotCounts(countsByPieceId: { [string]: number })
+	for _, pieceConfig in ipairs(Catalog.GetAllPieces()) do
+		local pieceId = pieceConfig.id
+		if typeof(pieceId) == "string" and pieceId ~= "" then
+			cacheHighWater(pieceId, countsByPieceId[pieceId] or getCachedHighWater(pieceId) or 0)
+		end
+	end
+	markExistenceCacheRefreshed()
+end
+
+local function persistExistenceSnapshotNow()
+	local countsByPieceId = copyCachedCounts()
+	local success, result = pcall(function()
+		return existenceSnapshotStore:UpdateAsync(EXISTENCE_SNAPSHOT_KEY, function(currentValue)
+			local mergedCounts = normalizeSnapshotCounts(currentValue)
+			for pieceId, count in pairs(countsByPieceId) do
+				mergedCounts[pieceId] = math.max(tonumber(mergedCounts[pieceId]) or 0, count)
+			end
+
+			return {
+				version = EXISTENCE_SNAPSHOT_VERSION,
+				updatedAtUnix = os.time(),
+				countsByPieceId = mergedCounts,
+			}
+		end)
+	end)
+
+	if not success then
+		RateLimitTelemetry.Increment("data_store_error", "serial_body_part_snapshot_write", 1)
+		return false, tostring(result)
+	end
+
+	return true, nil
+end
+
+local function scheduleExistenceSnapshotPersist()
+	if RunService:IsStudio() then
+		return
+	end
+	if existenceSnapshotSaveScheduled then
+		return
+	end
+
+	existenceSnapshotSaveScheduled = true
+	task.delay(EXISTENCE_SNAPSHOT_SAVE_DEBOUNCE_SECONDS, function()
+		existenceSnapshotSaveScheduled = false
+		persistExistenceSnapshotNow()
+	end)
+end
+
+local function startLegacyBackfill()
+	if existenceBackfillStarted or RunService:IsStudio() then
+		return
+	end
+
+	existenceBackfillStarted = true
+	task.spawn(function()
+		local didLoadAny = false
+		for _, pieceConfig in ipairs(Catalog.GetAllPieces()) do
 			local pieceId = pieceConfig.id
 			if typeof(pieceId) == "string" and pieceId ~= "" then
-				local value, message = loadExistenceForPiece(pieceId)
+				local value = loadExistenceForPiece(pieceId)
 				if value ~= nil then
-					refreshedAny = true
-				else
-					refreshError = message
+					didLoadAny = true
 				end
-				task.wait(EXISTENCE_REFRESH_PIECE_PACING_SECONDS)
+				task.wait(EXISTENCE_BACKFILL_PACING_SECONDS)
 			end
 		end
 
-		return refreshedAny, refreshError
+		if didLoadAny then
+			markExistenceCacheRefreshed()
+			persistExistenceSnapshotNow()
+		end
 	end)
-	refreshingSetIds[setId] = nil
+end
 
-	if not success then
-		return false, tostring(didRefreshAny)
+local function refreshExistenceSnapshotFromStore()
+	if existenceSnapshotRefreshInFlight then
+		return
 	end
 
-	return didRefreshAny == true, lastError
+	existenceSnapshotRefreshInFlight = true
+	local success, result = pcall(function()
+		return existenceSnapshotStore:GetAsync(EXISTENCE_SNAPSHOT_KEY)
+	end)
+	existenceSnapshotRefreshInFlight = false
+
+	if success then
+		local countsByPieceId = normalizeSnapshotCounts(result)
+		applySnapshotCounts(countsByPieceId)
+		if next(countsByPieceId) == nil then
+			startLegacyBackfill()
+		end
+		return
+	end
+
+	RateLimitTelemetry.Increment("data_store_error", "serial_body_part_snapshot_read", 1)
+	markExistenceCacheRefreshed()
+	if RunService:IsStudio() then
+		applySnapshotCounts({})
+	end
+end
+
+local function refreshExistenceSnapshotFromStoreAsync()
+	if existenceSnapshotRefreshInFlight then
+		return
+	end
+
+	task.spawn(refreshExistenceSnapshotFromStore)
+end
+
+local function ensureExistenceCacheFreshAsync()
+	if existenceSnapshotRefreshInFlight then
+		return
+	end
+
+	if not existenceCacheLoaded or os.clock() - existenceCacheRefreshedAt >= EXISTENCE_CACHE_REFRESH_SECONDS then
+		refreshExistenceSnapshotFromStoreAsync()
+	end
 end
 
 local function consumeReservedSerial(pieceId: string): number?
@@ -258,6 +373,8 @@ local function reserveSerialRange(pieceId: string): (number?, string?)
 		maxSerial = maxSerial,
 	}
 	cacheHighWater(pieceId, maxSerial)
+	markExistenceCacheRefreshed()
+	scheduleExistenceSnapshotPersist()
 	return consumeReservedSerial(pieceId), nil
 end
 
@@ -286,6 +403,7 @@ function BodyPartSerialStore:GetNextSerialForPiece(pieceId: string): (number?, s
 		local nextSerial = (studioFallbackCounters[pieceId] or 0) + 1
 		studioFallbackCounters[pieceId] = nextSerial
 		cacheHighWater(pieceId, nextSerial)
+		markExistenceCacheRefreshed()
 		return nextSerial, nil
 	end
 
@@ -421,24 +539,30 @@ function BodyPartSerialStore:GetTotalInExistenceForPiece(pieceId: string): (numb
 		return nil, validationError
 	end
 
-	local cachedHighWater = getCachedHighWater(pieceId)
-	if cachedHighWater ~= nil then
-		return cachedHighWater, nil
+	ensureExistenceCacheFreshAsync()
+	return getCachedHighWater(pieceId) or 0, nil
+end
+
+function BodyPartSerialStore:GetTotalInExistenceForPieces(pieceIds: { string }): ({ [string]: number }?, string?)
+	if typeof(pieceIds) ~= "table" then
+		return nil, "pieceIds must be a table."
 	end
 
-	local pieceConfig = Catalog.GetPiece(pieceId)
-	local setId = pieceConfig and pieceConfig.setId
-	if typeof(setId) ~= "string" or setId == "" then
-		return nil, string.format("Body part piece '%s' is missing a setId.", pieceId)
+	local countsByPieceId = {}
+	local seenPieceIds = {}
+	for _, pieceId in ipairs(pieceIds) do
+		local validationError = validatePieceId(pieceId)
+		if validationError then
+			return nil, validationError
+		end
+		if seenPieceIds[pieceId] ~= true then
+			seenPieceIds[pieceId] = true
+			countsByPieceId[pieceId] = getCachedHighWater(pieceId) or 0
+		end
 	end
 
-	local _, refreshError = refreshExistenceForSet(setId)
-	cachedHighWater = getCachedHighWater(pieceId)
-	if cachedHighWater ~= nil then
-		return cachedHighWater, nil
-	end
-
-	return nil, refreshError or "Failed to refresh body part existence count."
+	ensureExistenceCacheFreshAsync()
+	return countsByPieceId, nil
 end
 
 function BodyPartSerialStore:StartExistenceRefreshLoop()
@@ -448,14 +572,7 @@ function BodyPartSerialStore:StartExistenceRefreshLoop()
 
 	existenceRefreshLoopStarted = true
 	task.spawn(function()
-		while true do
-			for _, setConfig in ipairs(Catalog.GetAllSets()) do
-				refreshExistenceForSet(setConfig.id)
-				task.wait(EXISTENCE_REFRESH_SET_PACING_SECONDS)
-			end
-
-			task.wait(EXISTENCE_CACHE_REFRESH_SECONDS)
-		end
+		refreshExistenceSnapshotFromStore()
 	end)
 end
 

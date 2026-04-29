@@ -23,6 +23,9 @@ type BossHitConfirmedPayload = {
 	bossId: string,
 	damage: number,
 	attackerUserId: number,
+	targetType: string?,
+	targetModel: Model?,
+	targetPosition: Vector3?,
 	isKillingBlow: boolean?,
 	serverTime: number,
 }

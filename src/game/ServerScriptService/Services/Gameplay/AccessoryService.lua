@@ -5,6 +5,7 @@ local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
 local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
+local TutorialService = require(script.Parent.TutorialService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local ACCESSORIES_REMOTES_FOLDER_NAME = "Accessories"
@@ -12,6 +13,7 @@ local GET_STATE_REMOTE_NAME = "GetAccessoryState"
 local EQUIP_REMOTE_NAME = "EquipOwnedAccessory"
 local UNEQUIP_REMOTE_NAME = "UnequipAccessorySlot"
 local TOGGLE_FAVORITE_REMOTE_NAME = "ToggleFavoriteOwnedAccessory"
+local SELL_OWNED_REMOTE_NAME = "SellOwnedAccessory"
 
 local remotesFolder: Folder? = nil
 local accessoriesRemotesFolder: Folder? = nil
@@ -19,6 +21,7 @@ local getStateRemote: RemoteFunction? = nil
 local equipRemote: RemoteFunction? = nil
 local unequipRemote: RemoteFunction? = nil
 local toggleFavoriteRemote: RemoteFunction? = nil
+local sellOwnedRemote: RemoteFunction? = nil
 
 local AccessoryService = {}
 
@@ -165,6 +168,11 @@ function AccessoryService:EquipOwnedAccessory(player: Player, ownedId: string): 
 
 	BodyPartService.LoadoutChanged:Fire(player)
 	BodyPartService:NotifyClient(player, string.format('Equipped "%s".', config.label))
+	TutorialService:RecordAccessoryEquipped(player, {
+		ownedId = ownedId,
+		accessoryId = config.id,
+		slot = config.slot,
+	})
 	return true, string.format('Equipped "%s".', config.label)
 end
 
@@ -229,6 +237,61 @@ function AccessoryService:ToggleFavoriteOwnedAccessory(
 	return true, message
 end
 
+function AccessoryService:SellOwnedAccessory(player: Player, ownedId: string): (boolean, string)
+	if not waitForPlayerData(player, 10) then
+		return false, "Player data is not ready yet."
+	end
+	if typeof(ownedId) ~= "string" or ownedId == "" then
+		return false, "ownedId is required."
+	end
+
+	local ownedRecord = DataService:GetOwnedAccessories(player)[ownedId]
+	if not ownedRecord then
+		return false, "You do not own that accessory."
+	end
+
+	local config = AccessoryConfig.Get(ownedRecord.accessoryId)
+	if not config then
+		return false, "That accessory no longer exists."
+	end
+
+	local payout = AccessoryConfig.GetSellPrice(config.id)
+	if payout <= 0 then
+		return false, "That accessory cannot be sold."
+	end
+
+	local wasEquipped = DataService:GetEquippedAccessories(player)[config.slot] == ownedId
+	if wasEquipped then
+		local unequipped, unequipMessage = DataService:SetEquippedAccessory(player, config.slot, nil)
+		if not unequipped then
+			return false, unequipMessage or "Could not unequip accessory before selling."
+		end
+
+		local visualOk, visualMessage = rebuildAccessoryVisualIfNeeded(player, config.slot, ownedId)
+		if not visualOk then
+			return false, visualMessage or "Could not unequip accessory before selling."
+		end
+	end
+
+	local removedRecord, removeError = DataService:RemoveOwnedAccessory(player, ownedId)
+	if not removedRecord then
+		if wasEquipped then
+			DataService:SetEquippedAccessory(player, config.slot, ownedId)
+			BodyPartService:ApplySessionLoadout(player)
+		end
+		return false, removeError or "Failed to remove the sold accessory."
+	end
+
+	DataService:AddMoney(player, payout, "accessory_sell")
+
+	local message = string.format('Sold "%s" for $%s.', config.label, tostring(payout))
+	if wasEquipped then
+		BodyPartService.LoadoutChanged:Fire(player)
+		BodyPartService:NotifyClient(player, message)
+	end
+	return true, message
+end
+
 local function handleGetAccessoryState(player: Player)
 	return response(true, "Loaded accessory state.", AccessoryService:GetAccessoryState(player))
 end
@@ -260,11 +323,21 @@ local function handleToggleFavoriteOwnedAccessory(player: Player, payload: any)
 	return response(ok, message, AccessoryService:GetAccessoryState(player))
 end
 
+local function handleSellOwnedAccessory(player: Player, payload: any)
+	if typeof(payload) ~= "table" then
+		return response(false, "Sell payload must be a table.", AccessoryService:GetAccessoryState(player))
+	end
+
+	local ok, message = AccessoryService:SellOwnedAccessory(player, payload.ownedId)
+	return response(ok, message, AccessoryService:GetAccessoryState(player))
+end
+
 function AccessoryService:OnStart()
 	getStateRemote = ensureRemoteFunction(getStateRemote, GET_STATE_REMOTE_NAME)
 	equipRemote = ensureRemoteFunction(equipRemote, EQUIP_REMOTE_NAME)
 	unequipRemote = ensureRemoteFunction(unequipRemote, UNEQUIP_REMOTE_NAME)
 	toggleFavoriteRemote = ensureRemoteFunction(toggleFavoriteRemote, TOGGLE_FAVORITE_REMOTE_NAME)
+	sellOwnedRemote = ensureRemoteFunction(sellOwnedRemote, SELL_OWNED_REMOTE_NAME)
 
 	getStateRemote.OnServerInvoke = function(player: Player)
 		if not RequestLimiter:Allow(player, "remote.accessories.get_state") then
@@ -292,6 +365,13 @@ function AccessoryService:OnStart()
 			return response(false, "You're changing accessory favorites too quickly.", AccessoryService:GetAccessoryState(player))
 		end
 		return handleToggleFavoriteOwnedAccessory(player, payload)
+	end
+
+	sellOwnedRemote.OnServerInvoke = function(player: Player, payload: any)
+		if not RequestLimiter:Allow(player, "remote.accessories.sell") then
+			return response(false, "You're selling accessories too quickly.", AccessoryService:GetAccessoryState(player))
+		end
+		return handleSellOwnedAccessory(player, payload)
 	end
 end
 

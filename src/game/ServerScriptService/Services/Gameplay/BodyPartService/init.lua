@@ -24,12 +24,14 @@ local DataService = require(script.Parent.DataService)
 local PotionService = require(script.Parent.PotionService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 local StatsService = require(script.Parent.StatsService)
+local TutorialService = require(script.Parent.TutorialService)
 local SessionStore = require(script.SessionStore)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local BODY_PARTS_FOLDER_NAME = "BodyParts"
 local GET_STATE_REMOTE_NAME = "GetSessionLoadout"
 local GET_EXISTENCE_REMOTE_NAME = "GetTotalInExistenceForPiece"
+local GET_EXISTENCES_REMOTE_NAME = "GetTotalInExistenceForPieces"
 local GET_PLAYER_INSPECT_SUMMARY_REMOTE_NAME = "GetPlayerInspectSummary"
 local EQUIP_REMOTE_NAME = "EquipOwnedBodyPart"
 local EQUIP_BEST_REMOTE_NAME = "EquipBestLoadout"
@@ -77,6 +79,7 @@ local remotesFolder: Folder? = nil
 local bodyPartsRemotesFolder: Folder? = nil
 local getStateRemote: RemoteFunction? = nil
 local getExistenceRemote: RemoteFunction? = nil
+local getExistencesRemote: RemoteFunction? = nil
 local getPlayerInspectSummaryRemote: RemoteFunction? = nil
 local equipRemote: RemoteFunction? = nil
 local equipBestRemote: RemoteFunction? = nil
@@ -2734,6 +2737,11 @@ local function equipOwnedBodyPartInternal(
 	if shouldNotifyLoadoutChanged then
 		notifyLoadoutChanged(player)
 	end
+	TutorialService:RecordBodyPartEquipped(player, {
+		ownedId = ownedId,
+		pieceId = piece.id,
+		region = piece.region,
+	})
 
 	return true, string.format("Equipped %s.", piece.displayName)
 end
@@ -3100,6 +3108,51 @@ local function handleGetTotalInExistence(_player: Player, payload: any)
 	}
 end
 
+local function handleGetTotalInExistences(_player: Player, payload: any)
+	if typeof(payload) ~= "table" then
+		return {
+			ok = false,
+			message = "Existence payload must be a table.",
+		}
+	end
+
+	local pieceIds = payload.pieceIds
+	if typeof(pieceIds) ~= "table" then
+		return {
+			ok = false,
+			message = "pieceIds must be a table.",
+		}
+	end
+
+	local normalizedPieceIds = {}
+	local seenPieceIds = {}
+	for _, pieceId in ipairs(pieceIds) do
+		if typeof(pieceId) ~= "string" or pieceId == "" then
+			return {
+				ok = false,
+				message = "pieceId is required.",
+			}
+		end
+		if seenPieceIds[pieceId] ~= true then
+			seenPieceIds[pieceId] = true
+			table.insert(normalizedPieceIds, pieceId)
+		end
+	end
+
+	local countsByPieceId, message = DataService:GetTotalInExistenceForPieces(normalizedPieceIds)
+	if countsByPieceId == nil then
+		return {
+			ok = false,
+			message = message or "Failed to load body part existence counts.",
+		}
+	end
+
+	return {
+		ok = true,
+		countsByPieceId = countsByPieceId,
+	}
+end
+
 local function handleGetPlayerInspectSummary(player: Player, payload: any)
 	if typeof(payload) ~= "table" then
 		return {
@@ -3231,6 +3284,7 @@ end
 function BodyPartService:OnStart()
 	getStateRemote = ensureRemoteFunction(getStateRemote, GET_STATE_REMOTE_NAME)
 	getExistenceRemote = ensureRemoteFunction(getExistenceRemote, GET_EXISTENCE_REMOTE_NAME)
+	getExistencesRemote = ensureRemoteFunction(getExistencesRemote, GET_EXISTENCES_REMOTE_NAME)
 	getPlayerInspectSummaryRemote = ensureRemoteFunction(getPlayerInspectSummaryRemote, GET_PLAYER_INSPECT_SUMMARY_REMOTE_NAME)
 	equipRemote = ensureRemoteFunction(equipRemote, EQUIP_REMOTE_NAME)
 	equipBestRemote = ensureRemoteFunction(equipBestRemote, EQUIP_BEST_REMOTE_NAME)
@@ -3260,6 +3314,17 @@ function BodyPartService:OnStart()
 		end
 
 		return handleGetTotalInExistence(player, payload)
+	end
+	getExistencesRemote.OnServerInvoke = function(player: Player, payload: any)
+		local allowed = RequestLimiter:Allow(player, "remote.body_parts.existence")
+		if not allowed then
+			return {
+				ok = false,
+				message = "You're checking existence counts too quickly.",
+			}
+		end
+
+		return handleGetTotalInExistences(player, payload)
 	end
 	getPlayerInspectSummaryRemote.OnServerInvoke = function(player: Player, payload: any)
 		local allowed = RequestLimiter:Allow(player, "remote.body_parts.inspect")

@@ -778,6 +778,8 @@ function BodyPartPresentation.BuildBundleCardPayload(previewPresentation: any, o
 		mutationCoverTexture = previewPresentation.mutationCoverTexture,
 		sizeTagStyle = previewPresentation.sizeTagStyle,
 		iconTexture = previewPresentation.iconTexture,
+		iconText = previewPresentation.iconText,
+		iconTextColor = previewPresentation.iconTextColor,
 		cardBackgroundTexture = previewPresentation.cardBackgroundTexture,
 		preferIconOverViewport = previewPresentation.preferIconOverViewport,
 	}
@@ -832,6 +834,30 @@ local function findFirstGuiChildInCard(root: Instance, names: { string }): GuiOb
 	end
 
 	return nil
+end
+
+local function getOrCreateIconTextLabel(icon: ImageLabel): TextLabel
+	local existing = icon:FindFirstChild("BodyPartPresentationIconText")
+	if existing and existing:IsA("TextLabel") then
+		return existing
+	end
+	if existing then
+		existing:Destroy()
+	end
+
+	local label = Instance.new("TextLabel")
+	label.Name = "BodyPartPresentationIconText"
+	label.BackgroundTransparency = 1
+	label.AnchorPoint = Vector2.new(0.5, 0.5)
+	label.Position = UDim2.fromScale(0.5, 0.5)
+	label.Size = UDim2.fromScale(1, 1)
+	label.FontFace = Font.new("rbxassetid://12187375422", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+	label.TextScaled = true
+	label.TextStrokeTransparency = 0.55
+	label.TextWrapped = true
+	label.ZIndex = icon.ZIndex + 1
+	label.Parent = icon
+	return label
 end
 
 local function applyImageColor(target: Instance, color: Color3?)
@@ -985,6 +1011,7 @@ function BodyPartPresentation.PopulateBundleCard(cardRoot: Instance, payload: an
 	local viewport = findFirstGuiChildInCard(cardRoot, { "ItemViewport", "Viewport" })
 	local icon = findFirstGuiChildInCard(cardRoot, { "ItemIcon", "Icon" })
 	local iconTexture = if typeof(source.iconTexture) == "string" and source.iconTexture ~= "" then source.iconTexture else nil
+	local iconText = if typeof(source.iconText) == "string" and source.iconText ~= "" then source.iconText else nil
 	local cardBackground = findFirstGuiChildInCard(cardRoot, { "ItemBackground" })
 	if cardBackground and cardBackground:IsA("ImageLabel") then
 		local cardBackgroundTexture = if typeof(source.cardBackgroundTexture) == "string" and source.cardBackgroundTexture ~= ""
@@ -993,7 +1020,7 @@ function BodyPartPresentation.PopulateBundleCard(cardRoot: Instance, payload: an
 		cardBackground.Visible = cardBackgroundTexture ~= nil
 		cardBackground.Image = cardBackgroundTexture or ""
 	end
-	local shouldUseIcon = source.preferIconOverViewport == true and iconTexture ~= nil
+	local shouldUseIcon = source.preferIconOverViewport == true and (iconTexture ~= nil or iconText ~= nil)
 
 	if viewport and viewport:IsA("ViewportFrame") then
 		viewport.Visible = not shouldUseIcon
@@ -1051,7 +1078,20 @@ function BodyPartPresentation.PopulateBundleCard(cardRoot: Instance, payload: an
 	end
 
 	if icon and icon:IsA("ImageLabel") then
-		if shouldUseIcon then
+		local iconTextLabel = icon:FindFirstChild("BodyPartPresentationIconText")
+		if shouldUseIcon and iconText ~= nil then
+			icon.Image = ""
+			local textLabel = getOrCreateIconTextLabel(icon)
+			textLabel.Text = iconText
+			textLabel.TextColor3 = if typeof(source.iconTextColor) == "Color3"
+				then source.iconTextColor
+				else Color3.new(1, 1, 1)
+			textLabel.Visible = true
+		elseif iconTextLabel and iconTextLabel:IsA("TextLabel") then
+			iconTextLabel.Visible = false
+		end
+
+		if shouldUseIcon and iconText == nil and iconTexture ~= nil then
 			icon.Image = iconTexture
 		end
 

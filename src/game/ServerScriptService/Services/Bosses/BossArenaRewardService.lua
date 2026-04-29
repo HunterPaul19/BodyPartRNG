@@ -20,6 +20,8 @@ type BodyPartRewardGrantEntry = {
 	displayRarity: string,
 	displayOddsDenominator: number,
 	isBossPart: boolean,
+	record: { [string]: any }?,
+	sourceBossId: string?,
 }
 
 type MaterialRewardGrantEntry = {
@@ -30,6 +32,7 @@ type MaterialRewardGrantEntry = {
 	dropTier: BossRewards.MaterialDropTier,
 	chance: number,
 	displayColor: Color3,
+	sourceBossId: string?,
 }
 
 type RewardGrantEntry = BodyPartRewardGrantEntry | MaterialRewardGrantEntry
@@ -209,6 +212,26 @@ local function buildGrantPayload(entry: BodyPartRewardGrantEntry): { [string]: a
 		variantMultiplier = DEFAULT_MUTATION.multiplier + DEFAULT_SIZE.moneyMultiplier - 1,
 		finalPassiveIncomePerSecond = tonumber(piece and piece.passiveIncomePerSecond) or 0,
 	}
+end
+
+local function buildCommittedBodyPartEntry(
+	entry: BodyPartRewardGrantEntry,
+	grantedRecord: any,
+	bossId: string
+): BodyPartRewardGrantEntry
+	local committedEntry = table.clone(entry)
+	committedEntry.sourceBossId = bossId
+	if typeof(grantedRecord) == "table" then
+		committedEntry.record = grantedRecord
+	end
+
+	return committedEntry
+end
+
+local function buildCommittedMaterialEntry(entry: MaterialRewardGrantEntry, bossId: string): MaterialRewardGrantEntry
+	local committedEntry = table.clone(entry)
+	committedEntry.sourceBossId = bossId
+	return committedEntry
 end
 
 local function buildBossBodyPartGrantOptions(reservation: any?): { [string]: any }
@@ -632,7 +655,7 @@ local function commitPreparedPlayerRewards(
 
 		preparedReward.committed = true
 		summary.grantedCount += 1
-		table.insert(summary.grants, preparedReward.grant)
+		table.insert(summary.grants, buildCommittedBodyPartEntry(preparedReward.grant, grantedRecord, bossId))
 	end
 
 	for _, preparedReward in ipairs(preparedPlayerRewards.rewards) do
@@ -658,7 +681,7 @@ local function commitPreparedPlayerRewards(
 
 		preparedReward.committed = true
 		summary.grantedCount += 1
-		table.insert(summary.grants, materialEntry)
+		table.insert(summary.grants, buildCommittedMaterialEntry(materialEntry, bossId))
 	end
 
 	if #releaseSerials > 0 then
@@ -707,7 +730,7 @@ local function grantRewardsToPlayer(
 		end
 
 		summary.grantedCount += 1
-		table.insert(summary.grants, rewardEntry)
+		table.insert(summary.grants, buildCommittedBodyPartEntry(rewardEntry, grantedRecord, bossId))
 	end
 
 	for _, materialEntry in ipairs(rollMaterialRewardEntries(randomSource, bossId)) do
@@ -724,7 +747,7 @@ local function grantRewardsToPlayer(
 		end
 
 		summary.grantedCount += 1
-		table.insert(summary.grants, materialEntry)
+		table.insert(summary.grants, buildCommittedMaterialEntry(materialEntry, bossId))
 	end
 
 	summary.message = buildSummaryMessage(summary)

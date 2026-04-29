@@ -9,16 +9,17 @@ local BossRewards = require(ReplicatedStorage.Shared.BossArena.BossRewards)
 local BossQueueConstants = require(ReplicatedStorage.Shared.BossQueue.Constants)
 local GameAssetPaths = require(ReplicatedStorage.Shared.Assets.GameAssetPaths)
 local GameAssetResolver = require(ReplicatedStorage.Shared.Assets.GameAssetResolver)
+local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local ACTIVE_PROFILE_ID = "boss_lobby"
 local BILLBOARD_NAME = "BossBillboard"
-local REVEAL_RADIUS_STUDS = 67.5
+local SHOW_RADIUS_STUDS = 67.5
+local HIDE_RADIUS_STUDS = 77.5
+local HITBOX_HIDE_PADDING_STUDS = 10
 local REFRESH_INTERVAL_SECONDS = 0.1
-local MIN_BODY_SIZE_RANGE_SCALE = 0.75
-local MAX_BODY_SIZE_RANGE_SCALE = 2
 
 type PortalRecord = {
 	instance: Model,
@@ -26,6 +27,8 @@ type PortalRecord = {
 	hitbox: BasePart?,
 	attachment: Attachment?,
 	hitboxRadius: number,
+	showRadius: number,
+	hideRadius: number,
 }
 
 local BossLobbyRewardPreviewController = {
@@ -80,6 +83,14 @@ local function computeRevealRadius(hitbox: BasePart?): number
 	return math.max(hitbox.Size.X, hitbox.Size.Z) * 0.5
 end
 
+local function computePortalShowRadius(hitboxRadius: number): number
+	return math.max(SHOW_RADIUS_STUDS, hitboxRadius)
+end
+
+local function computePortalHideRadius(hitboxRadius: number): number
+	return math.max(HIDE_RADIUS_STUDS, hitboxRadius + HITBOX_HIDE_PADDING_STUDS)
+end
+
 local function getPortalDistance(record: PortalRecord, root: BasePart): number
 	local targetPosition
 	if record.hitbox then
@@ -92,34 +103,6 @@ local function getPortalDistance(record: PortalRecord, root: BasePart): number
 	end
 
 	return (root.Position - targetPosition).Magnitude
-end
-
-local function getModelHeight(model: Model?): number?
-	if not (model and model:IsA("Model")) then
-		return nil
-	end
-
-	local size = model:GetExtentsSize()
-	if size.Y <= 0 then
-		return nil
-	end
-
-	return size.Y
-end
-
-local function getLocalBodySizeRangeScale(): number
-	local characterHeight = getModelHeight(LOCAL_PLAYER.Character)
-	local baseRigHeight = getModelHeight(BodyPartsCatalog.GetDefaultBaseRig())
-	if characterHeight == nil or baseRigHeight == nil or baseRigHeight <= 0 then
-		return 1
-	end
-
-	return math.clamp(characterHeight / baseRigHeight, MIN_BODY_SIZE_RANGE_SCALE, MAX_BODY_SIZE_RANGE_SCALE)
-end
-
-local function formatChancePercent(chance: number): string
-	local percent = math.max(0, tonumber(chance) or 0) * 100
-	return string.format("%.3f%%", percent)
 end
 
 local function findTextLabel(root: Instance, name: string): TextLabel?
@@ -165,6 +148,7 @@ function BossLobbyRewardPreviewController:_getBillboard(): BillboardGui?
 	end
 
 	billboard.Enabled = false
+	billboard.MaxDistance = math.huge
 	self._billboard = billboard
 	self._template = nil
 	return billboard
@@ -235,7 +219,7 @@ function BossLobbyRewardPreviewController:_renderRewards(billboard: BillboardGui
 				BodyPartsCatalog.GetSet(entry.setId),
 				entry.displayRarity
 			)
-			chanceLabel.Text = formatChancePercent(entry.chance)
+			chanceLabel.Text = NumberFormatter.FormatOneInChance(entry.chance)
 		end
 
 		local itemViewport = findViewport(row, "ItemViewport")
@@ -287,7 +271,6 @@ function BossLobbyRewardPreviewController:_refreshNearestPortal()
 
 	local nearestRecord = nil
 	local nearestDistance = math.huge
-	local scaledRevealRadius = REVEAL_RADIUS_STUDS * getLocalBodySizeRangeScale()
 
 	for instance, record in pairs(self._portalsByInstance) do
 		if instance.Parent == nil or record.attachment == nil or record.bossName == "" then
@@ -296,8 +279,9 @@ function BossLobbyRewardPreviewController:_refreshNearestPortal()
 		end
 
 		local distance = getPortalDistance(record, root)
-		local revealRadius = math.max(scaledRevealRadius, record.hitboxRadius)
-		if distance <= revealRadius and distance < nearestDistance then
+		local isActivePortal = self._activePortal == instance
+		local allowedRadius = if isActivePortal then record.hideRadius else record.showRadius
+		if distance <= allowedRadius and distance < nearestDistance then
 			nearestRecord = record
 			nearestDistance = distance
 		end
@@ -322,12 +306,15 @@ function BossLobbyRewardPreviewController:_registerPortal(instance: Instance)
 
 	local hitbox = getPortalHitbox(instance)
 	local attachment = getPortalAttachment(instance)
+	local hitboxRadius = computeRevealRadius(hitbox)
 	self._portalsByInstance[instance] = {
 		instance = instance,
 		bossName = bossName,
 		hitbox = hitbox,
 		attachment = attachment,
-		hitboxRadius = computeRevealRadius(hitbox),
+		hitboxRadius = hitboxRadius,
+		showRadius = computePortalShowRadius(hitboxRadius),
+		hideRadius = computePortalHideRadius(hitboxRadius),
 	}
 end
 

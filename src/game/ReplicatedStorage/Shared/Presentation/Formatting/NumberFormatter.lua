@@ -57,6 +57,16 @@ function NumberFormatter.Format(n: number): string
 	return formatWithSuffix(n, false, false)
 end
 
+function NumberFormatter.FormatOneInChance(chance: number): string
+	local normalizedChance = math.clamp(tonumber(chance) or 0, 0, 1)
+	if normalizedChance <= 0 then
+		return "1 in --"
+	end
+
+	local denominator = math.max(1, math.floor((1 / normalizedChance) + 0.5))
+	return string.format("1 in %s", NumberFormatter.Format(denominator))
+end
+
 function NumberFormatter.FormatExistenceCount(value: any): string
 	local count = math.max(0, math.floor(tonumber(value) or 0))
 	if count < 500 then

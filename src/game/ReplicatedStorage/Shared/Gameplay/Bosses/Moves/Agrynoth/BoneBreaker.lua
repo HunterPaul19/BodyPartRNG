@@ -311,7 +311,27 @@ local function faceTargetFlat(bossModel: Model, bossRootPart: BasePart, targetRo
 	bossModel:PivotTo(targetCFrame)
 end
 
-local function buildGroundRaycastParams(bossModel: Model?): RaycastParams
+local function buildGroundRaycastParams(bossModel: Model?, targetCharacter: Model?): RaycastParams
+	local exclude = {}
+	local seen = {}
+	if bossModel ~= nil then
+		seen[bossModel] = true
+		table.insert(exclude, bossModel)
+	end
+
+	if targetCharacter ~= nil and seen[targetCharacter] ~= true then
+		seen[targetCharacter] = true
+		table.insert(exclude, targetCharacter)
+	end
+
+	local params = RaycastParams.new()
+	params.IgnoreWater = false
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = exclude
+	return params
+end
+
+local function buildGrabGroundRaycastParams(bossModel: Model?): RaycastParams
 	local exclude = {}
 	local seen = {}
 	if bossModel ~= nil then
@@ -337,7 +357,7 @@ end
 local function raycastGroundPosition(position: Vector3, bossModel: Model?): Vector3
 	local rayOrigin = position + Vector3.new(0, GROUND_RAYCAST_LIFT, 0)
 	local rayDirection = Vector3.new(0, -(GROUND_RAYCAST_DEPTH + GROUND_RAYCAST_LIFT), 0)
-	local result = Workspace:Raycast(rayOrigin, rayDirection, buildGroundRaycastParams(bossModel))
+	local result = Workspace:Raycast(rayOrigin, rayDirection, buildGrabGroundRaycastParams(bossModel))
 	if result then
 		return result.Position
 	end
@@ -345,14 +365,14 @@ local function raycastGroundPosition(position: Vector3, bossModel: Model?): Vect
 	return position
 end
 
-local function resolveGroundCFrame(rootPart: BasePart?, bossModel: Model?): CFrame?
+local function resolveGroundCFrame(rootPart: BasePart?, bossModel: Model?, targetCharacter: Model?): CFrame?
 	if rootPart == nil or rootPart.Parent == nil then
 		return nil
 	end
 
 	local rayOrigin = rootPart.Position + Vector3.new(0, GROUND_RAYCAST_LIFT, 0)
 	local rayDirection = Vector3.new(0, -(GROUND_RAYCAST_DEPTH + GROUND_RAYCAST_LIFT), 0)
-	local result = Workspace:Raycast(rayOrigin, rayDirection, buildGroundRaycastParams(bossModel))
+	local result = Workspace:Raycast(rayOrigin, rayDirection, buildGroundRaycastParams(bossModel, targetCharacter))
 	local floorPosition = if result then result.Position else rootPart.Position
 
 	return CFrame.new(floorPosition)
@@ -792,7 +812,7 @@ function BoneBreaker.StartCast(context)
 
 		hitIndex = math.max(hitIndex, math.clamp(nextHitIndex, 1, #HIT_SEQUENCE))
 		local hitSpec = HIT_SEQUENCE[math.min(nextHitIndex, #HIT_SEQUENCE)]
-		local floorCFrame = resolveGroundCFrame(captiveState.rootPart, bossModel)
+		local floorCFrame = resolveGroundCFrame(captiveState.rootPart, bossModel, captiveState.character)
 		if floorCFrame == nil then
 			return
 		end
@@ -814,6 +834,7 @@ function BoneBreaker.StartCast(context)
 			floorCFrame = floorCFrame,
 			radius = hitSpec.radius,
 			scaleMultiplier = presentationScaleMultiplier,
+			targetUserId = if captiveState.player then captiveState.player.UserId else nil,
 		})
 	end
 

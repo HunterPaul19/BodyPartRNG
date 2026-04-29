@@ -87,6 +87,7 @@ function MaterialPresentation.BuildPreviewPresentation(payload: any)
 	local displayColor = config.displayColor
 	local labelText = escapeRichText(config.label)
 	local iconTexture = CraftingMaterialConfig.ResolveIconTexture(config)
+	local sellPrice = CraftingMaterialConfig.GetSellPrice(config.id)
 
 	return {
 		itemType = "material",
@@ -100,7 +101,7 @@ function MaterialPresentation.BuildPreviewPresentation(payload: any)
 		rarityText = string.format("Owned: x%s", formatWholeNumber(amount)),
 		mutationText = "Used for crafting",
 		sizeText = string.format("Material ID: %s", escapeRichText(config.id)),
-		cashText = "",
+		cashText = string.format("Sell Each: $%s", formatWholeNumber(sellPrice)),
 		chanceText = "",
 		inventoryEverRolledText = nil,
 		bundleModel = MaterialPresentation.GetPlaceholderModel(config),

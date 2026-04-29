@@ -44,6 +44,7 @@ PlayerStats.SETTING_CHANGE_KINDS = {
 	auto_equip_best = "autoEquipBestToggleCount",
 	auto_sell = "autoSellToggleCount",
 	cutscene = "cutsceneToggleCount",
+	music = "musicToggleCount",
 }
 
 local function toWholeNumber(value: any, minimum: number?): number
@@ -261,6 +262,7 @@ function PlayerStats.CreateEmpty(): any
 			autoEquipBestToggleCount = 0,
 			autoSellToggleCount = 0,
 			cutsceneToggleCount = 0,
+			musicToggleCount = 0,
 		},
 	}
 end
@@ -384,6 +386,7 @@ function PlayerStats.Normalize(value: any, options: any?): any
 	normalized.settings.autoEquipBestToggleCount = math.max(0, toWholeNumber(settings.autoEquipBestToggleCount, 0))
 	normalized.settings.autoSellToggleCount = math.max(0, toWholeNumber(settings.autoSellToggleCount, 0))
 	normalized.settings.cutsceneToggleCount = math.max(0, toWholeNumber(settings.cutsceneToggleCount, 0))
+	normalized.settings.musicToggleCount = math.max(0, toWholeNumber(settings.musicToggleCount, 0))
 
 	return normalized
 end

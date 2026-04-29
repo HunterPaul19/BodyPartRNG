@@ -5,6 +5,7 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local DayNightCycleConfig = require(ReplicatedStorage.Shared.Config.DayNightCycleConfig)
+local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 
 local EFFECT_DEFINITIONS = {
 	Atmosphere = "Atmosphere",
@@ -18,6 +19,7 @@ local SERVER_START_TIME_ATTRIBUTE = "DayNightServerStartTime"
 local INITIAL_NORMALIZED_TIME_ATTRIBUTE = "DayNightInitialNormalizedTime"
 local LOOP_DURATION_ATTRIBUTE = "DayNightLoopDuration"
 local RUNTIME_PLACE_VERSION_ATTRIBUTE = "RuntimePlaceVersion"
+local DAY_NIGHT_CYCLE_FEATURE_ID = "day_night_cycle"
 local heartbeatConnection: RBXScriptConnection? = nil
 
 local function lerpNumber(fromValue: number, toValue: number, alpha: number): number
@@ -140,6 +142,10 @@ end
 
 function DayNightCycleService:OnStart()
 	if self._started then
+		return
+	end
+
+	if not PlaceProfile.IsFeatureEnabled(DAY_NIGHT_CYCLE_FEATURE_ID) then
 		return
 	end
 

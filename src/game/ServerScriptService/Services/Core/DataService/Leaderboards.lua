@@ -14,13 +14,12 @@ local RateLimitTelemetry = require(script.Parent.Parent.Common.RateLimitTelemetr
 local RENDER_REFRESH_TIME = 10
 local GLOBAL_FETCH_INTERVAL_SECONDS = 180
 local GLOBAL_FETCH_JITTER_SECONDS = 90
-local GLOBAL_FETCH_ENTRY_LIMIT = 50
+local GLOBAL_FETCH_ENTRY_LIMIT = 100
 local GLOBAL_FETCH_BOARD_SPACING_SECONDS = 5
 local ORDERED_LIST_BUDGET_FLOOR = 3
 local ROLLS_FLUSH_TIME = 60
 local LEGACY_SYNC_REFRESH_TIME = 120
 local MONEY_MIN_FLUSH_DELTA = 100
-local DEFAULT_VISIBLE_ENTRY_COUNT = 10
 local ENTRY_NAME_PREFIX = "Entry_"
 local SPACER_NAME_PREFIX = "Spacer_"
 local SCOPE = Globals.SCOPE
@@ -304,7 +303,6 @@ local function getBoardWidgets(boardModel, config)
 		surfaceGui = surfaceGui,
 		scrollingFrame = scrollingFrame,
 		template = template,
-		templateAbsoluteHeight = template.AbsoluteSize.Y,
 		templateSize = templateSize,
 		listLayout = scrollingFrame:FindFirstChildWhichIsA("UIListLayout"),
 		headerPlayerName = topFrame:FindFirstChild("PlayerName"),
@@ -342,7 +340,9 @@ end
 
 local function ensureScrollingFrameLayout(widgets)
 	local scrollingFrame = widgets.scrollingFrame
+	scrollingFrame.ScrollingEnabled = true
 	scrollingFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	scrollingFrame.ClipsDescendants = true
 
 	local layout = widgets.listLayout
 	if layout then
@@ -367,55 +367,6 @@ local function clearRenderedEntries(widgets)
 			child:Destroy()
 		end
 	end
-end
-
-local function getRowStride(widgets)
-	local rowHeight = widgets.templateAbsoluteHeight or 0
-	if rowHeight <= 0 then
-		if widgets.templateSize.Y.Offset > 0 then
-			rowHeight = widgets.templateSize.Y.Offset
-		elseif widgets.templateSize.Y.Scale > 0 then
-			local viewportHeight = widgets.scrollingFrame.AbsoluteWindowSize.Y
-			if viewportHeight <= 0 then
-				viewportHeight = widgets.scrollingFrame.AbsoluteSize.Y
-			end
-			if viewportHeight > 0 then
-				rowHeight = math.floor(viewportHeight * widgets.templateSize.Y.Scale + 0.5)
-			end
-		end
-	end
-
-	local padding = 0
-	if widgets.listLayout then
-		padding = widgets.listLayout.Padding.Offset
-	end
-
-	return math.max(1, rowHeight), math.max(0, padding)
-end
-
-local function getVisibleWindow(widgets, totalEntries)
-	local viewportHeight = widgets.scrollingFrame.AbsoluteWindowSize.Y
-	if viewportHeight <= 0 then
-		viewportHeight = widgets.scrollingFrame.AbsoluteSize.Y
-	end
-
-	local rowHeight, padding = getRowStride(widgets)
-	if viewportHeight <= 0 then
-		local visibleCountFromScale = 0
-		if widgets.templateSize.Y.Scale > 0 then
-			visibleCountFromScale = math.floor((1 / widgets.templateSize.Y.Scale) + 0.0001)
-		end
-
-		local fallbackVisibleCount = if visibleCountFromScale > 0 then visibleCountFromScale else DEFAULT_VISIBLE_ENTRY_COUNT
-		return 1, math.min(totalEntries, fallbackVisibleCount)
-	end
-
-	local rowStride = math.max(1, rowHeight + padding)
-	local firstVisibleRank = math.max(1, math.floor(widgets.scrollingFrame.CanvasPosition.Y / rowStride) + 1)
-	local visibleCount = math.max(1, math.ceil((viewportHeight + padding) / rowStride))
-	local lastVisibleRank = math.min(totalEntries, firstVisibleRank + visibleCount - 1)
-
-	return firstVisibleRank, lastVisibleRank
 end
 
 local function setGuiText(instance, text)
@@ -449,20 +400,6 @@ local function createBoardEntry(widgets, rank, entryData, formatName)
 	setGuiText(findFirstChildByNames(row, widgets.rowValueLabelNames), formatValue(formatName, entryData.value))
 end
 
-local function createSpacer(widgets, name, layoutOrder, height)
-	if height <= 0 then
-		return
-	end
-
-	local spacer = Instance.new("Frame")
-	spacer.Name = name
-	spacer.BackgroundTransparency = 1
-	spacer.BorderSizePixel = 0
-	spacer.Size = UDim2.new(1, 0, 0, height)
-	spacer.LayoutOrder = layoutOrder
-	spacer.Parent = widgets.scrollingFrame
-end
-
 local function renderPlayerInfo(widgets, config, topEntry)
 	local playerInfo = widgets.playerInfo
 	if not playerInfo then
@@ -493,12 +430,12 @@ local function renderPlayerInfo(widgets, config, topEntry)
 	end
 end
 
-local function hydrateVisibleEntryNames(entries, firstVisibleRank, lastVisibleRank)
+local function hydrateRenderedEntryNames(entries, entryCount)
 	if entries[1] then
 		resolveEntryName(entries[1])
 	end
 
-	for rank = firstVisibleRank, lastVisibleRank do
+	for rank = 1, entryCount do
 		local entry = entries[rank]
 		if entry then
 			resolveEntryName(entry)
@@ -522,27 +459,16 @@ local function renderBoard(boardModel, config, entries)
 	setGuiText(widgets.headerPlayerName, "Player")
 	setGuiText(widgets.headerValue, config.infoTitle or config.format)
 
-	local firstVisibleRank, lastVisibleRank = getVisibleWindow(widgets, #entries)
-	hydrateVisibleEntryNames(entries, firstVisibleRank, lastVisibleRank)
+	local entryCount = math.min(#entries, GLOBAL_FETCH_ENTRY_LIMIT)
+	hydrateRenderedEntryNames(entries, entryCount)
 	renderPlayerInfo(widgets, config, entries[1])
 
-	local rowHeight, padding = getRowStride(widgets)
-	local rowStride = math.max(1, rowHeight + padding)
-	createSpacer(widgets, SPACER_NAME_PREFIX .. "Top", 0, (firstVisibleRank - 1) * rowStride)
-
-	for rank = firstVisibleRank, lastVisibleRank do
+	for rank = 1, entryCount do
 		local entryData = entries[rank]
 		if entryData then
 			createBoardEntry(widgets, rank, entryData, config.format)
 		end
 	end
-
-	createSpacer(
-		widgets,
-		SPACER_NAME_PREFIX .. "Bottom",
-		math.max(lastVisibleRank, 0) + 1,
-		math.max(0, #entries - lastVisibleRank) * rowStride
-	)
 end
 
 local function sortEntriesDescending(entries)

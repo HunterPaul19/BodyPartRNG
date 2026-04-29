@@ -996,21 +996,6 @@ local function processGiftDelivery(player: Player, giftRecord: any, options: any
 
 	addGiftInboxEntry(player, giftRecord)
 
-	if offer.grantMode ~= "repeatable" and hasDuplicateGiftOwnership(player.UserId, offer) then
-		moveGiftToFinalState(player, giftRecord, "failedById", "blocked_duplicate")
-		PurchaseReceipt.DuplicateGiftBlocked:Fire(player, offer.offerKey, {
-			offerKey = offer.offerKey,
-			purchaseKind = "gift",
-			source = "gift_delivery",
-			senderUserId = giftRecord.senderUserId,
-			recipientUserId = player.UserId,
-			purchaseId = giftRecord.purchaseId,
-			robloxId = giftRecord.saleRobloxId,
-			isNew = false,
-		})
-		return true, "blocked_duplicate", nil
-	end
-
 	local sale = {
 		saleKind = "product",
 		robloxId = giftRecord.saleRobloxId,
@@ -1022,6 +1007,19 @@ local function processGiftDelivery(player: Player, giftRecord: any, options: any
 		senderUserId = giftRecord.senderUserId,
 		recipientUserId = player.UserId,
 	})
+
+	if offer.grantMode ~= "repeatable" and hasPermanentOwnershipInState(getMarketplaceState(player), offer) then
+		context.markOwned = false
+		context.isNew = false
+		markPurchaseRecorded(player, offer, sale, context)
+		moveGiftToFinalState(player, giftRecord, "historyById", "delivered")
+		StatsService:RecordGiftDelivered(player, offer.offerKey)
+		PurchaseReceipt.GiftDelivered:Fire(player, offer.offerKey, context)
+		sendPurchaseThanks(player, offer.offerKey, context.source, context.purchaseKind)
+		emitOwnedEvents(player)
+		return true, "already_owned", context
+	end
+
 	local granted, err = processEntitlementGrant(player, offer, sale, context)
 	if not granted then
 		if typeof(options) ~= "table" or options.recordFailedGrant ~= false then

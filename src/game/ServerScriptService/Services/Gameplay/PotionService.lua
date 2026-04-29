@@ -9,6 +9,7 @@ local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile
 local BossArenaArrivalService = require(script.Parent.BossArenaArrivalService)
 local DataService = require(script.Parent.DataService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
+local TutorialService = require(script.Parent.TutorialService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local POTIONS_FOLDER_NAME = "Potions"
@@ -206,16 +207,22 @@ local function buildActivePotionPayload(player: Player): { [string]: ActivePotio
 	return payload
 end
 
-local function persistRuntimeRemaining(player: Player)
+local function persistRuntimeRemaining(player: Player, activeByPotionIdOverride: { [string]: number }?): boolean
+	local activeByPotionId = activeByPotionIdOverride or runtimeActiveByPlayer[player]
+	if typeof(activeByPotionId) ~= "table" then
+		return false
+	end
+
 	local now = getServerTimeNow()
 	local updates = {}
-	for potionId, expiresAt in pairs(buildNormalizedActiveByPotionId(runtimeActiveByPlayer[player], now)) do
+	for potionId, expiresAt in pairs(buildNormalizedActiveByPotionId(activeByPotionId, now)) do
 		local remainingSeconds = math.max(0, math.ceil(expiresAt - now))
 		if remainingSeconds > 0 then
 			updates[potionId] = remainingSeconds
 		end
 	end
 	DataService:SetPotionActiveRemainingMap(player, updates)
+	return true
 end
 
 local function normalizeRuntimeStateForPlayer(player: Player): boolean
@@ -227,6 +234,7 @@ local function normalizeRuntimeStateForPlayer(player: Player): boolean
 	local normalized = buildNormalizedActiveByPotionId(activeByPotionId, getServerTimeNow())
 	if areActiveMapsEqual(activeByPotionId, normalized) then
 		if next(normalized) == nil then
+			persistRuntimeRemaining(player, normalized)
 			runtimeActiveByPlayer[player] = nil
 			return true
 		end
@@ -234,7 +242,7 @@ local function normalizeRuntimeStateForPlayer(player: Player): boolean
 	end
 
 	setRuntimeState(player, normalized)
-	persistRuntimeRemaining(player)
+	persistRuntimeRemaining(player, normalized)
 	return true
 end
 
@@ -448,6 +456,7 @@ function PotionService:UsePotion(player: Player, potionId: string): (boolean, st
 	local remainingOwnedAmount = tonumber(updatedRecord and updatedRecord.amount) or 0
 	local message = string.format('Used %s. %d use(s) left.', config.label, remainingOwnedAmount)
 	self:NotifyClient(player, message)
+	TutorialService:RecordPotionUsed(player, config.id)
 	return true, message
 end
 
@@ -625,6 +634,7 @@ function PotionService:OnStart()
 end
 
 function PotionService:OnPlayerRemoving(player: Player)
+	persistRuntimeRemaining(player)
 	runtimeActiveByPlayer[player] = nil
 end
 

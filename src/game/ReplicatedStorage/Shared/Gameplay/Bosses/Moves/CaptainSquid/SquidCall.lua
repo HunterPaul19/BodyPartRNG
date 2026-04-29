@@ -27,6 +27,7 @@ local VFX_FOLDER_NAME = "VFX"
 local CAPTAIN_SQUID_VFX_FOLDER_NAME = "CaptainSquid"
 local SQUID_CALL_VFX_FOLDER_NAME = "SquidCall"
 local CANNON_MODEL_NAME = "Cannon"
+local CANNON_REAL_MODEL_NAME = "CannonReal"
 local CANNON_MIDDLE_NAME = "Middle"
 local CANNON_MUZZLE_ATTACHMENT_NAME = "CannonBall"
 local CANNON_ASSET_YAW_OFFSET_RADIANS = math.rad(90)
@@ -184,6 +185,14 @@ local function resolveModelPrimaryPart(model: Model?): BasePart?
 	return basePart
 end
 
+local function destroyWeldConstraints(root: Instance)
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("WeldConstraint") then
+			descendant:Destroy()
+		end
+	end
+end
+
 local function probeCannonMuzzlePosition(
 	scaleMultiplier: number,
 	bossRootPart: BasePart,
@@ -197,17 +206,24 @@ local function probeCannonMuzzlePosition(
 
 	local cannonModel = cannonSource:Clone()
 	local probePivot = resolveModelPrimaryPart(cannonModel)
-	local middle = cannonModel:FindFirstChild(CANNON_MIDDLE_NAME, true)
-	if probePivot == nil or not (middle and middle:IsA("BasePart")) then
+	local cannonRealModel = cannonModel:FindFirstChild(CANNON_REAL_MODEL_NAME)
+	if probePivot == nil or not (cannonRealModel and cannonRealModel:IsA("Model")) then
 		cannonModel:Destroy()
-		Logger.Warn("[SquidCall] Cannon VFX model is missing a Primary/BasePart or Middle part.")
+		Logger.Warn("[SquidCall] Cannon VFX model is missing a Primary/BasePart or CannonReal model.")
+		return nil
+	end
+
+	local middle = cannonRealModel:FindFirstChild(CANNON_MIDDLE_NAME)
+	if not (middle and middle:IsA("BasePart")) then
+		cannonModel:Destroy()
+		Logger.Warn("[SquidCall] CannonReal VFX model is missing the Middle part.")
 		return nil
 	end
 
 	local muzzleAttachment = middle:FindFirstChild(CANNON_MUZZLE_ATTACHMENT_NAME)
 	if not (muzzleAttachment and muzzleAttachment:IsA("Attachment")) then
 		cannonModel:Destroy()
-		Logger.Warn("[SquidCall] Cannon VFX model is missing Middle.CannonBall attachment.")
+		Logger.Warn("[SquidCall] CannonReal VFX model is missing Middle.CannonBall attachment.")
 		return nil
 	end
 
@@ -220,9 +236,11 @@ local function probeCannonMuzzlePosition(
 		return nil
 	end
 
+	destroyWeldConstraints(cannonModel)
 	local pivotCFrame = resolveCannonBaseCFrame(bossRootPart.Position, impactPosition)
-	local middleLocalCFrame = cannonModel:GetPivot():ToObjectSpace(middle.CFrame)
-	cannonModel:PivotTo(resolveCannonModelCFrame(pivotCFrame, middleLocalCFrame, impactPosition))
+	cannonRealModel:PivotTo(pivotCFrame)
+	local middleLocalCFrame = cannonRealModel:GetPivot():ToObjectSpace(middle.CFrame)
+	cannonRealModel:PivotTo(resolveCannonModelCFrame(pivotCFrame, middleLocalCFrame, impactPosition))
 
 	local muzzlePosition = muzzleAttachment.WorldPosition
 	cannonModel:Destroy()

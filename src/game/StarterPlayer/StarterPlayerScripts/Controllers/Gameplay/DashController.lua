@@ -59,6 +59,8 @@ local DashController = {
 	_activeVelocityValue = nil :: NumberValue?,
 	_activeTween = nil :: Tween?,
 	_activeTrack = nil :: AnimationTrack?,
+	_activeHumanoid = nil :: Humanoid?,
+	_previousAutoRotate = nil :: boolean?,
 	_dashToken = 0,
 	_nextDashAllowedAt = 0,
 	_requestRemote = nil :: RemoteFunction?,
@@ -123,6 +125,33 @@ end
 
 local function isDirectionalKeyboardDashEnabled(): boolean
 	return UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter
+end
+
+local function toHorizontalUnit(vector: Vector3): Vector3?
+	local horizontal = Vector3.new(vector.X, 0, vector.Z)
+	if horizontal.Magnitude <= 1e-4 then
+		return nil
+	end
+
+	return horizontal.Unit
+end
+
+local function resolveDashVector(rootPart: BasePart, direction: string): Vector3
+	local rootCFrame = rootPart.CFrame
+	local lookDirection = toHorizontalUnit(rootCFrame.LookVector) or Vector3.new(0, 0, -1)
+	local rightDirection = toHorizontalUnit(rootCFrame.RightVector) or Vector3.new(1, 0, 0)
+
+	if direction == "Back" then
+		return -lookDirection
+	end
+	if direction == "Left" then
+		return -rightDirection
+	end
+	if direction == "Right" then
+		return rightDirection
+	end
+
+	return lookDirection
 end
 
 function DashController:_ensureRemote(): RemoteFunction?
@@ -246,11 +275,23 @@ function DashController:_destroyActiveMover()
 	end
 end
 
+function DashController:_restoreAutoRotate()
+	local humanoid = self._activeHumanoid
+	local previousAutoRotate = self._previousAutoRotate
+	self._activeHumanoid = nil
+	self._previousAutoRotate = nil
+
+	if humanoid and humanoid.Parent ~= nil and previousAutoRotate ~= nil then
+		humanoid.AutoRotate = previousAutoRotate
+	end
+end
+
 function DashController:_clearActiveDash()
 	self._dashToken += 1
 	self:_disconnectHeartbeat()
 	self:_stopActiveTrack()
 	self:_destroyActiveMover()
+	self:_restoreAutoRotate()
 end
 
 function DashController:_endDash(dashToken: number)
@@ -261,6 +302,15 @@ function DashController:_endDash(dashToken: number)
 	self:_disconnectHeartbeat()
 	self:_stopActiveTrack()
 	self:_destroyActiveMover()
+	self:_restoreAutoRotate()
+end
+
+function DashController:_faceDashDirection(humanoid: Humanoid, rootPart: BasePart, dashDirection: Vector3)
+	self:_restoreAutoRotate()
+	self._activeHumanoid = humanoid
+	self._previousAutoRotate = humanoid.AutoRotate
+	humanoid.AutoRotate = false
+	rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + dashDirection)
 end
 
 function DashController:_playDashAnimation(character: Model)
@@ -316,11 +366,16 @@ function DashController:_createVelocityValue(initialValue: number): NumberValue
 	return velocityValue
 end
 
-function DashController:_startForwardOrBackMovement(rootPart: BasePart, direction: string, durationSeconds: number, dashToken: number)
+function DashController:_startForwardOrBackMovement(
+	rootPart: BasePart,
+	direction: string,
+	dashDirection: Vector3,
+	durationSeconds: number,
+	dashToken: number
+)
 	local velocityValue = self:_createVelocityValue(DASH_START_SPEED)
 	local bodyVelocity = self:_createBodyVelocity(rootPart)
 	local easingStyle = if direction == "Back" then Enum.EasingStyle.Exponential else Enum.EasingStyle.Sine
-	local directionMultiplier = if direction == "Back" then -1 else 1
 
 	local tween = TweenService:Create(
 		velocityValue,
@@ -336,15 +391,13 @@ function DashController:_startForwardOrBackMovement(rootPart: BasePart, directio
 			return
 		end
 
-		local lookDirection = CFrame.lookAt(rootPart.Position, rootPart.Position + rootPart.CFrame.LookVector).LookVector
-		bodyVelocity.Velocity = lookDirection * velocityValue.Value * directionMultiplier
+		bodyVelocity.Velocity = dashDirection * velocityValue.Value
 	end)
 end
 
-function DashController:_startSideMovement(rootPart: BasePart, direction: string, durationSeconds: number, dashToken: number)
+function DashController:_startSideMovement(rootPart: BasePart, dashDirection: Vector3, durationSeconds: number, dashToken: number)
 	local velocityValue = self:_createVelocityValue(0)
 	local bodyVelocity = self:_createBodyVelocity(rootPart)
-	local directionMultiplier = if direction == "Left" then -1 else 1
 
 	local tween = TweenService:Create(
 		velocityValue,
@@ -360,18 +413,17 @@ function DashController:_startSideMovement(rootPart: BasePart, direction: string
 			return
 		end
 
-		local rightDirection = CFrame.lookAt(rootPart.Position, rootPart.Position + rootPart.CFrame.LookVector).RightVector
-		bodyVelocity.Velocity = rightDirection * velocityValue.Value * directionMultiplier
+		bodyVelocity.Velocity = dashDirection * velocityValue.Value
 	end)
 end
 
-function DashController:_startMovement(rootPart: BasePart, direction: string, durationSeconds: number, dashToken: number)
+function DashController:_startMovement(rootPart: BasePart, direction: string, dashDirection: Vector3, durationSeconds: number, dashToken: number)
 	if direction == "Left" or direction == "Right" then
-		self:_startSideMovement(rootPart, direction, durationSeconds, dashToken)
+		self:_startSideMovement(rootPart, dashDirection, durationSeconds, dashToken)
 		return
 	end
 
-	self:_startForwardOrBackMovement(rootPart, direction, durationSeconds, dashToken)
+	self:_startForwardOrBackMovement(rootPart, direction, dashDirection, durationSeconds, dashToken)
 end
 
 function DashController:RequestDash(input: InputObject?)
@@ -429,9 +481,11 @@ function DashController:RequestDash(input: InputObject?)
 
 	self._dashToken += 1
 	local dashToken = self._dashToken
+	local dashDirection = resolveDashVector(parts.rootPart, direction)
+	self:_faceDashDirection(parts.humanoid, parts.rootPart, dashDirection)
 	CombatSoundUtil.PlayLocalDash(direction)
 	self:_playDashAnimation(parts.character)
-	self:_startMovement(parts.rootPart, direction, durationSeconds, dashToken)
+	self:_startMovement(parts.rootPart, direction, dashDirection, durationSeconds, dashToken)
 
 	task.delay(durationSeconds, function()
 		self:_endDash(dashToken)

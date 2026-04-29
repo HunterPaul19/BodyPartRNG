@@ -119,6 +119,9 @@
         "AppraisalService": {
           "$path": "src/game/ServerScriptService/Services/Gameplay/AppraisalService.lua"
         },
+        "AudioSettingsService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/AudioSettingsService.lua"
+        },
         "AuraService": {
           "$path": "src/game/ServerScriptService/Services/Gameplay/AuraService.lua"
         },
@@ -188,6 +191,9 @@
         "DataService": {
           "$path": "src/game/ServerScriptService/Services/Core/DataService"
         },
+        "DailyChestService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/DailyChestService.lua"
+        },
         "DayNightCycleService": {
           "$path": "src/game/ServerScriptService/Services/Gameplay/DayNightCycleService.lua"
         },
@@ -251,6 +257,9 @@
         "TitleService": {
           "$path": "src/game/ServerScriptService/Services/Gameplay/TitleService.lua"
         },
+        "TutorialService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/TutorialService.lua"
+        },
         "VoidRecoveryService": {
           "$path": "src/game/ServerScriptService/Services/Core/VoidRecoveryService.lua"
         }
@@ -277,6 +286,9 @@
           },
           "BackgroundMusicController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/BackgroundMusicController.lua"
+          },
+          "MusicTopBarController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/MusicTopBarController.lua"
           },
           "BodyPartBuildLockController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/BodyPartBuildLockController.lua"
@@ -331,6 +343,9 @@
           },
           "CraftingController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/CraftingController.lua"
+          },
+          "DailyChestController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/DailyChestController.lua"
           },
           "DataController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Core/DataController"
@@ -388,6 +403,12 @@
           },
           "MoneyHUDController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/UI/MoneyHUDController.lua"
+          },
+          "ObjectiveGuideController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/ObjectiveGuideController.lua"
+          },
+          "TutorialController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/TutorialController.lua"
           },
           "OverheadTitleController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/OverheadTitleController.lua"

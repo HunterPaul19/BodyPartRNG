@@ -65,6 +65,19 @@ local function getPayloadBoolean(payload: any, fieldName: string): boolean
 	return payload[fieldName] == true
 end
 
+local function getPayloadModel(payload: any, fieldName: string): Model?
+	if typeof(payload) ~= "table" then
+		return nil
+	end
+
+	local value = payload[fieldName]
+	if typeof(value) == "Instance" and value:IsA("Model") then
+		return value
+	end
+
+	return nil
+end
+
 local function getPayloadPlayer(payload: any, playerFieldName: string, userIdFieldName: string): Player?
 	if typeof(payload) ~= "table" then
 		return nil
@@ -212,8 +225,9 @@ function CombatAudioController:_handleBossHitConfirmed(payload: any)
 		return
 	end
 
+	local targetType = getPayloadString(payload, "targetType") or "boss"
 	if isLocalUserId(attackerUserId) then
-		if getPayloadBoolean(payload, "isKillingBlow") and playBossDeathSound() then
+		if targetType == "boss" and getPayloadBoolean(payload, "isKillingBlow") and playBossDeathSound() then
 			return
 		end
 
@@ -221,7 +235,8 @@ function CombatAudioController:_handleBossHitConfirmed(payload: any)
 		return
 	end
 
-	CombatSoundUtil.PlaySpatialHit(resolveActiveBoss(), nil)
+	local targetModel = if targetType == "minion" then getPayloadModel(payload, "targetModel") else resolveActiveBoss()
+	CombatSoundUtil.PlaySpatialHit(targetModel, getPayloadPosition(payload, "targetPosition"))
 end
 
 function CombatAudioController:OnStart()

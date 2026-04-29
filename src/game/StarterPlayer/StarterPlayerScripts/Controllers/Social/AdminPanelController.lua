@@ -12,9 +12,11 @@ local CraftingMaterialConfig = require(ReplicatedStorage.Shared.Config.CraftingM
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
 local AdminPanelDefinitions = require(ReplicatedStorage.Shared.UI.AdminPanelDefinitions)
+local ChestOpeningSequence = require(ReplicatedStorage.Shared.UI.ChestOpeningSequence)
 local PlayerStatsPresentation = require(ReplicatedStorage.Shared.UI.PlayerStatsPresentation)
 local DialogueController = require(script.Parent.DialogueController)
 local HUDWindowController = require(script.Parent.HUDWindowController)
+local ObjectiveGuideController = require(script.Parent.ObjectiveGuideController)
 local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
@@ -23,6 +25,7 @@ local OVERVIEW_TAB_ID = "overview"
 local PLAYERS_TAB_ID = "players"
 local PROGRESSION_TAB_ID = "progression"
 local BODY_PARTS_TAB_ID = "bodyParts"
+local ROLL_SOURCES_TAB_ID = "cases"
 local HEAD_ACCESSORY_SLOT = "HeadAccessory"
 local GEAR_ACCESSORY_SLOT = "GearAccessory"
 local WINDOW_NAME = "AdminPanel"
@@ -39,6 +42,11 @@ local SANDBOX_FIELD_COLOR = Color3.fromRGB(24, 31, 55)
 local SANDBOX_BUTTON_COLOR = Color3.fromRGB(45, 59, 103)
 local SANDBOX_BUTTON_TEXT_COLOR = Color3.fromRGB(235, 240, 255)
 local DEFAULT_CRAFTING_MATERIAL_GRANT_AMOUNT = "25"
+local ADMIN_CHEST_TRIGGER_ACTION_IDS = table.freeze({
+	trigger_daily_free_chest = true,
+	trigger_vip_chest = true,
+	trigger_vip_plus_chest = true,
+})
 
 local AdminPanelController = {}
 
@@ -223,6 +231,77 @@ function AdminPanelController:_getRemote(): RemoteFunction?
 	return nil
 end
 
+function AdminPanelController:_handlePostAdminAction(tabId: string, actionId: string, result: any)
+	if not (result and result.ok == true) then
+		return
+	end
+
+	if tabId == OVERVIEW_TAB_ID and actionId == "test_dialogue" then
+		local data = if typeof(result.data) == "table" then result.data else {}
+		local dialogueId = if typeof(data.dialogueId) == "string" and data.dialogueId ~= "" then data.dialogueId else "merchant_default"
+		local context = if typeof(data.context) == "table" then data.context else {}
+
+		HUDWindowController:CloseWindow(WINDOW_NAME, true)
+		task.defer(function()
+			DialogueController.StartDialogue(dialogueId, context)
+		end)
+		return
+	end
+
+	if tabId == OVERVIEW_TAB_ID and actionId == "guide_to_crafting" then
+		local data = if typeof(result.data) == "table" then result.data else {}
+		local objectiveId = if typeof(data.objectiveId) == "string" and data.objectiveId ~= "" then data.objectiveId else "crafting"
+		local targetPath = if typeof(data.targetPath) == "string" and data.targetPath ~= "" then data.targetPath else "Workspace.Crafting"
+		local fallbackTargetPath = if typeof(data.fallbackTargetPath) == "string" and data.fallbackTargetPath ~= ""
+			then data.fallbackTargetPath
+			else "Workspace.Crafting"
+
+		HUDWindowController:CloseWindow(WINDOW_NAME, true)
+		task.defer(function()
+			ObjectiveGuideController.ShowObjective(objectiveId, targetPath, {
+				fallbackTargetPath = fallbackTargetPath,
+			})
+		end)
+		return
+	end
+
+	if tabId == ROLL_SOURCES_TAB_ID and actionId == "preview_chest_opening" then
+		local data = if typeof(result.data) == "table" then result.data else {}
+		local chestId = if typeof(data.chestId) == "string" and data.chestId ~= "" then data.chestId else "Basic"
+		local rewards = if typeof(data.rewards) == "table" then data.rewards else {}
+
+		HUDWindowController:CloseWindow(WINDOW_NAME, true)
+		task.defer(function()
+			local ok, errorMessage = pcall(function()
+				ChestOpeningSequence.OpenChest(chestId, rewards)
+			end)
+			if not ok then
+				Logger.Warn(string.format("[AdminPanelController] Chest preview failed: %s", tostring(errorMessage)))
+				self:_setStatus("Chest preview failed. Check the output for details.", ERROR_COLOR)
+			end
+		end)
+	end
+
+	if tabId == ROLL_SOURCES_TAB_ID and ADMIN_CHEST_TRIGGER_ACTION_IDS[actionId] == true then
+		local data = if typeof(result.data) == "table" then result.data else {}
+		local visualChestId = if typeof(data.visualChestId) == "string" and data.visualChestId ~= ""
+			then data.visualChestId
+			else if typeof(data.chestId) == "string" and data.chestId ~= "" then data.chestId else "Basic"
+		local rewards = if typeof(data.rewards) == "table" then data.rewards else {}
+
+		HUDWindowController:CloseWindow(WINDOW_NAME, true)
+		task.defer(function()
+			local ok, errorMessage = pcall(function()
+				ChestOpeningSequence.OpenChestAsync(visualChestId, rewards)
+			end)
+			if not ok then
+				Logger.Warn(string.format("[AdminPanelController] Admin chest trigger failed: %s", tostring(errorMessage)))
+				self:_setStatus("Admin chest trigger failed. Check the output for details.", ERROR_COLOR)
+			end
+		end)
+	end
+end
+
 function AdminPanelController:_styleTabButton(button: GuiButton, selected: boolean)
 	local indicator = button:FindFirstChild("SelectedIndicator")
 	local titleLabel = button:FindFirstChild("TitleLabel")
@@ -345,16 +424,7 @@ function AdminPanelController:_invokeAction(tabId: string, actionId: string, act
 		return
 	end
 
-	if result.ok and tabId == OVERVIEW_TAB_ID and actionId == "test_dialogue" then
-		local data = if typeof(result.data) == "table" then result.data else {}
-		local dialogueId = if typeof(data.dialogueId) == "string" and data.dialogueId ~= "" then data.dialogueId else "merchant_default"
-		local context = if typeof(data.context) == "table" then data.context else {}
-
-		HUDWindowController:CloseWindow(WINDOW_NAME, true)
-		task.defer(function()
-			DialogueController.StartDialogue(dialogueId, context)
-		end)
-	end
+	self:_handlePostAdminAction(tabId, actionId, result)
 
 	local message = tostring(result.message or "No response message provided.")
 	self:_setStatus(message, if result.ok then SUCCESS_COLOR else ERROR_COLOR)
@@ -647,6 +717,7 @@ function AdminPanelController:_createActionFormCard(parent: Instance, tabId: str
 			return
 		end
 
+		self:_handlePostAdminAction(tabId, action.id, result)
 		self:_setStatus(tostring(result.message or "No response message provided."), if result.ok then SUCCESS_COLOR else ERROR_COLOR)
 	end)
 end

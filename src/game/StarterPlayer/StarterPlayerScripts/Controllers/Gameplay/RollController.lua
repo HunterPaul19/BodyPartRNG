@@ -37,4 +37,37 @@ function RollController:OnStart()
 	))
 end
 
+function RollController:GetTutorialTarget(targetId: string): GuiObject?
+	if not self._guiControls then
+		return nil
+	end
+	if typeof(self._guiControls.GetTutorialTarget) ~= "function" then
+		return nil
+	end
+
+	return self._guiControls:GetTutorialTarget(targetId)
+end
+
+function RollController:PrepareTutorialTarget(targetId: string): boolean
+	if not self._guiControls then
+		return false
+	end
+	if typeof(self._guiControls.PrepareTutorialTarget) ~= "function" then
+		return false
+	end
+
+	return self._guiControls:PrepareTutorialTarget(targetId) == true
+end
+
+function RollController:IsRollPresentationPending(): boolean
+	if not self._guiControls then
+		return false
+	end
+	if typeof(self._guiControls.IsRollPresentationPending) ~= "function" then
+		return false
+	end
+
+	return self._guiControls:IsRollPresentationPending() == true
+end
+
 return RollController

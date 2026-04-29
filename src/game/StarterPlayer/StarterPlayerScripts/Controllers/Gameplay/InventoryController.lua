@@ -53,6 +53,7 @@ local AUTO_SIZE_ENABLED_KEY = "autoSizeEnabled"
 local BODY_PARTS_REMOTES_FOLDER_NAME = "BodyParts"
 local AURAS_REMOTES_FOLDER_NAME = "Auras"
 local ACCESSORIES_REMOTES_FOLDER_NAME = "Accessories"
+local CRAFTING_REMOTES_FOLDER_NAME = "Crafting"
 local GET_STATE_REMOTE_NAME = "GetSessionLoadout"
 local GET_EXISTENCE_REMOTE_NAME = "GetTotalInExistenceForPiece"
 local EQUIP_REMOTE_NAME = "EquipOwnedBodyPart"
@@ -71,6 +72,8 @@ local ACCESSORY_GET_STATE_REMOTE_NAME = "GetAccessoryState"
 local ACCESSORY_EQUIP_REMOTE_NAME = "EquipOwnedAccessory"
 local ACCESSORY_UNEQUIP_REMOTE_NAME = "UnequipAccessorySlot"
 local ACCESSORY_TOGGLE_FAVORITE_REMOTE_NAME = "ToggleFavoriteOwnedAccessory"
+local ACCESSORY_SELL_OWNED_REMOTE_NAME = "SellOwnedAccessory"
+local SELL_MATERIAL_STACK_REMOTE_NAME = "SellCraftingMaterialStack"
 local HEAD_ACCESSORY_FILTER = "headAccessory"
 local GEAR_ACCESSORY_FILTER = "gearAccessory"
 local SELECTED_COLOR = Color3.fromRGB(116, 192, 255)
@@ -140,6 +143,7 @@ local MATERIAL_PREVIEW_VISIBLE_LABEL_ORDER = table.freeze({
 	"Rarity",
 	"Mutation",
 	"Content",
+	"Cash",
 })
 local ACCESSORY_PREVIEW_VISIBLE_LABEL_ORDER = table.freeze({
 	"Bundle",
@@ -694,6 +698,8 @@ function InventoryController:_ensureState()
 	self._bodyPartRefreshScheduled = false
 	self._pendingPotionSellOwnedId = nil :: string?
 	self._pendingPotionSellQuantity = 1
+	self._lastTutorialPotionStateRefreshAt = 0
+	self._lastTutorialBodyPartStateRefreshAt = 0
 	self._openButtonBound = false
 	self._fullUiReady = false
 	self._dataBindingsReady = false
@@ -734,14 +740,14 @@ function InventoryController:_syncInventoryAnchor(hasPreview: boolean)
 end
 
 function InventoryController:_getOwnedLookup(): { [string]: OwnedBodyPartRecord }
-	local bodyPartsState = DataController:Get(BODY_PARTS_DATA_KEY)
-	if typeof(bodyPartsState) == "table" and typeof(bodyPartsState.ownedById) == "table" then
-		return bodyPartsState.ownedById
-	end
-
 	local latestOwnedBodyParts = self._loadoutState and self._loadoutState.ownedBodyParts
 	if typeof(latestOwnedBodyParts) == "table" then
 		return latestOwnedBodyParts
+	end
+
+	local bodyPartsState = DataController:Get(BODY_PARTS_DATA_KEY)
+	if typeof(bodyPartsState) == "table" and typeof(bodyPartsState.ownedById) == "table" then
+		return bodyPartsState.ownedById
 	end
 
 	return {}
@@ -871,6 +877,20 @@ function InventoryController:_getAccessoryRemotesFolder(): Folder?
 	return nil
 end
 
+function InventoryController:_getCraftingRemotesFolder(): Folder?
+	local remotesFolder = ReplicatedStorage:FindFirstChild("Remotes")
+	if not remotesFolder then
+		return nil
+	end
+
+	local craftingFolder = remotesFolder:FindFirstChild(CRAFTING_REMOTES_FOLDER_NAME)
+	if craftingFolder and craftingFolder:IsA("Folder") then
+		return craftingFolder
+	end
+
+	return nil
+end
+
 function InventoryController:_ensureRemotes(): boolean
 	if self._remotes.getState
 		and self._remotes.getExistence
@@ -990,6 +1010,7 @@ function InventoryController:_ensureAccessoryRemotes(): boolean
 		and self._remotes.accessoryEquip
 		and self._remotes.accessoryUnequip
 		and self._remotes.accessoryToggleFavorite
+		and self._remotes.accessorySell
 	then
 		return true
 	end
@@ -1003,6 +1024,7 @@ function InventoryController:_ensureAccessoryRemotes(): boolean
 	local equipRemote = accessoriesFolder:FindFirstChild(ACCESSORY_EQUIP_REMOTE_NAME)
 	local unequipRemote = accessoriesFolder:FindFirstChild(ACCESSORY_UNEQUIP_REMOTE_NAME)
 	local toggleFavoriteRemote = accessoriesFolder:FindFirstChild(ACCESSORY_TOGGLE_FAVORITE_REMOTE_NAME)
+	local sellRemote = accessoriesFolder:FindFirstChild(ACCESSORY_SELL_OWNED_REMOTE_NAME)
 
 	if not (getStateRemote and getStateRemote:IsA("RemoteFunction")) then
 		return false
@@ -1016,11 +1038,34 @@ function InventoryController:_ensureAccessoryRemotes(): boolean
 	if not (toggleFavoriteRemote and toggleFavoriteRemote:IsA("RemoteFunction")) then
 		return false
 	end
+	if not (sellRemote and sellRemote:IsA("RemoteFunction")) then
+		return false
+	end
 
 	self._remotes.accessoryGetState = getStateRemote
 	self._remotes.accessoryEquip = equipRemote
 	self._remotes.accessoryUnequip = unequipRemote
 	self._remotes.accessoryToggleFavorite = toggleFavoriteRemote
+	self._remotes.accessorySell = sellRemote
+	return true
+end
+
+function InventoryController:_ensureCraftingSellMaterialRemote(): boolean
+	if self._remotes.craftingSellMaterial then
+		return true
+	end
+
+	local craftingFolder = self:_getCraftingRemotesFolder()
+	if not craftingFolder then
+		return false
+	end
+
+	local sellMaterialRemote = craftingFolder:FindFirstChild(SELL_MATERIAL_STACK_REMOTE_NAME)
+	if not (sellMaterialRemote and sellMaterialRemote:IsA("RemoteFunction")) then
+		return false
+	end
+
+	self._remotes.craftingSellMaterial = sellMaterialRemote
 	return true
 end
 
@@ -3157,10 +3202,12 @@ function InventoryController:_syncPreview()
 	local renderKey = if previewModel == nil
 		then "none"
 		else string.format(
-			"%s|%s|%s|%s|%s|%s|%s|%s",
+			"%s|%s|%s|%s|%s|%s|%s|%s|%s|%s",
 			tostring(previewModel.itemType),
 			tostring(previewModel.ownedId or ""),
 			tostring(previewModel.pieceId or previewModel.auraId or previewModel.potionId or ""),
+			tostring(previewModel.accessoryId or ""),
+			tostring(previewModel.materialId or ""),
 			tostring(previewModel.region or ""),
 			tostring(previewModel.previewScale or ""),
 			tostring(previewModel.sizeText or previewModel.rarityText or ""),
@@ -3389,6 +3436,30 @@ function InventoryController:_buildSellOneConfirmationMessage(ownedRecord: Owned
 	})
 end
 
+function InventoryController:_buildSellAccessoryConfirmationMessage(ownedRecord: OwnedAccessoryRecord): string
+	local accessoryConfig = AccessoryConfig.Get(ownedRecord.accessoryId)
+	local accessoryName = if accessoryConfig then accessoryConfig.label else "accessory"
+
+	return TranslationHelper.formatByKey(LocalizationKeys.Inventory.SellAccessory.Confirm, {
+		AccessoryName = accessoryName,
+		Payout = formatWholeNumber(AccessoryConfig.GetSellPrice(ownedRecord.accessoryId)),
+	})
+end
+
+function InventoryController:_buildSellMaterialStackConfirmationMessage(ownedRecord: OwnedMaterialRecord): string
+	local materialConfig = CraftingMaterialConfig.Get(ownedRecord.materialId)
+	local materialName = if materialConfig then materialConfig.label else "material"
+	local quantity = math.max(0, math.floor(tonumber(ownedRecord.amount) or 0))
+	local sellPrice = CraftingMaterialConfig.GetSellPrice(ownedRecord.materialId)
+
+	return TranslationHelper.formatByKey(LocalizationKeys.Inventory.SellMaterialStack.Confirm, {
+		MaterialName = materialName,
+		Quantity = formatWholeNumber(quantity),
+		SellPrice = formatWholeNumber(sellPrice),
+		Payout = formatWholeNumber(quantity * sellPrice),
+	})
+end
+
 function InventoryController:_getPendingPotionSellRecord(): (string?, OwnedPotionRecord?)
 	local ownedId = self._pendingPotionSellOwnedId
 	local potionId = PotionController.GetPotionIdFromOwnedId(ownedId)
@@ -3506,7 +3577,7 @@ function InventoryController:_syncSecondaryActionButtons()
 	local favoriteButton = self._ui.favoriteButton
 	if favoriteButton then
 		applyGuiButtonLayout(favoriteButton, layoutDefaults and layoutDefaults.favorite or nil)
-		if isAuraSelection or isAccessorySelection then
+		if isAuraSelection then
 			applyGuiButtonLayout(favoriteButton, layoutDefaults and layoutDefaults.auraFavorite or nil)
 		end
 		favoriteButton.Visible = not isMaterialSelection
@@ -3528,8 +3599,8 @@ function InventoryController:_syncSecondaryActionButtons()
 	local sellButton = self._ui.sellButton
 	if sellButton then
 		applyGuiButtonLayout(sellButton, layoutDefaults and layoutDefaults.sell or nil)
-		sellButton.Visible = not isAuraSelection and not isAccessorySelection and not isMaterialSelection
-		sellButton.Active = hasOwnedSelection and not isAuraSelection and not isAccessorySelection and not isMaterialSelection
+		sellButton.Visible = not isAuraSelection
+		sellButton.Active = hasOwnedSelection and not isAuraSelection
 		sellButton.AutoButtonColor = false
 	end
 end
@@ -3654,6 +3725,243 @@ function InventoryController:_syncList()
 		recordCount = #self:_getInventoryRecords(),
 		visibleCount = #self:_getVisibleRecords(),
 	})
+end
+
+function InventoryController:_getFirstTutorialRowButton(predicate: (InventoryRecordView) -> boolean): GuiObject?
+	self:_syncList()
+	for _, recordView in ipairs(self:_getVisibleRecords()) do
+		if predicate(recordView) then
+			local button = self._rowButtonsByOwnedId[recordView.ownedId]
+			if button and button:IsA("GuiObject") and button.Visible == true then
+				self:_scrollTutorialRowIntoView(button)
+				return button
+			end
+		end
+	end
+
+	return nil
+end
+
+function InventoryController:_scrollTutorialRowIntoView(button: GuiObject)
+	local scrollingFrame = self._scrollingFrame
+	if not (scrollingFrame and button:IsDescendantOf(scrollingFrame)) then
+		return
+	end
+
+	local viewTop = scrollingFrame.AbsolutePosition.Y
+	local viewBottom = viewTop + scrollingFrame.AbsoluteSize.Y
+	local buttonTop = button.AbsolutePosition.Y
+	local buttonBottom = buttonTop + button.AbsoluteSize.Y
+	local deltaY = 0
+	if buttonTop < viewTop then
+		deltaY = buttonTop - viewTop
+	elseif buttonBottom > viewBottom then
+		deltaY = buttonBottom - viewBottom
+	end
+
+	if math.abs(deltaY) < 1 then
+		return
+	end
+
+	local current = scrollingFrame.CanvasPosition
+	scrollingFrame.CanvasPosition = Vector2.new(current.X, math.max(0, current.Y + deltaY))
+end
+
+function InventoryController:_clearTutorialSearch()
+	self._searchText = ""
+
+	local searchBox = self._ui and self._ui.searchBox
+	if searchBox and searchBox:IsA("TextBox") and searchBox.Text ~= "" then
+		searchBox.Text = ""
+	end
+end
+
+function InventoryController:_hasOwnedPotionUse(potionId: string): boolean
+	local record = self:_getOwnedPotionLookup()[potionId]
+	return typeof(record) == "table" and (tonumber(record.amount) or 0) > 0
+end
+
+function InventoryController:_refreshTutorialPotionStateIfNeeded(potionId: string)
+	if self:_hasOwnedPotionUse(potionId) then
+		return
+	end
+
+	local now = os.clock()
+	if now - (tonumber(self._lastTutorialPotionStateRefreshAt) or 0) < 1 then
+		return
+	end
+	self._lastTutorialPotionStateRefreshAt = now
+
+	task.spawn(function()
+		PotionController:RequestState()
+	end)
+end
+
+function InventoryController:_hasVisibleTutorialBodyPart(): boolean
+	for _, recordView in ipairs(self:_getVisibleRecords()) do
+		if recordView.itemType == "bodyPart" then
+			return true
+		end
+	end
+
+	return false
+end
+
+function InventoryController:_refreshTutorialBodyPartStateIfNeeded()
+	if self:_hasVisibleTutorialBodyPart() then
+		return
+	end
+
+	local now = os.clock()
+	if now - (tonumber(self._lastTutorialBodyPartStateRefreshAt) or 0) < 1 then
+		return
+	end
+	self._lastTutorialBodyPartStateRefreshAt = now
+
+	task.spawn(function()
+		self:_requestLoadoutState()
+	end)
+end
+
+function InventoryController:PrepareTutorialTarget(targetId: string)
+	if targetId ~= "luckPotion" and targetId ~= "bodyPart" then
+		return
+	end
+
+	local playerGui = self._playerGui or LOCAL_PLAYER:FindFirstChildOfClass("PlayerGui")
+	if not playerGui then
+		return
+	end
+
+	local ok = pcall(function()
+		self:_ensureFullUi(playerGui)
+	end)
+	if not ok or not self._ui or not FrameController:IsOpen(WINDOW_NAME) then
+		return
+	end
+
+	self:_clearTutorialSearch()
+	if targetId == "bodyPart" then
+		self._selectedFilterRegion = nil
+		self._selectedSpecialFilter = nil
+		self:_markInventoryRecordsDirty()
+		self:_syncFilterButtons()
+		self:_syncList()
+		self:_syncPreview()
+		self:_syncActionButton()
+		self:_syncSecondaryActionButtons()
+
+		if not self:_hasVisibleTutorialBodyPart() then
+			self:_refreshTutorialBodyPartStateIfNeeded()
+			self:_markInventoryRecordsDirty()
+			self:_syncFilterButtons()
+			self:_syncList()
+			self:_syncPreview()
+			self:_syncActionButton()
+			self:_syncSecondaryActionButtons()
+		end
+		return
+	end
+
+	self:_refreshTutorialPotionStateIfNeeded("luck1")
+	self:_markInventoryRecordsDirty()
+	self:_syncFilterButtons()
+	self:_syncList()
+end
+
+function InventoryController:GetTutorialTarget(targetId: string): GuiObject?
+	local playerGui = self._playerGui or LOCAL_PLAYER:FindFirstChildOfClass("PlayerGui")
+	if not playerGui then
+		return nil
+	end
+
+	if targetId == "inventoryButton" then
+		self:_cacheOpenButton(playerGui)
+		return self._ui.openButton
+	end
+
+	local ok = pcall(function()
+		self:_ensureFullUi(playerGui)
+	end)
+	if not ok or not self._ui then
+		return nil
+	end
+	if not FrameController:IsOpen(WINDOW_NAME) then
+		return nil
+	end
+
+	if targetId == "bodyPartRow" then
+		return self:_getFirstTutorialRowButton(function(recordView)
+			return recordView.itemType == "bodyPart"
+		end)
+	end
+	if targetId == "bodyPartAction" then
+		local previewState = self._previewState
+		if previewState and previewState.itemType == "bodyPart" and self._ui.equipButton.Visible == true then
+			return self._ui.equipButton
+		end
+		return nil
+	end
+	if targetId == "closeButton" then
+		local closeButton = self._ui.closeButton
+		return if closeButton and closeButton.Visible == true and closeButton.Active == true then closeButton else nil
+	end
+	if targetId == "headAccessoryFilter" then
+		return self._ui.accessoryButtons[1]
+	end
+	if targetId == "holidayCrownRow" then
+		if self._selectedSpecialFilter ~= HEAD_ACCESSORY_FILTER then
+			return nil
+		end
+		return self:_getFirstTutorialRowButton(function(recordView)
+			local record = recordView.record :: any
+			return recordView.itemType == "accessory" and typeof(record) == "table" and record.accessoryId == "holiday_crown"
+		end)
+	end
+	if targetId == "headAccessoryAction" then
+		local previewState = self._previewState
+		if
+			previewState
+			and previewState.itemType == "accessory"
+			and previewState.accessoryId == "holiday_crown"
+			and self._ui.equipButton.Visible == true
+		then
+			return self._ui.equipButton
+		end
+		return nil
+	end
+	if targetId == "potionFilter" then
+		if self._selectedSpecialFilter == "potion" then
+			return nil
+		end
+
+		local button = self._ui.potionButtons[1]
+		return if button and button.Visible == true and button.Active == true then button else nil
+	end
+	if targetId == "luckPotionRow" then
+		if self._selectedSpecialFilter ~= "potion" then
+			return nil
+		end
+		return self:_getFirstTutorialRowButton(function(recordView)
+			local record = recordView.record :: any
+			return recordView.itemType == "potion" and typeof(record) == "table" and record.potionId == "luck1"
+		end)
+	end
+	if targetId == "potionAction" then
+		local previewState = self._previewState
+		if
+			previewState
+			and previewState.itemType == "potion"
+			and previewState.potionId == "luck1"
+			and self._ui.equipButton.Visible == true
+			and self._ui.equipButton.Active == true
+		then
+			return self._ui.equipButton
+		end
+		return nil
+	end
+
+	return nil
 end
 
 function InventoryController:_syncBodyPartDependentUi()
@@ -4357,7 +4665,15 @@ function InventoryController:_sellPreviewedItem()
 		return
 	end
 
-	if self._previewState and (self._previewState.itemType == "aura" or self._previewState.itemType == "accessory") then
+	if self._previewState and self._previewState.itemType == "aura" then
+		return
+	end
+	if self._previewState and self._previewState.itemType == "accessory" then
+		if ConfirmationWarning.Prompt(self:_buildSellAccessoryConfirmationMessage(ownedRecord :: any)) ~= true then
+			return
+		end
+
+		self:_confirmSellPreviewedAccessory((ownedRecord :: any).ownedId)
 		return
 	end
 	if self._previewState and self._previewState.itemType == "potion" then
@@ -4365,6 +4681,14 @@ function InventoryController:_sellPreviewedItem()
 		return
 	end
 	if self._previewState and self._previewState.itemType == "material" then
+		if ConfirmationWarning.Prompt(self:_buildSellMaterialStackConfirmationMessage(ownedRecord :: any)) ~= true then
+			return
+		end
+
+		local materialId = (ownedRecord :: any).materialId
+		if typeof(materialId) == "string" and materialId ~= "" then
+			self:_confirmSellMaterialStack(materialId)
+		end
 		return
 	end
 
@@ -4373,6 +4697,77 @@ function InventoryController:_sellPreviewedItem()
 	end
 
 	self:_confirmSellPreviewedBodyPart(ownedRecord.ownedId)
+end
+
+function InventoryController:_confirmSellPreviewedAccessory(ownedId: string)
+	if not self:_ensureAccessoryRemotes() then
+		return
+	end
+
+	local ok, result = pcall(function()
+		return self._remotes.accessorySell:InvokeServer({
+			ownedId = ownedId,
+		})
+	end)
+
+	if not ok then
+		showNotification("Accessory sell failed. Check the output for details.")
+		Logger.Warn(string.format("[InventoryController] Accessory sell invoke failed: %s", tostring(result)))
+		return
+	end
+
+	if typeof(result) ~= "table" then
+		showNotification("Accessory sell returned an invalid response.")
+		return
+	end
+
+	if result.ok ~= true then
+		showNotification(tostring(result.message or "Could not sell that accessory."))
+		if typeof(result.state) == "table" then
+			self:_applyAccessoryState(result.state)
+		end
+		return
+	end
+
+	showNotification(tostring(result.message or "Sold accessory."))
+	if typeof(result.state) == "table" then
+		self:_applyAccessoryState(result.state)
+	else
+		self:_refreshAccessoryStateFromData()
+	end
+end
+
+function InventoryController:_confirmSellMaterialStack(materialId: string)
+	if not self:_ensureCraftingSellMaterialRemote() then
+		return
+	end
+
+	local ok, result = pcall(function()
+		return self._remotes.craftingSellMaterial:InvokeServer({
+			materialId = materialId,
+		})
+	end)
+
+	if not ok then
+		showNotification("Material sell failed. Check the output for details.")
+		Logger.Warn(string.format("[InventoryController] Material sell invoke failed: %s", tostring(result)))
+		return
+	end
+
+	if typeof(result) ~= "table" then
+		showNotification("Material sell returned an invalid response.")
+		return
+	end
+
+	if result.ok ~= true then
+		showNotification(tostring(result.message or "Could not sell that material."))
+		return
+	end
+
+	showNotification(tostring(result.message or "Sold material."))
+	self:_clearPreview()
+	self:_markInventoryRecordsDirty()
+	self:_syncSummaryLabels()
 end
 
 function InventoryController:_confirmSellPreviewedBodyPart(ownedId: string)
@@ -4621,6 +5016,8 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 	local equipBestButton = characterRoot:WaitForChild("EquipBest", 30)
 	local powerLabel = characterRoot:WaitForChild("Power", 30)
 	local topBar = inventoryRoot:WaitForChild("TopBar", 30)
+	local closeButtonRoot = inventoryRoot:FindFirstChild("Topbar") or topBar
+	local closeButton = closeButtonRoot and closeButtonRoot:FindFirstChild("CloseButton")
 	local topBarButtons = topBar:WaitForChild("ItemTypes", 30)
 	local potionSellFrame = modalRoot:WaitForChild("PotionSellFrame", 30)
 	local openButton = mainInterface:WaitForChild("Main", 30):WaitForChild("ExtraButtons", 30):WaitForChild("Inventory", 30)
@@ -4665,6 +5062,9 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		and openButton:IsA("GuiButton")
 	) then
 		Logger.Error("Inventory UI hierarchy is missing required instances.")
+	end
+	if not (closeButton and closeButton:IsA("GuiButton")) then
+		Logger.Error("Inventory close button is missing.")
 	end
 
 	self._inventoryRoot = inventoryRoot
@@ -4788,6 +5188,7 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		accessoryButtons = accessoryButtons,
 		gearButtons = gearButtons,
 		materialButtons = materialButtons,
+		closeButton = closeButton,
 		searchBox = topBar:WaitForChild("TextBox", 30),
 		slotFrames = slotFrames,
 		slotButtons = slotButtons,

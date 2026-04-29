@@ -9,11 +9,13 @@ local ALL_SERVICE_NAMES = {
 	"AchievementService",
 	"AdminService",
 	"AppraisalService",
+	"AudioSettingsService",
 	"AuraService",
 	"BodyPartService",
 	"ChatNotificationService",
 	"ChatTagService",
 	"CombatPhysicsBootstrapService",
+	"DailyChestService",
 	"DataService",
 	"DayNightCycleService",
 	"DashService",
@@ -33,6 +35,7 @@ local ALL_SERVICE_NAMES = {
 	"TestService",
 	"TimeShardService",
 	"TitleService",
+	"TutorialService",
 	"VoidRecoveryService",
 }
 
@@ -49,6 +52,7 @@ local ALL_CONTROLLER_NAMES = {
 	"ChatTagController",
 	"CombatAudioController",
 	"CombatPhysicsController",
+	"DailyChestController",
 	"DataController",
 	"DashController",
 	"DayNightCycleController",
@@ -66,6 +70,7 @@ local ALL_CONTROLLER_NAMES = {
 	"MerchantPresentationController",
 	"MerchantShopController",
 	"MerchantTeleportController",
+	"MusicTopBarController",
 	"MoneyHUDController",
 	"OverheadTitleController",
 	"PlayerInspectController",
@@ -77,6 +82,7 @@ local ALL_CONTROLLER_NAMES = {
 	"TestController",
 	"TimeShardsHUDController",
 	"TitleController",
+	"TutorialController",
 	"UIController",
 }
 
@@ -124,6 +130,7 @@ local FEATURE_DISPLAY_NAMES = {
 	auto_sell = "Auto-sell",
 	boss_lobby_flow = "The boss lobby flow",
 	boss_fight_flow = "The boss fight flow",
+	day_night_cycle = "The day/night cycle",
 	player_data_replica = "Shared player data",
 }
 
@@ -203,6 +210,10 @@ local FEATURE_TO_EXCLUSIONS = {
 	player_data_replica = {
 		controllers = { "DataController" },
 	},
+	day_night_cycle = {
+		services = { "DayNightCycleService" },
+		controllers = { "DayNightCycleController" },
+	},
 }
 
 type PreloadRootSpec = {
@@ -253,6 +264,7 @@ local PROFILE_DEFINITIONS = {
 		requiresPlayerDataReplica = true,
 		excludedFeatures = {
 			"boss_fight_flow",
+			"day_night_cycle",
 			"rolling",
 		},
 		excludedPanels = {},
@@ -267,6 +279,7 @@ local PROFILE_DEFINITIONS = {
 		requiresPlayerDataReplica = true,
 		excludedFeatures = {
 			"appraisal",
+			"day_night_cycle",
 			"dialogue",
 			"help",
 			"index",

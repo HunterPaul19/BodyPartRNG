@@ -6,6 +6,7 @@ local RunService = game:GetService("RunService")
 
 local BossQueueConstants = require(ReplicatedStorage.Shared.BossQueue.Constants)
 local CraftingMaterialConfig = require(ReplicatedStorage.Shared.Config.CraftingMaterialConfig)
+local ChestOpeningSequence = require(ReplicatedStorage.Shared.UI.ChestOpeningSequence)
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
@@ -20,6 +21,7 @@ local RETURN_TO_LOBBY_REMOTE_NAME = "ReturnToBossLobby"
 local ACTIVE_PROFILE_ID = "boss_arena"
 local GENERATED_REWARD_ATTRIBUTE = "BossResultsGeneratedReward"
 local TEMPLATE_SUFFIX = "Template"
+local DEFAULT_BOSS_CHEST_VISUAL_ID = "BossTier1"
 local DEFEAT_COLOR = Color3.fromRGB(255, 67, 67)
 
 type BossResultRewardEntry = {
@@ -35,6 +37,8 @@ type BossResultRewardEntry = {
 	dropTier: string?,
 	chance: number?,
 	displayColor: Color3?,
+	record: { [string]: any }?,
+	sourceBossId: string?,
 }
 
 type BossResultsState = {
@@ -44,6 +48,7 @@ type BossResultsState = {
 	startsAtServerTime: number,
 	endsAtServerTime: number,
 	durationSeconds: number,
+	visualChestId: string,
 	rewards: { BossResultRewardEntry },
 	rewardStatus: string,
 	readyCount: number,
@@ -85,6 +90,10 @@ local BossArenaResultsController = {
 	_playAgainConnection = nil :: RBXScriptConnection?,
 	_returnConnection = nil :: RBXScriptConnection?,
 	_requestInFlight = false,
+	_activeResultsKey = nil :: string?,
+	_chestOpenedResultsKey = nil :: string?,
+	_chestOpeningResultsKey = nil :: string?,
+	_pendingResultsState = nil :: BossResultsState?,
 }
 
 local function isEnabledForPlace(): boolean
@@ -123,6 +132,10 @@ local function getRewardTemplateRarity(reward: BossResultRewardEntry): string
 	end
 
 	return normalizeRarity(reward.displayRarity)
+end
+
+local function getResultsStateKey(state: BossResultsState): string
+	return string.format("%s:%s", state.bossId, tostring(state.startsAtServerTime))
 end
 
 local function escapeRichText(value: any): string
@@ -288,6 +301,9 @@ local function normalizeResultsState(state: any): BossResultsState?
 		startsAtServerTime = startsAtServerTime,
 		endsAtServerTime = endsAtServerTime,
 		durationSeconds = math.max(0, math.floor(tonumber(state.durationSeconds) or 0)),
+		visualChestId = if typeof(state.visualChestId) == "string" and state.visualChestId ~= ""
+			then state.visualChestId
+			else DEFAULT_BOSS_CHEST_VISUAL_ID,
 		rewards = if typeof(state.rewards) == "table" then state.rewards else {},
 		rewardStatus = if state.rewardStatus == "pending"
 			then "pending"
@@ -451,17 +467,20 @@ function BossArenaResultsController:_renderRewards(rewards: { BossResultRewardEn
 	end
 end
 
-function BossArenaResultsController:_renderState(state: BossResultsState?)
+function BossArenaResultsController:_resetRenderedState(ui: ResultsUi)
+	ui.root.Visible = false
+	self:_clearGeneratedRewards()
+	restoreTextLabelState(ui.outcomeLabel, ui.defaultOutcomeLabelState)
+	restoreTextLabelState(ui.damageLabel, ui.defaultDamageLabelState)
+	ui.votesLabel.Text = BossQueueConstants.FormatOccupancyText(0)
+	self._activeResultsKey = nil
+	self._chestOpenedResultsKey = nil
+	self._chestOpeningResultsKey = nil
+	self._pendingResultsState = nil
+end
+
+function BossArenaResultsController:_renderResultsFrame(normalizedState: BossResultsState)
 	local ui = self:_ensureUi()
-	local normalizedState = normalizeResultsState(state)
-	if normalizedState == nil then
-		ui.root.Visible = false
-		self:_clearGeneratedRewards()
-		restoreTextLabelState(ui.outcomeLabel, ui.defaultOutcomeLabelState)
-		restoreTextLabelState(ui.damageLabel, ui.defaultDamageLabelState)
-		ui.votesLabel.Text = BossQueueConstants.FormatOccupancyText(0)
-		return
-	end
 
 	if normalizedState.outcome == "victory" then
 		restoreTextLabelState(ui.outcomeLabel, ui.defaultOutcomeLabelState)
@@ -483,6 +502,63 @@ function BossArenaResultsController:_renderState(state: BossResultsState?)
 	ui.playAgainButton.Active = normalizedState.isReplayReady ~= true
 	ui.playAgainButton.AutoButtonColor = normalizedState.isReplayReady ~= true
 	ui.root.Visible = true
+end
+
+function BossArenaResultsController:_renderState(state: BossResultsState?)
+	local ui = self:_ensureUi()
+	local normalizedState = normalizeResultsState(state)
+	if normalizedState == nil then
+		self:_resetRenderedState(ui)
+		return
+	end
+
+	local resultsKey = getResultsStateKey(normalizedState)
+	if self._activeResultsKey ~= resultsKey then
+		self._activeResultsKey = resultsKey
+		self._chestOpenedResultsKey = nil
+		self._chestOpeningResultsKey = nil
+	end
+	self._pendingResultsState = normalizedState
+
+	if normalizedState.outcome == "victory" and normalizedState.rewardStatus == "pending" then
+		ui.root.Visible = false
+		self:_clearGeneratedRewards()
+		return
+	end
+
+	local shouldOpenChest = normalizedState.outcome == "victory"
+		and normalizedState.rewardStatus == "ready"
+		and #normalizedState.rewards > 0
+		and self._chestOpenedResultsKey ~= resultsKey
+
+	if shouldOpenChest then
+		ui.root.Visible = false
+		self:_clearGeneratedRewards()
+
+		if self._chestOpeningResultsKey ~= resultsKey then
+			self._chestOpeningResultsKey = resultsKey
+			task.spawn(function()
+				local opened = ChestOpeningSequence.OpenChestAsync(normalizedState.visualChestId, normalizedState.rewards)
+				if opened ~= true then
+					warnWithPrefix(string.format(
+						"Boss chest '%s' did not open; showing results frame.",
+						tostring(normalizedState.visualChestId)
+					))
+				end
+
+				if self._activeResultsKey ~= resultsKey then
+					return
+				end
+
+				self._chestOpenedResultsKey = resultsKey
+				self._chestOpeningResultsKey = nil
+				self:_renderState(self._pendingResultsState or normalizedState)
+			end)
+		end
+		return
+	end
+
+	self:_renderResultsFrame(normalizedState)
 end
 
 function BossArenaResultsController:_invokeResponse(remote: RemoteFunction, ...): any?

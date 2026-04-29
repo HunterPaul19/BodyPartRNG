@@ -95,4 +95,13 @@ function AccessoryConfig.GetSlot(accessoryId: any): AccessorySlot?
 	return if entry then entry.slot else nil
 end
 
+function AccessoryConfig.GetSellPrice(accessoryId: any): number
+	local entry = AccessoryConfig.Get(accessoryId)
+	if not entry then
+		return 0
+	end
+
+	return math.max(0, math.floor(tonumber(entry.sellPrice) or 0))
+end
+
 return table.freeze(AccessoryConfig)

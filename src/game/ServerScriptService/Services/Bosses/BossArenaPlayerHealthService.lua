@@ -46,6 +46,7 @@ local BossArenaPlayerHealthService = {
 	_started = false,
 	_playerStates = {} :: { [Player]: PlayerState },
 	_disconnectRosterListener = nil :: (() -> ())?,
+	_disconnectBossHealthListener = nil :: (() -> ())?,
 	_broadcastScheduled = false,
 }
 
@@ -174,6 +175,10 @@ local function disconnectConnection(connection: RBXScriptConnection?)
 	end
 end
 
+local function isCombatHudActive(): boolean
+	return BossArenaRuntimeService:GetBossHealthState() ~= nil
+end
+
 function BossArenaPlayerHealthService:_buildHealthEntry(userId: number): PlayerHealthEntry?
 	local player = getPlayerByUserId(userId)
 	if player == nil then
@@ -212,7 +217,7 @@ function BossArenaPlayerHealthService:_buildHealthState(): PlayerHealthState
 	end
 
 	return {
-		active = BossArenaRuntimeService:HasActiveEncounter(),
+		active = isCombatHudActive(),
 		roster = roster,
 		serverTime = Workspace:GetServerTimeNow(),
 	}
@@ -325,6 +330,9 @@ function BossArenaPlayerHealthService:OnStart()
 	end
 
 	self._disconnectRosterListener = BossArenaRuntimeService:ConnectRosterStateChanged(function()
+		self:_scheduleHealthBroadcast()
+	end)
+	self._disconnectBossHealthListener = BossArenaRuntimeService:ConnectBossHealthStateChanged(function()
 		self:_scheduleHealthBroadcast()
 	end)
 

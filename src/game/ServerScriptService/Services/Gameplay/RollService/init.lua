@@ -18,11 +18,13 @@ local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts
 local BodyPartEconomy = require(ReplicatedStorage.Shared.Character.BodyPartEconomy)
 local BodyPartService = require(script.Parent.BodyPartService)
 local ChatNotificationService = require(script.Parent.ChatNotificationService)
+local CraftingService = require(script.Parent.CraftingService)
 local DataService = require(script.Parent.DataService)
 local PotionService = require(script.Parent.PotionService)
 local PurchaseReceiptService = require(script.Parent.PurchaseReceiptService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 local StatsService = require(script.Parent.StatsService)
+local TutorialService = require(script.Parent.TutorialService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local ROLLING_FOLDER_NAME = "Rolling"
@@ -541,6 +543,28 @@ local function chooseWeightedSet(randomSource: Random, activeEntries)
 	return activeEntries[lastIndex]
 end
 
+local function findRollEntryBySetId(entries, setId: string)
+	if typeof(setId) ~= "string" or setId == "" then
+		return nil
+	end
+
+	for _, entry in ipairs(entries) do
+		if entry.setId == setId then
+			return entry
+		end
+	end
+
+	return nil
+end
+
+local function findRollEntryForPiece(entries, piece)
+	if typeof(piece) ~= "table" or typeof(piece.setId) ~= "string" then
+		return nil
+	end
+
+	return findRollEntryBySetId(entries, piece.setId)
+end
+
 local function choosePieceFromSet(randomSource: Random, setId: string)
 	local pieces = BodyPartsCatalog.GetPiecesForSet(setId)
 	if not pieces or #pieces == 0 then
@@ -963,6 +987,106 @@ function RollService:SimulateRolls(player: Player, options: any?): { [string]: a
 	}
 end
 
+function RollService:PreviewChestRewards(player: Player, options: any?): { [string]: any }
+	local count = math.clamp(math.floor(tonumber(options and options.count) or 5), 1, 10)
+	local debugData = self:GetProbabilityDebug(player, options)
+	local activeEntries = {}
+	for _, entry in ipairs(debugData.entries or {}) do
+		if entry.isPruned ~= true then
+			table.insert(activeEntries, entry)
+		end
+	end
+
+	local selectedRegion = if typeof(options) == "table" and typeof(options.rollRegion) == "string" and RollTargetRegions.IsValid(options.rollRegion)
+		then options.rollRegion
+		else DataService:GetSelectedRollRegion(player)
+	local randomSource = Random.new(math.floor(tonumber(options and options.seed) or os.clock() * 1000000))
+	local rollType = RollTypes.Get(debugData.rollTypeId) or RollTypes.GetDefault()
+	local successfulRollCount = DataService:GetSuccessfulRollCount(player)
+	local luckState, _, potionBonuses = computeLuckState(player, rollType, successfulRollCount)
+	local rewards = {}
+	local missingPieceCount = 0
+
+	for index = 1, count do
+		local chosenSet = chooseWeightedSet(randomSource, activeEntries)
+		local finalPiece = chosenSet and choosePieceFromSetForRegion(randomSource, chosenSet.setId, selectedRegion) or nil
+		if not (chosenSet and finalPiece) then
+			missingPieceCount += 1
+			continue
+		end
+
+		local mutationData = rollMutation(
+			randomSource,
+			if typeof(potionBonuses) == "table" then potionBonuses.mutationChanceBonusById else nil
+		)
+		local sizeData, sizeScale = rollSize(
+			randomSource,
+			if typeof(potionBonuses) == "table" then potionBonuses.sizeLuckBonus else nil
+		)
+		local sizeMoneyMultiplier = SizeConfig.GetMoneyMultiplier(sizeData.id)
+		local variantMultiplier = RollMath.ComputeVariantMultiplier(mutationData.multiplier, sizeMoneyMultiplier)
+		local finalPassiveIncomePerSecond = RollMath.ComputeFinalPassiveIncome(finalPiece.passiveIncomePerSecond, variantMultiplier)
+		local finalResultData = {
+			mutationData = mutationData,
+			sizeData = sizeData,
+			sizeScale = sizeScale,
+			sizeMoneyMultiplier = sizeMoneyMultiplier,
+			variantMultiplier = variantMultiplier,
+			finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
+			rawLuck = luckState.rawLuck,
+			useBonusRoll = luckState.useBonusRoll,
+		}
+		local finalResult, finalResultError = createRollDisplayEntry(finalPiece, finalResultData)
+		if not finalResult then
+			return {
+				ok = false,
+				message = finalResultError or "Failed to build a chest preview reward.",
+				rewards = {},
+			}
+		end
+
+		local record = {
+			ownedId = string.format("preview_%d_%d", player.UserId, index),
+			pieceId = finalPiece.id,
+			rarityDenominator = chosenSet.displayedDenominator,
+			displayOddsDenominator = chosenSet.displayedDenominator,
+			displayRarity = chosenSet.setConfig.rollDisplay.rarity,
+			rolledSetId = chosenSet.setId,
+			rolledSetDisplayName = chosenSet.setConfig.rollDisplay.displayName,
+			mutationId = mutationData.id,
+			mutation = mutationData.displayName,
+			mutationMultiplier = mutationData.multiplier,
+			sizeId = sizeData.id,
+			sizeMultiplier = sizeScale,
+			variantMultiplier = variantMultiplier,
+			finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
+			isFavorite = false,
+		}
+
+		table.insert(rewards, {
+			record = record,
+			finalResult = finalResult,
+			rollTypeId = debugData.rollTypeId,
+			rollRegion = selectedRegion,
+		})
+	end
+
+	return {
+		ok = #rewards > 0,
+		message = if #rewards > 0 then string.format("Built %d chest preview reward(s).", #rewards) else "No preview rewards could be generated.",
+		count = count,
+		rewardCount = #rewards,
+		missingPieceCount = missingPieceCount,
+		rollTypeId = debugData.rollTypeId,
+		rollTypeDisplayName = debugData.rollTypeDisplayName,
+		rollRegion = selectedRegion,
+		finalLuck = debugData.finalLuck,
+		bandLuckInput = debugData.bandLuckInput,
+		probabilitySummary = debugData.summary,
+		rewards = rewards,
+	}
+end
+
 function RollService:GetRollingState(player: Player, message: string?)
 	if not isRollingEnabled() then
 		return buildUnavailableRollingState(message)
@@ -1157,6 +1281,9 @@ local function buildClientRollResult(rollResult: any): any
 		skipPresentation = rollResult.skipPresentation,
 		autoSoldInstantly = rollResult.autoSoldInstantly,
 		autoEquipped = rollResult.autoEquipped,
+		autoCraftCommitted = rollResult.autoCraftCommitted,
+		autoCrafted = rollResult.autoCrafted,
+		autoCraftMessage = rollResult.autoCraftMessage,
 		autoSellRarity = rollResult.autoSellRarity,
 		moneySpent = rollResult.moneySpent,
 		remainingMoney = rollResult.remainingMoney,
@@ -1199,6 +1326,7 @@ function RollService:SelectRollType(player: Player, rollTypeId: string): (boolea
 	if previousRollTypeId ~= rollTypeId then
 		StatsService:RecordSettingChange(player, "roll_type")
 	end
+	TutorialService:RecordRollTypeSelected(player, rollType.id)
 
 	return true, string.format("Selected %s.", rollType.displayName)
 end
@@ -1473,13 +1601,43 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 
 	local successfulRollCount = DataService:GetSuccessfulRollCount(player)
 	local luckState, bonuses, potionBonuses = computeLuckState(player, selectedRollType, successfulRollCount)
+	local tutorialRollOverride = TutorialService:GetRollOverride(player, {
+		rollTypeId = selectedRollType.id,
+		rollRegion = selectedRollRegion,
+	})
+	if typeof(tutorialRollOverride) == "table" then
+		local rawLuckBonus = math.max(0, tonumber(tutorialRollOverride.rawLuckBonus) or 0)
+		if rawLuckBonus > 0 then
+			luckState.rawLuck += rawLuckBonus
+			luckState.bandLuckInput = luckState.rawLuck * luckState.bandLuckScalar
+		end
+	end
 	local quickRollApplied = buildQuickRollState(player).enabled == true
 	local triggerSource = if typeof(payload) == "table" and payload.triggerSource == "auto" then "auto" else "manual"
 	local skipPresentation = quickRollApplied and triggerSource == "auto"
 	local skipPreview = quickRollApplied and triggerSource ~= "auto"
-	local _, activeEntries = buildRollListEntries(luckState.bandLuckInput)
+	local allEntries, activeEntries = buildRollListEntries(luckState.bandLuckInput)
 	local randomSource = Random.new()
 	local finalSet = chooseWeightedSet(randomSource, activeEntries)
+	local forcedPiece = nil
+	if typeof(tutorialRollOverride) == "table" then
+		if typeof(tutorialRollOverride.forcedPieceId) == "string" then
+			forcedPiece = BodyPartsCatalog.GetPiece(tutorialRollOverride.forcedPieceId)
+			if forcedPiece then
+				local forcedSet = findRollEntryForPiece(activeEntries, forcedPiece) or findRollEntryForPiece(allEntries, forcedPiece)
+				if forcedSet then
+					finalSet = forcedSet
+				else
+					forcedPiece = nil
+				end
+			end
+		end
+		if not forcedPiece and typeof(tutorialRollOverride.forcedSetId) == "string" then
+			finalSet = findRollEntryBySetId(activeEntries, tutorialRollOverride.forcedSetId)
+				or findRollEntryBySetId(allEntries, tutorialRollOverride.forcedSetId)
+				or finalSet
+		end
+	end
 	if not finalSet then
 		rollLocks[player] = nil
 		StatsService:RecordRollFailure(player, "missing_config")
@@ -1489,7 +1647,7 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		return false, "No body part sets are configured for rolling.", nil
 	end
 
-	local finalPiece = choosePieceFromSetForRegion(randomSource, finalSet.setId, selectedRollRegion)
+	local finalPiece = forcedPiece or choosePieceFromSetForRegion(randomSource, finalSet.setId, selectedRollRegion)
 	if not finalPiece then
 		rollLocks[player] = nil
 		StatsService:RecordRollFailure(player, "missing_config")
@@ -1550,15 +1708,35 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		variantMultiplier = variantMultiplier,
 		finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
 	}
+	local tutorialCraftPriority = typeof(tutorialRollOverride) == "table"
+		and typeof(tutorialRollOverride.forceAutoCraftRecipeId) == "string"
+	local autoCraftCommitResult = nil
+	if tutorialCraftPriority then
+		autoCraftCommitResult = CraftingService:TryAutoCommitRolledBodyPart(player, grantPayload, {
+			targetRecipeId = tutorialRollOverride.forceAutoCraftRecipeId,
+			waiveCraftCost = tutorialRollOverride.waiveCraftCost == true,
+		})
+	end
+	local autoCraftCommitted = typeof(autoCraftCommitResult) == "table" and autoCraftCommitResult.committed == true
 	local shouldAutoEquipRoll = false
-	if DataService:GetAutoEquipBestEnabled(player) then
+	if not tutorialCraftPriority and DataService:GetAutoEquipBestEnabled(player) then
 		shouldAutoEquipRoll = BodyPartService:IsBodyPartGrantBetterThanEquipped(player, grantPayload)
 	end
-	local pendingAutoSell = (not shouldAutoEquipRoll) and (not skipPresentation) and autoSellEnabledForRarity
-	local shouldUseTransientRecord = (not shouldAutoEquipRoll) and autoSellEnabledForRarity
+
+	if not tutorialCraftPriority and not shouldAutoEquipRoll then
+		autoCraftCommitResult = CraftingService:TryAutoCommitRolledBodyPart(player, grantPayload)
+	end
+	autoCraftCommitted = typeof(autoCraftCommitResult) == "table" and autoCraftCommitResult.committed == true
+	local pendingAutoSell = (not tutorialCraftPriority) and (not shouldAutoEquipRoll) and (not autoCraftCommitted) and (not skipPresentation) and autoSellEnabledForRarity
+	local shouldUseTransientRecord = (not tutorialCraftPriority) and (not shouldAutoEquipRoll) and (not autoCraftCommitted) and autoSellEnabledForRarity
 
 	local ownedRecord, grantError, reservedGrant
-	if shouldUseTransientRecord then
+	if autoCraftCommitted then
+		ownedRecord = table.clone(grantPayload)
+		ownedRecord.ownedId = ""
+		ownedRecord.serialNumber = 0
+		ownedRecord.isFavorite = false
+	elseif shouldUseTransientRecord then
 		ownedRecord, reservedGrant, grantError = DataService:ReserveBodyPartRollRecord(player, grantPayload)
 	else
 		ownedRecord, grantError = DataService:AddOwnedBodyPart(player, grantPayload)
@@ -1597,6 +1775,8 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 	local rollMessage = string.format("Rolled %s.", finalResult.Name)
 	if autoEquipped then
 		rollMessage = autoEquipMessage or string.format("Equipped %s.", finalResult.Name)
+	elseif autoCraftCommitted then
+		rollMessage = tostring(autoCraftCommitResult.message or string.format("Added %s to crafting.", finalResult.Name))
 	end
 	if pendingAutoSell then
 		pendingAutoSellToken = createPendingAutoSellToken(player)
@@ -1647,6 +1827,9 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		pendingAutoSell = pendingAutoSell,
 		autoSoldInstantly = autoSoldInstantly,
 		autoEquipped = autoEquipped,
+		autoCraftCommitted = autoCraftCommitted,
+		autoCrafted = typeof(autoCraftCommitResult) == "table" and autoCraftCommitResult.crafted == true,
+		autoCraftMessage = if autoCraftCommitted then rollMessage else nil,
 		skipPreview = skipPreview,
 		skipPresentation = skipPresentation,
 		autoSellRarity = if (pendingAutoSell or autoSoldInstantly) then autoSellRarity else nil,
@@ -1695,6 +1878,7 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		variantMultiplier = variantMultiplier,
 		finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
 	}
+	TutorialService:RecordRollResult(player, rollResult)
 
 	rollLocks[player] = nil
 	local completionState = self:GetRollCompletionDeltaState(player, rollMessage)

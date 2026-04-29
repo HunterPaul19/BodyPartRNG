@@ -52,6 +52,9 @@ local Notify = {}
 local clientRemoteConnection: RBXScriptConnection? = nil
 local pendingNotifications: { QueuedNotification } = {}
 local queueWorkerActive = false
+local activeHolds: { [string]: boolean } = {}
+local activeHoldCount = 0
+local activeHoldStartedAt: number? = nil
 Notify.Defaults = {
 	title = "Notice",
 	duration = 4,
@@ -257,6 +260,28 @@ local function warnDroppedNotification(payload: NotificationPayload)
 	Logger.Warn(string.format("[Notify] Dropped notification after waiting for %s UI: %s", SCREEN_GUI_NAME, payload.text))
 end
 
+local function normalizeHoldKey(key: any): string
+	if typeof(key) == "string" and key ~= "" then
+		return key
+	end
+
+	return "default"
+end
+
+local function isQueueHeld(): boolean
+	return RunService:IsClient() and activeHoldCount > 0
+end
+
+local function extendQueuedNotificationExpirations(heldSeconds: number)
+	if heldSeconds <= 0 then
+		return
+	end
+
+	for _, entry in ipairs(pendingNotifications) do
+		entry.expiresAt += heldSeconds
+	end
+end
+
 local function processQueue()
 	if queueWorkerActive then
 		return
@@ -272,6 +297,11 @@ local function processQueue()
 					return
 				end
 				queueWorkerActive = true
+			end
+
+			if isQueueHeld() then
+				task.wait(QUEUE_RETRY_INTERVAL)
+				continue
 			end
 
 			local container, template = getNotificationUi()
@@ -309,6 +339,47 @@ local function processQueue()
 			end
 		end
 	end)
+end
+
+function Notify.BeginHold(key)
+	if not RunService:IsClient() then
+		return false
+	end
+
+	local holdKey = normalizeHoldKey(key)
+	if activeHolds[holdKey] == true then
+		return true
+	end
+
+	activeHolds[holdKey] = true
+	activeHoldCount += 1
+	if activeHoldCount == 1 then
+		activeHoldStartedAt = os.clock()
+	end
+
+	return true
+end
+
+function Notify.EndHold(key)
+	if not RunService:IsClient() then
+		return false
+	end
+
+	local holdKey = normalizeHoldKey(key)
+	if activeHolds[holdKey] ~= true then
+		return false
+	end
+
+	activeHolds[holdKey] = nil
+	activeHoldCount = math.max(0, activeHoldCount - 1)
+	if activeHoldCount == 0 then
+		local heldSeconds = os.clock() - (activeHoldStartedAt or os.clock())
+		activeHoldStartedAt = nil
+		extendQueuedNotificationExpirations(heldSeconds)
+		processQueue()
+	end
+
+	return true
 end
 
 function Notify.Show(text, opts)

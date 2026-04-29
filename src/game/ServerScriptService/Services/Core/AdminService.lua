@@ -35,6 +35,8 @@ local RollTargetRegions = require(ReplicatedStorage.Shared.Character.RollTargetR
 local Schema = require(ReplicatedStorage.Lists.Schema)
 local TitleConfig = require(ReplicatedStorage.Shared.Config.TitleConfig)
 local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
+local TutorialConfig = require(ReplicatedStorage.Shared.Config.TutorialConfig)
+local TutorialService = require(script.Parent.TutorialService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local ADMIN_ACTION_REMOTE_NAME = "AdminAction"
@@ -57,6 +59,7 @@ local TEST_PYRAMID_DISTANCE = 40
 local TEST_PYRAMID_WIDTH = 24
 local TEST_PYRAMID_LAYERS = 8
 local TEST_PYRAMID_DURATION_SECONDS = 5
+local MAX_CHEST_PREVIEW_REWARD_COUNT = 10
 
 local remotesFolder: Folder? = nil
 local adminActionRemote: RemoteFunction? = nil
@@ -65,6 +68,19 @@ local characterAddedConnections: { [Player]: RBXScriptConnection } = {}
 local recentEvents = {}
 local MAX_RECENT_EVENTS = 40
 local MAX_SIMULATION_COUNT = 10000
+local VALID_CHEST_IDS = table.freeze({
+	Basic = true,
+	VIP = true,
+	["VIP+"] = true,
+	BossTier1 = true,
+	BossTier2 = true,
+	BossTier3 = true,
+})
+local ADMIN_CHEST_ACTION_IDS = table.freeze({
+	trigger_daily_free_chest = "DailyFree",
+	trigger_vip_chest = "VIP",
+	trigger_vip_plus_chest = "VIPPlus",
+})
 
 local AdminService = {}
 
@@ -75,6 +91,24 @@ local function response(ok: boolean, code: string, message: string, data: any?)
 		message = message,
 		data = data or {},
 	}
+end
+
+local function resolveDailyChestService(): (any?, string?)
+	local serviceModule = script.Parent:FindFirstChild("DailyChestService")
+	if not (serviceModule and serviceModule:IsA("ModuleScript")) then
+		return nil, "DailyChestService is not synced yet. Rojo sync and restart Play Solo."
+	end
+
+	local ok, service = pcall(require, serviceModule)
+	if not ok then
+		Logger.Warn(string.format("[AdminService] DailyChestService require failed: %s", tostring(service)))
+		return nil, "DailyChestService failed to load. Check the server output."
+	end
+	if typeof(service) ~= "table" or typeof(service.GrantChestPackageForAdmin) ~= "function" then
+		return nil, "DailyChestService does not expose GrantChestPackageForAdmin."
+	end
+
+	return service, nil
 end
 
 local function trimText(value: any): string
@@ -533,6 +567,14 @@ local function handleTestDialogue()
 	})
 end
 
+local function handleGuideToCrafting()
+	return response(true, "OK", "Showing the local objective guide to crafting.", {
+		objectiveId = "crafting",
+		targetPath = "Workspace.Crafting.Craftsman.HumanoidRootPart",
+		fallbackTargetPath = "Workspace.Crafting",
+	})
+end
+
 local function handleShowMerchant(payload: any?)
 	local merchantState = MerchantShopService:ForceAppear(toWholeNumber(payload and payload.durationSeconds, 300))
 	pushRecentEvent("merchant", "Forced merchant active from admin panel.", {
@@ -767,6 +809,26 @@ local function handleReloadPlayerState(payload: any)
 		bodyParts = BodyPartService:GetClientState(targetPlayer),
 		rolling = RollService:GetRollingState(targetPlayer),
 		potions = PotionService:GetPotionState(targetPlayer),
+	})
+end
+
+local function handleTriggerTutorial(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local requestedStepId = trimText(payload.stepId)
+	local stepId = if requestedStepId ~= "" then TutorialConfig.NormalizeStepId(requestedStepId) else TutorialConfig.Steps.Welcome
+	local state = TutorialService:StartTutorialForAdmin(targetPlayer, stepId)
+	pushRecentEvent("tutorial", string.format("Triggered tutorial replay for %s at %s.", targetPlayer.Name, state.stepId), {
+		userId = targetPlayer.UserId,
+		stepId = state.stepId,
+	})
+
+	return response(true, "OK", string.format("Triggered tutorial for %s at %s.", targetPlayer.Name, state.stepId), {
+		userId = targetPlayer.UserId,
+		tutorial = state,
 	})
 end
 
@@ -1305,6 +1367,121 @@ local function handleForceCaseReward(player: Player, payload: any)
 	})
 end
 
+local function normalizeChestId(value: any): string?
+	local chestId = trimText(value)
+	if chestId == "" then
+		chestId = "Basic"
+	end
+
+	if VALID_CHEST_IDS[chestId] == true then
+		return chestId
+	end
+
+	local lowered = string.lower(chestId)
+	for validChestId in pairs(VALID_CHEST_IDS) do
+		if string.lower(validChestId) == lowered then
+			return validChestId
+		end
+	end
+
+	return nil
+end
+
+local function normalizeOptionalRollTypeId(value: any): string?
+	local rollTypeId = trimText(value)
+	if rollTypeId == "" or rollTypeId == "selected" then
+		return nil
+	end
+
+	if not RollTypes.Get(rollTypeId) then
+		return nil
+	end
+
+	return rollTypeId
+end
+
+local function normalizeOptionalRollRegion(value: any): string?
+	local rollRegion = trimText(value)
+	if rollRegion == "" or rollRegion == "selected" then
+		return nil
+	end
+
+	if RollTargetRegions.IsValid(rollRegion) then
+		return rollRegion
+	end
+
+	return nil
+end
+
+local function handlePreviewChestOpening(player: Player, payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, player)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local chestId = normalizeChestId(payload and payload.chestId)
+	if not chestId then
+		return response(false, "BAD_REQUEST", "Chest ID must be Basic, VIP, VIP+, BossTier1, BossTier2, or BossTier3.")
+	end
+
+	local count = math.clamp(toWholeNumber(payload and payload.count, 5), 1, MAX_CHEST_PREVIEW_REWARD_COUNT)
+	local options = {
+		count = count,
+		rollTypeId = normalizeOptionalRollTypeId(payload and payload.rollTypeId),
+		rollRegion = normalizeOptionalRollRegion(payload and payload.rollRegion),
+	}
+	local preview = RollService:PreviewChestRewards(targetPlayer, options)
+	if typeof(preview) ~= "table" or preview.ok ~= true then
+		return response(false, "PREVIEW_FAILED", tostring(preview and preview.message or "Could not generate chest preview rewards."))
+	end
+
+	pushRecentEvent("chest_preview", string.format("Previewed %s chest opening for %s.", chestId, targetPlayer.Name), {
+		chestId = chestId,
+		targetUserId = targetPlayer.UserId,
+		rewardCount = preview.rewardCount,
+		rollTypeId = preview.rollTypeId,
+		rollRegion = preview.rollRegion,
+	})
+
+	return response(true, "OK", string.format("Previewing %s with %d reward(s) for %s.", chestId, preview.rewardCount or count, targetPlayer.Name), {
+		chestId = chestId,
+		targetUserId = targetPlayer.UserId,
+		targetName = targetPlayer.Name,
+		rewards = preview.rewards,
+		rewardCount = preview.rewardCount,
+		rollTypeId = preview.rollTypeId,
+		rollTypeDisplayName = preview.rollTypeDisplayName,
+		rollRegion = preview.rollRegion,
+		probabilitySummary = preview.probabilitySummary,
+	})
+end
+
+local function handleTriggerAdminChest(player: Player, actionId: string)
+	local chestId = ADMIN_CHEST_ACTION_IDS[actionId]
+	if not chestId then
+		return response(false, "BAD_REQUEST", "Unknown admin chest trigger.")
+	end
+
+	local dailyChestService, serviceError = resolveDailyChestService()
+	if not dailyChestService then
+		return response(false, "SERVICE_UNAVAILABLE", serviceError or "DailyChestService is unavailable.")
+	end
+
+	local ok, message, package = dailyChestService:GrantChestPackageForAdmin(player, chestId)
+	if not ok or typeof(package) ~= "table" then
+		return response(false, "GRANT_FAILED", message or "Failed to grant chest rewards.")
+	end
+
+	pushRecentEvent("admin_chest_trigger", string.format("Triggered %s for %s.", package.displayName or chestId, player.Name), {
+		chestId = package.chestId,
+		visualChestId = package.visualChestId,
+		targetUserId = player.UserId,
+		rewardCount = if typeof(package.rewards) == "table" then #package.rewards else 0,
+	})
+
+	return response(true, "OK", message, package)
+end
+
 local function handleGrantFullSet(payload: any)
 	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
 	if not targetPlayer then
@@ -1632,6 +1809,10 @@ function AdminService:HandleAction(player: Player, request: any)
 		return handleTestDialogue()
 	end
 
+	if tabId == OVERVIEW_TAB_ID and actionId == "guide_to_crafting" then
+		return handleGuideToCrafting()
+	end
+
 	if tabId == OVERVIEW_TAB_ID and actionId == "show_merchant" then
 		return handleShowMerchant(payload)
 	end
@@ -1662,6 +1843,10 @@ function AdminService:HandleAction(player: Player, request: any)
 
 	if tabId == PLAYERS_TAB_ID and actionId == "reload_player_state" then
 		return handleReloadPlayerState(payload)
+	end
+
+	if tabId == PLAYERS_TAB_ID and actionId == "trigger_tutorial" then
+		return handleTriggerTutorial(payload)
 	end
 
 	if tabId == PLAYERS_TAB_ID and actionId == "teleport_to_player" then
@@ -1770,6 +1955,14 @@ function AdminService:HandleAction(player: Player, request: any)
 
 	if tabId == ROLL_SOURCES_TAB_ID and actionId == "force_case_reward" then
 		return handleForceCaseReward(player, payload)
+	end
+
+	if tabId == ROLL_SOURCES_TAB_ID and actionId == "preview_chest_opening" then
+		return handlePreviewChestOpening(player, payload)
+	end
+
+	if tabId == ROLL_SOURCES_TAB_ID and ADMIN_CHEST_ACTION_IDS[actionId] ~= nil then
+		return handleTriggerAdminChest(player, actionId)
 	end
 
 	if tabId == BODY_PARTS_TAB_ID then

@@ -1,12 +1,17 @@
+local MessagingService = game:GetService("MessagingService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local ChatNotificationConfig = require(ReplicatedStorage.Shared.Config.ChatNotificationConfig)
+local Logger = require(ReplicatedStorage.Shared.Diagnostics.Logger)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 
 local remotesFolder: Folder? = nil
 local chatNotificationsFolder: Folder? = nil
 local rareRollRemote: RemoteEvent? = nil
+local globalRollSubscription: RBXScriptConnection? = nil
+local seenGlobalMessageIds: { [string]: boolean } = {}
+local nextGlobalMessageId = 0
 
 local ChatNotificationService = {}
 
@@ -125,6 +130,92 @@ local function buildRareRollPayload(player: Player, rollResult: any): any?
 	}
 end
 
+local function getOriginJobId(): string
+	local jobId = game.JobId
+	if typeof(jobId) == "string" and jobId ~= "" then
+		return jobId
+	end
+
+	return "studio"
+end
+
+local function createGlobalMessageId(): string
+	nextGlobalMessageId += 1
+	return string.format("%s:%d:%d", getOriginJobId(), os.time(), nextGlobalMessageId)
+end
+
+local function cloneGlobalPayload(payload: any): any
+	local globalPayload = table.clone(payload)
+	globalPayload.originJobId = getOriginJobId()
+	globalPayload.messageId = createGlobalMessageId()
+	return globalPayload
+end
+
+local function isValidGlobalPayload(payload: any): boolean
+	if typeof(payload) ~= "table" then
+		return false
+	end
+	if payload.kind ~= ChatNotificationConfig.RareRollKind then
+		return false
+	end
+	if typeof(payload.messageId) ~= "string" or payload.messageId == "" then
+		return false
+	end
+	if typeof(payload.originJobId) ~= "string" or payload.originJobId == "" then
+		return false
+	end
+	if payload.originJobId == getOriginJobId() then
+		return false
+	end
+
+	local displayRarity = ChatNotificationConfig.NormalizeDisplayRarity(payload.displayRarity)
+	return ChatNotificationConfig.IsGlobalRollRarity(displayRarity)
+end
+
+local function publishGlobalRoll(payload: any)
+	if not ChatNotificationConfig.IsGlobalRollRarity(payload.displayRarity) then
+		return
+	end
+
+	local globalPayload = cloneGlobalPayload(payload)
+	seenGlobalMessageIds[globalPayload.messageId] = true
+
+	local ok, err = pcall(function()
+		MessagingService:PublishAsync(ChatNotificationConfig.GlobalRollTopicName, globalPayload)
+	end)
+	if not ok then
+		Logger.Warn(string.format("[ChatNotificationService] Failed to publish global roll: %s", tostring(err)))
+	end
+end
+
+local function handleGlobalRollMessage(message: any)
+	local payload = if typeof(message) == "table" then message.Data else nil
+	if not isValidGlobalPayload(payload) then
+		return
+	end
+	if seenGlobalMessageIds[payload.messageId] == true then
+		return
+	end
+
+	seenGlobalMessageIds[payload.messageId] = true
+	ensureRareRollRemote():FireAllClients(payload)
+end
+
+local function subscribeToGlobalRolls()
+	if globalRollSubscription then
+		return
+	end
+
+	local ok, result = pcall(function()
+		return MessagingService:SubscribeAsync(ChatNotificationConfig.GlobalRollTopicName, handleGlobalRollMessage)
+	end)
+	if ok then
+		globalRollSubscription = result
+	else
+		Logger.Warn(string.format("[ChatNotificationService] Failed to subscribe to global rolls: %s", tostring(result)))
+	end
+end
+
 function ChatNotificationService:AnnounceRareRoll(player: Player, rollResult: any)
 	local payload = buildRareRollPayload(player, rollResult)
 	if not payload then
@@ -132,11 +223,13 @@ function ChatNotificationService:AnnounceRareRoll(player: Player, rollResult: an
 	end
 
 	ensureRareRollRemote():FireAllClients(payload)
+	publishGlobalRoll(payload)
 	return true
 end
 
 function ChatNotificationService:OnStart()
 	ensureRareRollRemote()
+	subscribeToGlobalRolls()
 end
 
 return ChatNotificationService

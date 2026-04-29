@@ -15,6 +15,7 @@ local BossArenaRewardService = require(script.Parent.BossArenaRewardService)
 local BossPhysicsStabilizer = require(script.Parent.Common.BossPhysicsStabilizer)
 local BossArenas = require(ReplicatedStorage.Shared.BossArenas)
 local BossEncounterScaling = require(ReplicatedStorage.Shared.BossArena.EncounterScaling)
+local BossRewards = require(ReplicatedStorage.Shared.BossArena.BossRewards)
 local BossQueueTeleportPayload = require(ReplicatedStorage.Shared.BossQueue.TeleportPayload)
 local BossFacing = require(ReplicatedStorage.Shared.Bosses.BossFacing)
 local BossMoveTags = require(ReplicatedStorage.Shared.Bosses.MoveTags)
@@ -28,6 +29,7 @@ local ACTIVE_PROFILE_ID = "boss_arena"
 local GAME_ASSETS_FOLDER_NAME = "GameAssets"
 local ARENA_LIGHTING_FOLDER_NAME = "ArenaLighting"
 local ACTIVE_BOSS_MODEL_NAME = "ActiveBoss"
+local ACTIVE_MINIONS_FOLDER_NAME = "ActiveBossMinions"
 local ACTIVE_ARENA_MODEL_NAME = "ActiveBossArena"
 local AGGRO_RADIUS_ATTRIBUTE_NAME = "BossAggroRadius"
 local LEASH_RADIUS_ATTRIBUTE_NAME = "BossLeashRadius"
@@ -41,7 +43,8 @@ local BOSS_ATTACK_SPAWN_DELAY_SECONDS = 5
 local BOSS_ENCOUNTER_DURATION_SECONDS = 180
 local TIMER_PHASE_WAITING_FOR_PLAYERS = "waiting_for_players"
 local BOSS_TIMEOUT_RETURN_ROUTE_ID = "return_to_boss_lobby"
-local BOSS_RESULTS_DURATION_SECONDS = 15
+local BOSS_RESULTS_DURATION_SECONDS = 60
+local BOSS_VICTORY_RESULTS_DELAY_SECONDS = 2
 local CHARACTER_PLACEMENT_RETRY_COUNT = 20
 local CHARACTER_PLACEMENT_RETRY_INTERVAL_SECONDS = 0.1
 local BOSS_REWARD_DAMAGE_CONTRIBUTION_RATIO = 0.15
@@ -81,6 +84,9 @@ type BossHitConfirmedPayload = {
 	bossId: string,
 	damage: number,
 	attackerUserId: number,
+	targetType: string?,
+	targetModel: Model?,
+	targetPosition: Vector3?,
 	isKillingBlow: boolean?,
 	serverTime: number,
 }
@@ -98,6 +104,8 @@ type BossResultRewardEntry = {
 	dropTier: string?,
 	chance: number?,
 	displayColor: Color3?,
+	record: { [string]: any }?,
+	sourceBossId: string?,
 }
 
 type BossResultsState = {
@@ -107,6 +115,7 @@ type BossResultsState = {
 	startsAtServerTime: number,
 	endsAtServerTime: number,
 	durationSeconds: number,
+	visualChestId: string,
 	rewards: { BossResultRewardEntry },
 	rewardStatus: string,
 	readyCount: number,
@@ -174,6 +183,7 @@ type EncounterState = {
 	replayReadyUserIds: { [number]: boolean },
 	resultsCompleted: boolean,
 	timedOut: boolean,
+	victoryResultsReadyAt: number?,
 	activeCast: CastState?,
 	bossHealthConnections: { RBXScriptConnection },
 }
@@ -289,6 +299,11 @@ local function getModelRootPart(model: Model): BasePart?
 	end
 
 	return model:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function isActiveBossMinion(model: Model): boolean
+	local activeMinionsFolder = Workspace:FindFirstChild(ACTIVE_MINIONS_FOLDER_NAME)
+	return activeMinionsFolder ~= nil and model.Parent == activeMinionsFolder
 end
 
 local function readPositiveAttribute(instance: Instance?, attributeName: string): number?
@@ -884,6 +899,7 @@ local function copyRewardEntry(entry: any): BossResultRewardEntry?
 			dropTier = if typeof(entry.dropTier) == "string" then entry.dropTier else "Common",
 			chance = math.clamp(tonumber(entry.chance) or 0, 0, 1),
 			displayColor = if typeof(entry.displayColor) == "Color3" then entry.displayColor else nil,
+			sourceBossId = if typeof(entry.sourceBossId) == "string" then entry.sourceBossId else nil,
 		}
 	end
 
@@ -905,6 +921,8 @@ local function copyRewardEntry(entry: any): BossResultRewardEntry?
 		displayRarity = displayRarity,
 		displayOddsDenominator = displayOddsDenominator,
 		isBossPart = entry.isBossPart == true,
+		record = if typeof(entry.record) == "table" then table.clone(entry.record) else nil,
+		sourceBossId = if typeof(entry.sourceBossId) == "string" then entry.sourceBossId else nil,
 	}
 end
 
@@ -933,6 +951,28 @@ local function countReplayReadyPlayers(encounter: EncounterState): number
 		end
 	end
 	return count
+end
+
+local function areAllRemainingRosterPlayersReplayReady(encounter: EncounterState): boolean
+	if encounter.timerPhase ~= "results" or encounter.resultsCompleted == true then
+		return false
+	end
+	if encounter.resultRewardStatus == "pending" then
+		return false
+	end
+
+	local rosterCount = 0
+	for userId in pairs(encounter.rosterUserIds) do
+		local resolvedUserId = math.floor(tonumber(userId) or 0)
+		if resolvedUserId > 0 and getPlayerByUserId(resolvedUserId) ~= nil then
+			rosterCount += 1
+			if encounter.replayReadyUserIds[resolvedUserId] ~= true then
+				return false
+			end
+		end
+	end
+
+	return rosterCount > 0
 end
 
 function BossArenaRuntimeService:_applyRewardResults(encounter: EncounterState, rewardResults: { [number]: any })
@@ -1014,7 +1054,24 @@ function BossArenaRuntimeService:_commitBossRewardsAsync(encounter: EncounterSta
 		encounter.resultRewardStatus = "ready"
 		self:_applyRewardResults(encounter, rewardResultsOrError)
 		self:_notifyBossResultsStateChanged()
+		self:_completeResultsIfAllReplayReady(encounter)
 	end)
+end
+
+function BossArenaRuntimeService:_queueVictoryResults(encounter: EncounterState)
+	if encounter.timerPhase ~= "fight" or encounter.resultsCompleted == true then
+		return
+	end
+
+	local now = os.clock()
+	if encounter.victoryResultsReadyAt == nil then
+		encounter.victoryResultsReadyAt = now + BOSS_VICTORY_RESULTS_DELAY_SECONDS
+		self:_cancelActiveCast(encounter)
+	end
+
+	if now >= encounter.victoryResultsReadyAt then
+		self:_beginResults(encounter, "victory")
+	end
 end
 
 function BossArenaRuntimeService:_beginResults(encounter: EncounterState, outcome: string)
@@ -1122,7 +1179,7 @@ function BossArenaRuntimeService:_bindBossHealthSignals(encounter: EncounterStat
 
 	table.insert(encounter.bossHealthConnections, encounter.bossHumanoid.HealthChanged:Connect(function()
 		if encounter.bossHumanoid.Health <= 0 then
-			self:_beginResults(encounter, "victory")
+			self:_queueVictoryResults(encounter)
 		end
 		self:_notifyBossHealthStateChanged()
 		self:_notifyBossTimerStateChanged()
@@ -2483,6 +2540,23 @@ function BossArenaRuntimeService:_timeoutEncounter(encounter: EncounterState)
 	self:_beginResults(encounter, "defeat")
 end
 
+function BossArenaRuntimeService:_completeResultsIfAllReplayReady(encounter: EncounterState)
+	if areAllRemainingRosterPlayersReplayReady(encounter) ~= true then
+		return
+	end
+
+	task.defer(function()
+		if self._encounter ~= encounter then
+			return
+		end
+		if areAllRemainingRosterPlayersReplayReady(encounter) ~= true then
+			return
+		end
+
+		self:_completeResults(encounter)
+	end)
+end
+
 function BossArenaRuntimeService:_collectResultsSplit(encounter: EncounterState): ({ Player }, { Player }, { number })
 	local readyPlayers = {}
 	local returnPlayers = {}
@@ -2647,7 +2721,7 @@ function BossArenaRuntimeService:_heartbeat()
 		return
 	end
 	if encounter.bossHumanoid.Health <= 0 then
-		self:_beginResults(encounter, "victory")
+		self:_queueVictoryResults(encounter)
 		return
 	end
 	if os.clock() >= encounter.timerEndsAt then
@@ -2716,6 +2790,7 @@ function BossArenaRuntimeService:OnPlayerRemoving(player: Player)
 	end
 	self:_notifyRosterStateChanged()
 	self:_notifyBossResultsStateChanged()
+	self:_completeResultsIfAllReplayReady(encounter)
 end
 
 function BossArenaRuntimeService:MarkPlayerLoadingScreenDismissed(player: Player): boolean
@@ -2958,6 +3033,53 @@ function BossArenaRuntimeService:ApplyPlayerDamageToActiveBoss(player: Player, d
 		bossId = encounter.bossId,
 		damage = creditedDamage,
 		attackerUserId = player.UserId,
+		targetType = "boss",
+		targetModel = bossModel,
+		targetPosition = encounter.bossRootPart.Position,
+		isKillingBlow = currentHealth <= 0,
+		serverTime = Workspace:GetServerTimeNow(),
+	})
+
+	return creditedDamage
+end
+
+function BossArenaRuntimeService:ApplyPlayerDamageToActiveBossMinion(player: Player, minionModel: Model, damageAmount: number): number
+	local encounter = self._encounter
+	if encounter == nil or encounter.rosterUserIds[player.UserId] ~= true then
+		return 0
+	end
+	if typeof(minionModel) ~= "Instance" or not minionModel:IsA("Model") or not isActiveBossMinion(minionModel) then
+		return 0
+	end
+
+	local minionHumanoid = minionModel:FindFirstChildOfClass("Humanoid")
+	if minionHumanoid == nil or minionHumanoid.Parent == nil or minionHumanoid.Health <= 0 then
+		return 0
+	end
+
+	local previousHealth = math.max(0, tonumber(minionHumanoid.Health) or 0)
+	local resolvedDamage = math.max(0, tonumber(damageAmount) or 0)
+	local requestedDamage = math.min(resolvedDamage, previousHealth)
+	if requestedDamage <= 0 then
+		return 0
+	end
+
+	minionHumanoid:TakeDamage(requestedDamage)
+
+	local currentHealth = math.max(0, tonumber(minionHumanoid.Health) or 0)
+	local creditedDamage = math.clamp(previousHealth - currentHealth, 0, requestedDamage)
+	if creditedDamage <= 0 then
+		return 0
+	end
+
+	local minionRootPart = getModelRootPart(minionModel)
+	self:_notifyBossHitConfirmed({
+		bossId = encounter.bossId,
+		damage = creditedDamage,
+		attackerUserId = player.UserId,
+		targetType = "minion",
+		targetModel = minionModel,
+		targetPosition = if minionRootPart then minionRootPart.Position else nil,
 		isKillingBlow = currentHealth <= 0,
 		serverTime = Workspace:GetServerTimeNow(),
 	})
@@ -3001,6 +3123,7 @@ function BossArenaRuntimeService:GetBossResultsState(player: Player?): BossResul
 		startsAtServerTime = startsAtServerTime,
 		endsAtServerTime = endsAtServerTime,
 		durationSeconds = BOSS_RESULTS_DURATION_SECONDS,
+		visualChestId = BossRewards.GetBossChestVisualId(encounter.bossId),
 		rewards = rewards,
 		rewardStatus = if encounter.resultRewardStatus == "failed"
 			then "failed"
@@ -3040,6 +3163,9 @@ function BossArenaRuntimeService:SetPlayerReplayReady(player: Player, isReady: b
 		encounter.replayReadyUserIds[player.UserId] = nil
 	end
 	self:_notifyBossResultsStateChanged()
+	if isReady then
+		self:_completeResultsIfAllReplayReady(encounter)
+	end
 
 	return true, if isReady then "Ready to play again." else "Replay readiness cleared."
 end
@@ -3076,6 +3202,7 @@ function BossArenaRuntimeService:ReturnPlayerToBossLobbyFromResults(player: Play
 	else
 		self:_notifyRosterStateChanged()
 		self:_notifyBossResultsStateChanged()
+		self:_completeResultsIfAllReplayReady(encounter)
 	end
 
 	return true, "Returning to the boss lobby."

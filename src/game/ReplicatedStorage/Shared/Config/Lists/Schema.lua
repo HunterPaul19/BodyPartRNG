@@ -2,6 +2,7 @@ local OwnedBodyParts = require(script.Parent.Parent.Shared.Character.OwnedBodyPa
 local OwnedAccessories = require(script.Parent.Parent.Shared.Character.OwnedAccessories)
 local OwnedAuras = require(script.Parent.Parent.Shared.Character.OwnedAuras)
 local OwnedCraftingMaterials = require(script.Parent.Parent.Shared.Character.OwnedCraftingMaterials)
+local CraftingProgress = require(script.Parent.Parent.Shared.Character.CraftingProgress)
 local OwnedPotions = require(script.Parent.Parent.Shared.Character.OwnedPotions)
 local MerchantShopState = require(script.Parent.Parent.Shared.Character.MerchantShopState)
 local MarketplaceState = require(script.Parent.Parent.Shared.Marketplace.State)
@@ -9,6 +10,8 @@ local BodyPartLoadout = require(script.Parent.Parent.Shared.Character.BodyPartLo
 local RollTargetRegions = require(script.Parent.Parent.Shared.Character.RollTargetRegions)
 local RollSelection = require(script.Parent.Parent.Shared.Character.OwnedRollTypes)
 local TimeShardState = require(script.Parent.Parent.Shared.Character.TimeShardState)
+local DailyChestState = require(script.Parent.Parent.Shared.Character.DailyChestState)
+local TutorialState = require(script.Parent.Parent.Shared.Character.TutorialState)
 local RollingConfig = require(script.Parent.Parent.Shared.Config.RollingConfig)
 local AchievementState = require(script.Parent.Parent.Shared.Titles.AchievementState)
 local PlayerStats = require(script.Parent.Parent.Shared.Stats.PlayerStats)
@@ -27,6 +30,16 @@ return {
 	TimeShards = {
 		key = "timeShards",
 		value = TimeShardState.CreateEmptyState(),
+	},
+
+	DailyChests = {
+		key = "dailyChests",
+		value = DailyChestState.CreateEmptyState(),
+	},
+
+	Tutorial = {
+		key = "tutorial",
+		value = TutorialState.CreateEmptyState(),
 	},
 
 	Diagnostics = {
@@ -62,6 +75,11 @@ return {
 	CraftingMaterials = {
 		key = "craftingMaterials",
 		value = OwnedCraftingMaterials.CreateEmptyState(),
+	},
+
+	CraftingProgress = {
+		key = "craftingProgress",
+		value = CraftingProgress.CreateEmptyState(),
 	},
 
 	Potions = {
@@ -137,6 +155,11 @@ return {
 	AutoSizeEnabled = {
 		key = "autoSizeEnabled",
 		value = false,
+	},
+
+	MusicEnabled = {
+		key = "musicEnabled",
+		value = true,
 	},
 
 	AutoSellRarities = {

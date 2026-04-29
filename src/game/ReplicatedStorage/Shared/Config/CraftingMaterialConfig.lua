@@ -16,6 +16,7 @@ export type CraftingMaterialConfigEntry = {
 	displayColor: Color3,
 	iconName: string?,
 	iconTexture: string?,
+	sellPrice: number,
 }
 
 local ICON_NAMES_BY_ID: { [string]: string } = {
@@ -51,6 +52,41 @@ local ICON_NAMES_BY_ID: { [string]: string } = {
 	orbital_laser_cannon = "OrbitalLaserCannon",
 }
 
+local SELL_PRICES_BY_ID: { [string]: number } = table.freeze({
+	scrap = 25,
+	lucky_thread = 100,
+	ember_shard = 500,
+	blazesteel_fragment = 2000,
+	infernal_crown = 10000,
+	blue_tentacle = 1000,
+	pirate_hook = 4000,
+	abyssal_compass = 20000,
+	mystic_fish_scale = 2000,
+	tidal_staff = 8000,
+	tome_of_the_deep = 40000,
+	divine_leather = 4000,
+	titanic_bull_horn = 16000,
+	mighty_axe = 80000,
+	molten_chunk = 8000,
+	ember_core = 32000,
+	volcanic_heart = 160000,
+	broccoli = 16000,
+	mixed_salad = 64000,
+	golden_broccoli = 320000,
+	alloy_plate = 32000,
+	power_cell = 128000,
+	reactor_core = 640000,
+	bone_shard = 64000,
+	cursed_ribcage = 256000,
+	lich_skull = 1280000,
+	chicken_bone = 128000,
+	mac_n_cheese = 512000,
+	titanic_tooth = 2560000,
+	rainbow_prism = 256000,
+	meow_engine = 1024000,
+	orbital_laser_cannon = 5120000,
+})
+
 local function material(
 	id: string,
 	label: string,
@@ -66,6 +102,7 @@ local function material(
 		displayColor = displayColor,
 		iconName = ICON_NAMES_BY_ID[id],
 		iconTexture = "",
+		sellPrice = SELL_PRICES_BY_ID[id] or 0,
 	}
 end
 
@@ -78,6 +115,7 @@ local ENTRIES: { CraftingMaterialConfigEntry } = {
 		displayColor = COMMON_COLOR,
 		iconName = nil,
 		iconTexture = "",
+		sellPrice = SELL_PRICES_BY_ID.scrap,
 	},
 	{
 		id = "lucky_thread",
@@ -87,6 +125,7 @@ local ENTRIES: { CraftingMaterialConfigEntry } = {
 		displayColor = RARE_COLOR,
 		iconName = nil,
 		iconTexture = "",
+		sellPrice = SELL_PRICES_BY_ID.lucky_thread,
 	},
 	material("ember_shard", "Ember Shard", "A common crafting material dropped by Flame Guard General.", 100, COMMON_COLOR),
 	material("blazesteel_fragment", "Blazesteel Fragment", "A rare crafting material dropped by Flame Guard General.", 110, RARE_COLOR),
@@ -158,6 +197,15 @@ function CraftingMaterialConfig.GetAll(): { CraftingMaterialConfigEntry }
 		results[index] = entry
 	end
 	return results
+end
+
+function CraftingMaterialConfig.GetSellPrice(materialId: any): number
+	local entry = CraftingMaterialConfig.Get(materialId)
+	if not entry then
+		return 0
+	end
+
+	return math.max(0, math.floor(tonumber(entry.sellPrice) or 0))
 end
 
 function CraftingMaterialConfig.ResolveIcon(configOrId: CraftingMaterialConfigEntry | string): Decal?

@@ -16,8 +16,12 @@ local SERVER_STARTUP_PHASE_DEFINITIONS = {
 		names = {
 			"DataService",
 			"StatsService",
+			"AudioSettingsService",
 			"BodyPartService",
 			"PotionService",
+			"PassiveIncomeService",
+			"DailyChestService",
+			"TutorialService",
 			"PurchaseReceiptService",
 			"ChatNotificationService",
 		},
@@ -58,6 +62,8 @@ local PLAYER_ADDED_PHASE_DEFINITIONS = {
 			"PurchaseReceiptService",
 			"PlayerLoadoutStatsService",
 			"PassiveIncomeService",
+			"DailyChestService",
+			"TutorialService",
 		},
 	},
 	{

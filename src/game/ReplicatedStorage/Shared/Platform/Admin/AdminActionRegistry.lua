@@ -69,6 +69,12 @@ AdminActionRegistry.Tabs = {
 						risk = AdminActionRegistry.Risk.Safe,
 					},
 					{
+						id = "guide_to_crafting",
+						title = "Guide To Crafting",
+						description = "Show the local floor guide toward the crafting station so tutorial-style objective presentation can be tested.",
+						risk = AdminActionRegistry.Risk.Safe,
+					},
+					{
 						id = "show_merchant",
 						title = "Show Merchant",
 						description = "Force the timed merchant to appear immediately so the shop flow can be tested on demand.",
@@ -139,6 +145,16 @@ AdminActionRegistry.Tabs = {
 						description = "Force a safe refresh of a player's replicated state.",
 						risk = AdminActionRegistry.Risk.Safe,
 						fields = { playerField() },
+					},
+					{
+						id = "trigger_tutorial",
+						title = "Trigger Tutorial",
+						description = "Reset the selected player into tutorial replay state, optionally at a specific step id.",
+						risk = AdminActionRegistry.Risk.Mutating,
+						fields = {
+							playerField(),
+							textField("stepId", "Step ID", "blank = welcome", ""),
+						},
 					},
 					{
 						id = "teleport_to_player",
@@ -461,6 +477,37 @@ AdminActionRegistry.Tabs = {
 							playerField(),
 							textField("pieceId", "Piece ID", "configured piece id", ""),
 						},
+					},
+					{
+						id = "preview_chest_opening",
+						title = "Preview Chest Opening",
+						description = "Open a preview-only chest sequence with inventory-style reward cards. This does not grant or save rewards.",
+						risk = AdminActionRegistry.Risk.Safe,
+						fields = {
+							playerField(),
+							textField("chestId", "Chest ID", "Basic, VIP, VIP+, BossTier1, BossTier2, BossTier3", "Basic"),
+							numberField("count", "Reward Count", "5", "5"),
+							textField("rollTypeId", "Roll Type ID", "selected or configured id", ""),
+							textField("rollRegion", "Roll Region", "selected or region id", ""),
+						},
+					},
+					{
+						id = "trigger_daily_free_chest",
+						title = "Trigger Daily Free Chest",
+						description = "Grant real Daily Free Chest loot to yourself and open the Basic chest sequence. This does not touch daily claim state.",
+						risk = AdminActionRegistry.Risk.Mutating,
+					},
+					{
+						id = "trigger_vip_chest",
+						title = "Trigger VIP Chest",
+						description = "Grant real VIP Chest loot to yourself and open the VIP chest sequence. This ignores VIP ownership and does not touch daily claim state.",
+						risk = AdminActionRegistry.Risk.Mutating,
+					},
+					{
+						id = "trigger_vip_plus_chest",
+						title = "Trigger VIP+ Chest",
+						description = "Grant real VIP+ Chest loot to yourself and open the VIP+ chest sequence. This ignores VIP+ ownership and does not touch daily claim state.",
+						risk = AdminActionRegistry.Risk.Mutating,
 					},
 				},
 			},
