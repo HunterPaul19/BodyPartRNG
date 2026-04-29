@@ -12,6 +12,7 @@ GUIControls.LastSelectRequestId = 0
 GUIControls.DropdownInteractionId = 0
 GUIControls.DropdownAnimationId = 0
 GUIControls.AutoRollLoopId = 0
+GUIControls.AutoRollScheduleId = 0
 GUIControls.CurrentRollResult = nil
 GUIControls.CurrentRollResultEquipped = false
 GUIControls.EquipDebounce = false
@@ -21,6 +22,7 @@ GUIControls.RollingStateRefreshPending = false
 GUIControls.RollPreviewSessionId = 0
 GUIControls.ActiveRollPreviewSessionId = nil
 GUIControls.ActiveMutationLoopSound = nil
+GUIControls.RollCooldownUntil = 0
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -154,6 +156,7 @@ local GROUP_ID = 384839595
 local BASE_ROLL_COOLDOWN = 1
 local BASE_SEQUENCE_DURATION = 2.5
 local BASE_AUTO_RESULT_HOLD = 0.8
+local AUTO_ROLL_MIN_RETRY_DELAY = 0.05
 local PREVIEW_SEQUENCE_LENGTH = 10
 local BasePosition = UDim2.fromScale(0.5, 0.358)
 local OffsetPosition = BasePosition + UDim2.fromScale(0, 0.1)
@@ -802,22 +805,42 @@ function GUIControls:SetAutoRollEnabled(enabled)
 	if GUIControls.AutoRoll == shouldEnable then
 		GUIControls:InvalidateTemporaryStatus()
 		GUIControls:RefreshRollControls()
+		if shouldEnable and not GUIControls.CurrentlyRolling then
+			GUIControls:ScheduleNextAutoRoll(AUTO_ROLL_MIN_RETRY_DELAY)
+		end
 		return
 	end
 
 	GUIControls.AutoRoll = shouldEnable
 	GUIControls.AutoRollLoopId += 1
+	GUIControls.AutoRollScheduleId += 1
 	GUIControls:InvalidateTemporaryStatus()
 	GUIControls:RefreshRollControls()
 
-	if shouldEnable and not GUIControls.CurrentlyRolling and not Main.Visible then
-		local loopId = GUIControls.AutoRollLoopId
-		task.delay(0.05, function()
-			if GUIControls.AutoRoll and loopId == GUIControls.AutoRollLoopId then
-				GUIControls:Roll("auto")
-			end
-		end)
+	if shouldEnable and not GUIControls.CurrentlyRolling then
+		GUIControls:ScheduleNextAutoRoll(AUTO_ROLL_MIN_RETRY_DELAY)
 	end
+end
+
+function GUIControls:GetAutoRollRetryDelay()
+	local now = os.clock()
+	local retryDelay = AUTO_ROLL_MIN_RETRY_DELAY
+
+	if GUIControls.RollDebounce then
+		local cooldownRemaining = GUIControls.RollCooldownUntil - now
+		retryDelay = math.max(retryDelay, cooldownRemaining)
+	end
+
+	if GUIControls.CurrentlyRolling then
+		retryDelay = math.max(retryDelay, AUTO_ROLL_MIN_RETRY_DELAY)
+	end
+
+	local suppressedRemaining = GUIControls.SuppressRollClickUntil - now
+	if suppressedRemaining > 0 then
+		retryDelay = math.max(retryDelay, suppressedRemaining)
+	end
+
+	return math.max(AUTO_ROLL_MIN_RETRY_DELAY, retryDelay)
 end
 
 function GUIControls:ScheduleNextAutoRoll(delayTime)
@@ -826,8 +849,10 @@ function GUIControls:ScheduleNextAutoRoll(delayTime)
 	end
 
 	local loopId = GUIControls.AutoRollLoopId
+	GUIControls.AutoRollScheduleId += 1
+	local scheduleId = GUIControls.AutoRollScheduleId
 	task.delay(math.max(0, tonumber(delayTime) or 0), function()
-		if GUIControls.AutoRoll and loopId == GUIControls.AutoRollLoopId then
+		if GUIControls.AutoRoll and loopId == GUIControls.AutoRollLoopId and scheduleId == GUIControls.AutoRollScheduleId then
 			GUIControls:Roll("auto")
 		end
 	end)
@@ -1008,6 +1033,7 @@ end
 
 function GUIControls:SetButtonCooldown()
 	local cooldownDuration = GUIControls:GetRollCooldownDuration()
+	GUIControls.RollCooldownUntil = os.clock() + cooldownDuration
 	GUIControls.RollDebounce = true
 	RollButton.CooldownFrame.BackgroundTransparency = 1
 	CooldownFrameTween:Play()
@@ -1018,16 +1044,30 @@ function GUIControls:SetButtonCooldown()
 		{ Offset = Vector2.new(-0.5, 0) }
 	):Play()
 	task.delay(cooldownDuration, function()
-		GUIControls.RollDebounce = false
+		if os.clock() >= GUIControls.RollCooldownUntil - 0.01 then
+			GUIControls.RollDebounce = false
+		end
 	end)
 end
 
 function GUIControls:SetDropdownOpen(isOpen)
-	GUIControls.IsDropdownOpen = isOpen == true
+	local shouldOpen = isOpen == true
+	if GUIControls.IsDropdownOpen == shouldOpen then
+		if shouldOpen then
+			RollDropdown.Visible = true
+		elseif GUIControls.DropdownAnimationId == 0 then
+			RollDropdownInner.Position = DropdownClosedPosition
+			DropdownButton.Rotation = 90
+			RollDropdown.Visible = false
+		end
+		return
+	end
+
+	GUIControls.IsDropdownOpen = shouldOpen
 	GUIControls.DropdownAnimationId += 1
 	local animationId = GUIControls.DropdownAnimationId
 
-	if GUIControls.IsDropdownOpen then
+	if shouldOpen then
 		RollDropdown.Visible = true
 		RollDropdownInner.Position = DropdownClosedPosition
 		TweenService:Create(RollDropdownInner, DropdownTweenInfo, { Position = DropdownOpenPosition }):Play()
@@ -1130,8 +1170,8 @@ function GUIControls:ApplyRollingState(state)
 		GUIControls:RebuildRollDropdown()
 	end
 	GUIControls:RefreshRollControls()
-	if shouldRebuildRollDropdown or GUIControls.IsDropdownOpen then
-		GUIControls:SetDropdownOpen(GUIControls.IsDropdownOpen)
+	if shouldRebuildRollDropdown and GUIControls.IsDropdownOpen then
+		GUIControls:SetDropdownOpen(true)
 	end
 end
 
@@ -1478,11 +1518,6 @@ function GUIControls:ShowRollResults(rollInfo)
 end
 
 function GUIControls:HideRollResults()
-	if not Main.Visible then
-		stopActiveMutationLoop()
-		return
-	end
-
 	GUIControls.CurrentRollResult = nil
 	GUIControls.CurrentRollResultEquipped = false
 	GUIControls.EquipDebounce = false
@@ -1502,9 +1537,15 @@ function GUIControls:Roll(triggerSource)
 		local predictedSkippedPresentation = shouldPredictSkippedRollPresentation(resolvedTriggerSource)
 
 		if os.clock() < GUIControls.SuppressRollClickUntil then
+			if resolvedTriggerSource == "auto" then
+				GUIControls:ScheduleNextAutoRoll(GUIControls:GetAutoRollRetryDelay())
+			end
 			return
 		end
 		if GUIControls.RollDebounce or GUIControls.CurrentlyRolling then
+			if resolvedTriggerSource == "auto" then
+				GUIControls:ScheduleNextAutoRoll(GUIControls:GetAutoRollRetryDelay())
+			end
 			return
 		end
 
@@ -1617,21 +1658,31 @@ function GUIControls:Roll(triggerSource)
 			return
 		end
 
+		if shouldDelayFinalReveal then
+			local finalResult = if typeof(rollResult.finalResult) == "table" then rollResult.finalResult else nil
+			GUIControls.CurrentlyRolling = false
+			if finalResult then
+				playRollCutsceneIfNeeded(rollResult, finalResult)
+				GUIControls:ShowRollResults(finalResult)
+			else
+				restoreIdleRollUi()
+				GUIControls:RefreshEquipButton()
+				GUIControls:RefreshRollControls()
+				GUIControls:SetButtonCooldown()
+				GUIControls:SetTemporaryStatus(rollResponse.message or "Roll complete.")
+			end
+			return
+		end
+
 		local previewSequence = rollResult.previewSequence
 		if typeof(previewSequence) ~= "table" or #previewSequence == 0 then
 			previewSequence = buildClientPreviewSequence(rollResult) or { rollResult.finalResult }
 		end
-		local previewCount = if shouldDelayFinalReveal then math.max(#previewSequence - 1, 0) else #previewSequence
-		local previewedResult = GUIControls:RollSequence(previewSequence, previewCount)
+		local previewedResult = GUIControls:RollSequence(previewSequence, #previewSequence)
 		local finalPreviewEntry = previewSequence[#previewSequence]
 		local finalResult = if typeof(finalPreviewEntry) == "table" then finalPreviewEntry else rollResult.finalResult
 		GUIControls.CurrentlyRolling = false
-		if shouldDelayFinalReveal then
-			-- Hold back the actual rolled item until the cutscene finishes.
-			playRollCutsceneIfNeeded(rollResult, finalResult)
-		else
-			finalResult = if typeof(previewedResult) == "table" then previewedResult else finalResult
-		end
+		finalResult = if typeof(previewedResult) == "table" then previewedResult else finalResult
 		GUIControls:ShowRollResults(finalResult)
 	end)
 end

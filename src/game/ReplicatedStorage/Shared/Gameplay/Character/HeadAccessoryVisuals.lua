@@ -2,6 +2,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local GameAssetResolver = require(ReplicatedStorage.Shared.Assets.GameAssetResolver)
 local AccessoryScaleUtils = require(script.Parent.AccessoryScaleUtils)
+local BodyPartVisuals = require(script.Parent.BodyPartVisuals)
 
 local HeadAccessoryVisuals = {}
 
@@ -144,7 +145,8 @@ function HeadAccessoryVisuals.Apply(character: Model, config: any?): (boolean, s
 		return false, string.format("Head accessory visual asset '%s' has no Handle part.", sourceAccessory.Name)
 	end
 
-	local scaled, scaleError = AccessoryScaleUtils.ScaleAccessoryToPartSize(clone, sourceHead.Size, targetHead.Size)
+	local sourceHeadSize = BodyPartVisuals.GetBaselinePartSize(character, "Head") or sourceHead.Size
+	local scaled, scaleError = AccessoryScaleUtils.ScaleAccessoryToPartSize(clone, sourceHeadSize, targetHead.Size)
 	if not scaled then
 		clone:Destroy()
 		return false, scaleError

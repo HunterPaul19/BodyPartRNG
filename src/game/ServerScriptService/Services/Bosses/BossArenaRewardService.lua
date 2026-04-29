@@ -211,8 +211,17 @@ local function buildGrantPayload(entry: BodyPartRewardGrantEntry): { [string]: a
 	}
 end
 
-local function isInventoryFullError(message: string?): boolean
-	return typeof(message) == "string" and string.find(string.lower(message), "inventory is full", 1, true) ~= nil
+local function buildBossBodyPartGrantOptions(reservation: any?): { [string]: any }
+	local options = {
+		ignoreInventoryLimit = true,
+	}
+
+	if typeof(reservation) == "table" then
+		options.pieceId = reservation.pieceId
+		options.serialNumber = reservation.serialNumber
+	end
+
+	return options
 end
 
 local function getPlayerBossDamage(encounter: any, userId: number): number
@@ -605,21 +614,19 @@ local function commitPreparedPlayerRewards(
 		local grantedRecord, grantError = DataService:AddOwnedBodyPart(
 			player,
 			preparedReward.payload,
-			preparedReward.reservation
+			buildBossBodyPartGrantOptions(preparedReward.reservation)
 		)
 		if grantedRecord == nil then
 			summary.skippedCount += 1
-			summary.stoppedReason = if isInventoryFullError(grantError) then "inventory_full" else "grant_failed"
+			summary.stoppedReason = "grant_failed"
 			collectPreparedRewardRelease(preparedReward, releaseSerials)
 			stopBodyPartGrants = true
-			if summary.stoppedReason ~= "inventory_full" then
-				warnWithPrefix(string.format(
-					"Failed to commit prepared boss reward to %s for boss '%s': %s",
-					player.Name,
-					bossId,
-					tostring(grantError)
-				))
-			end
+			warnWithPrefix(string.format(
+				"Failed to commit prepared boss reward to %s for boss '%s': %s",
+				player.Name,
+				bossId,
+				tostring(grantError)
+			))
 			continue
 		end
 
@@ -681,19 +688,21 @@ local function grantRewardsToPlayer(
 			continue
 		end
 
-		local grantedRecord, grantError = DataService:AddOwnedBodyPart(player, buildGrantPayload(rewardEntry))
+		local grantedRecord, grantError = DataService:AddOwnedBodyPart(
+			player,
+			buildGrantPayload(rewardEntry),
+			buildBossBodyPartGrantOptions(nil)
+		)
 		if grantedRecord == nil then
 			local remainingSlots = math.max(0, profile.slotCount - slotIndex + 1)
 			summary.skippedCount += remainingSlots
-			summary.stoppedReason = if isInventoryFullError(grantError) then "inventory_full" else "grant_failed"
-			if summary.stoppedReason ~= "inventory_full" then
-				warnWithPrefix(string.format(
-					"Failed to grant boss reward to %s for boss '%s': %s",
-					player.Name,
-					bossId,
-					tostring(grantError)
-				))
-			end
+			summary.stoppedReason = "grant_failed"
+			warnWithPrefix(string.format(
+				"Failed to grant boss reward to %s for boss '%s': %s",
+				player.Name,
+				bossId,
+				tostring(grantError)
+			))
 			break
 		end
 

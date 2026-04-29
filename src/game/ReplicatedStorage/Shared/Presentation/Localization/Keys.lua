@@ -75,6 +75,12 @@ local Keys = {
 				fallback = "Sell {EligibleCount} unfavorited, unequipped body parts? Favorites and equipped items will stay.",
 			},
 		},
+		SellOne = {
+			Confirm = {
+				key = "Inventory.SellOne.Confirm",
+				fallback = "Sell {BodyPartName}?",
+			},
+		},
 		PotionSell = {
 			Title = { key = "Inventory.PotionSell.Title", fallback = "Sell {PotionName}" },
 			Owned = { key = "Inventory.PotionSell.Owned", fallback = "Owned: x{OwnedAmount}" },

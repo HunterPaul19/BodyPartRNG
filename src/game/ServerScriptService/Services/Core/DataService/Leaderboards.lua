@@ -12,18 +12,19 @@ local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormat
 local RateLimitTelemetry = require(script.Parent.Parent.Common.RateLimitTelemetry)
 
 local RENDER_REFRESH_TIME = 10
+local GLOBAL_FETCH_INTERVAL_SECONDS = 180
+local GLOBAL_FETCH_JITTER_SECONDS = 90
+local GLOBAL_FETCH_ENTRY_LIMIT = 50
+local GLOBAL_FETCH_BOARD_SPACING_SECONDS = 5
+local ORDERED_LIST_BUDGET_FLOOR = 3
 local ROLLS_FLUSH_TIME = 60
 local LEGACY_SYNC_REFRESH_TIME = 120
 local MONEY_MIN_FLUSH_DELTA = 100
-local MAX_FETCH_ENTRIES = 1000
-local ORDERED_STORE_PAGE_SIZE = 100
 local DEFAULT_VISIBLE_ENTRY_COUNT = 10
 local ENTRY_NAME_PREFIX = "Entry_"
 local SPACER_NAME_PREFIX = "Spacer_"
 local SCOPE = Globals.SCOPE
 local USE_GLOBAL_LEADERBOARDS_IN_STUDIO = true
-local STUDIO_ORDERED_STORE_READ_RETRY_COUNT = 3
-local STUDIO_ORDERED_STORE_READ_RETRY_DELAY = 1
 -- Studio leaderboard validation stays isolated in a tester-seeded namespace.
 -- Only players who join Studio sessions after this is enabled will populate these stores.
 local STUDIO_ORDERED_STORE_SUFFIX = "_Studio"
@@ -68,6 +69,7 @@ local usernameCache = {}
 local thumbnailCache = {}
 local orderedStores = {}
 local orderedStoreNames = {}
+local orderedEntryCaches = {}
 local lastSyncedValues = {}
 local lastSyncedAt = {}
 local rollsLiveValues = {}
@@ -88,10 +90,6 @@ end
 local function getOrderedStoreName(config): string
 	local scopeSuffix = if RunService:IsStudio() then SCOPE .. STUDIO_ORDERED_STORE_SUFFIX else SCOPE
 	return config.key .. scopeSuffix
-end
-
-local function isStudioRollsBoard(config): boolean
-	return RunService:IsStudio() and config.key == ROLLS_KEY
 end
 
 local function readStoredTemplateSize(template)
@@ -211,6 +209,25 @@ local function getUsernameForUserId(userId)
 
 	usernameCache[userId] = result
 	return result
+end
+
+local function resolveEntryName(entry)
+	if typeof(entry) ~= "table" then
+		return ""
+	end
+
+	if typeof(entry.name) == "string" and entry.name ~= "" then
+		return entry.name
+	end
+
+	local userId = tonumber(entry.userId)
+	if not userId then
+		entry.name = ""
+		return entry.name
+	end
+
+	entry.name = getUsernameForUserId(userId)
+	return entry.name
 end
 
 local function getThumbnailForUserId(userId)
@@ -428,7 +445,7 @@ local function createBoardEntry(widgets, rank, entryData, formatName)
 	row.Parent = widgets.scrollingFrame
 
 	setGuiText(findFirstChildByNames(row, widgets.rowRankLabelNames), string.format("#%d", rank))
-	setGuiText(findFirstChildByNames(row, widgets.rowPlayerNameLabelNames), entryData.name)
+	setGuiText(findFirstChildByNames(row, widgets.rowPlayerNameLabelNames), resolveEntryName(entryData))
 	setGuiText(findFirstChildByNames(row, widgets.rowValueLabelNames), formatValue(formatName, entryData.value))
 end
 
@@ -462,8 +479,9 @@ local function renderPlayerInfo(widgets, config, topEntry)
 	end
 
 	setGuiVisible(playerInfo, true)
-	setGuiText(widgets.playerInfoDisplayName, topEntry.name)
-	setGuiText(widgets.playerInfoUsername, "@" .. topEntry.name)
+	local topName = resolveEntryName(topEntry)
+	setGuiText(widgets.playerInfoDisplayName, topName)
+	setGuiText(widgets.playerInfoUsername, "@" .. topName)
 	setGuiText(widgets.playerInfoRollInfoTitle, config.infoTitle or config.format)
 	setGuiText(widgets.playerInfoRollInfoContext, formatValue(config.format, topEntry.value))
 
@@ -471,6 +489,19 @@ local function renderPlayerInfo(widgets, config, topEntry)
 		local thumbnail = getThumbnailForUserId(topEntry.userId)
 		if thumbnail then
 			widgets.playerInfoIcon.Image = thumbnail
+		end
+	end
+end
+
+local function hydrateVisibleEntryNames(entries, firstVisibleRank, lastVisibleRank)
+	if entries[1] then
+		resolveEntryName(entries[1])
+	end
+
+	for rank = firstVisibleRank, lastVisibleRank do
+		local entry = entries[rank]
+		if entry then
+			resolveEntryName(entry)
 		end
 	end
 end
@@ -487,12 +518,14 @@ local function renderBoard(boardModel, config, entries)
 
 	widgets.template.Visible = false
 	widgets.template.Size = widgets.templateSize
-	widgets.template.LayoutOrder = MAX_FETCH_ENTRIES + 2
+	widgets.template.LayoutOrder = GLOBAL_FETCH_ENTRY_LIMIT + 2
 	setGuiText(widgets.headerPlayerName, "Player")
 	setGuiText(widgets.headerValue, config.infoTitle or config.format)
-	renderPlayerInfo(widgets, config, entries[1])
 
 	local firstVisibleRank, lastVisibleRank = getVisibleWindow(widgets, #entries)
+	hydrateVisibleEntryNames(entries, firstVisibleRank, lastVisibleRank)
+	renderPlayerInfo(widgets, config, entries[1])
+
 	local rowHeight, padding = getRowStride(widgets)
 	local rowStride = math.max(1, rowHeight + padding)
 	createSpacer(widgets, SPACER_NAME_PREFIX .. "Top", 0, (firstVisibleRank - 1) * rowStride)
@@ -520,7 +553,7 @@ local function sortEntriesDescending(entries)
 		return a.userId < b.userId
 	end)
 
-	while #entries > MAX_FETCH_ENTRIES do
+	while #entries > GLOBAL_FETCH_ENTRY_LIMIT do
 		table.remove(entries)
 	end
 end
@@ -579,23 +612,64 @@ local function overlayLiveRollEntries(orderedEntries)
 	return mergedEntries
 end
 
-local function getMissingVisibleEntries(localEntries, orderedEntries)
-	local missingEntries = {}
-	local orderedEntriesByUserId = {}
-	for _, entry in ipairs(orderedEntries) do
-		orderedEntriesByUserId[entry.userId] = true
+local function cloneEntries(entries)
+	local clonedEntries = {}
+	if typeof(entries) ~= "table" then
+		return clonedEntries
 	end
 
-	local pageSize = math.min(ORDERED_STORE_PAGE_SIZE, MAX_FETCH_ENTRIES)
-	local cutoffValue = if #orderedEntries > 0 then orderedEntries[#orderedEntries].value else nil
-	for _, entry in ipairs(localEntries) do
-		local shouldBeVisible = #orderedEntries < pageSize or cutoffValue == nil or entry.value > cutoffValue
-		if entry.value > 0 and shouldBeVisible and not orderedEntriesByUserId[entry.userId] then
-			missingEntries[#missingEntries + 1] = entry
-		end
+	for index, entry in ipairs(entries) do
+		clonedEntries[index] = {
+			userId = entry.userId,
+			name = entry.name,
+			value = entry.value,
+		}
 	end
 
-	return missingEntries
+	return clonedEntries
+end
+
+local function getOrderedEntryCache(boardName)
+	local cache = orderedEntryCaches[boardName]
+	if not cache then
+		cache = {
+			entries = {},
+			lastSuccessfulFetchAt = 0,
+			nextAllowedFetchAt = 0,
+			inFlight = false,
+			lastError = nil,
+		}
+		orderedEntryCaches[boardName] = cache
+	end
+
+	return cache
+end
+
+local function getFetchJitterSeconds()
+	if GLOBAL_FETCH_JITTER_SECONDS <= 0 then
+		return 0
+	end
+
+	return math.random(0, GLOBAL_FETCH_JITTER_SECONDS)
+end
+
+local function scheduleNextFetch(cache, baseDelaySeconds)
+	cache.nextAllowedFetchAt = os.clock() + math.max(1, baseDelaySeconds) + getFetchJitterSeconds()
+end
+
+local function scheduleInitialFetch(cache)
+	cache.nextAllowedFetchAt = os.clock() + getFetchJitterSeconds()
+end
+
+local function getOrderedListBudget()
+	local success, budget = pcall(function()
+		return DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.GetSortedAsync)
+	end)
+	if not success then
+		return 0
+	end
+
+	return math.max(0, math.floor(tonumber(budget) or 0))
 end
 
 local function setRollsLiveValue(userId: number, value: number)
@@ -731,9 +805,8 @@ local function flushDirtyRollsData(boardName, storeName, store)
 end
 
 local function getOrderedStoreEntries(boardName, storeName, store)
-	local pageSize = math.min(ORDERED_STORE_PAGE_SIZE, MAX_FETCH_ENTRIES)
 	local success, pages = pcall(function()
-		return store:GetSortedAsync(false, pageSize)
+		return store:GetSortedAsync(false, GLOBAL_FETCH_ENTRY_LIMIT)
 	end)
 	if not success or not pages then
 		Logger.Warn(string.format(
@@ -742,99 +815,108 @@ local function getOrderedStoreEntries(boardName, storeName, store)
 			storeName,
 			tostring(pages)
 		))
-		RateLimitTelemetry.Increment("data_store_error", "leaderboard_ordered_list", 1)
-		return {}
+		RateLimitTelemetry.Increment("leaderboard", "ordered_list_fetch_failure", 1)
+		return nil, pages
 	end
 
 	local entries = {}
-	while #entries < MAX_FETCH_ENTRIES do
-		local currentPage = pages:GetCurrentPage()
-		for _, item in ipairs(currentPage) do
-			local userId = tonumber(item.key)
-			local value = tonumber(item.value) or 0
-			if userId and value > 0 then
-				entries[#entries + 1] = {
-					userId = userId,
-					name = getUsernameForUserId(userId),
-					value = value,
-				}
-			end
-
-			if #entries >= MAX_FETCH_ENTRIES then
-				break
-			end
-		end
-
-		local isFinished = false
-		local finishedSuccess, finishedResult = pcall(function()
-			return pages.IsFinished
-		end)
-		if finishedSuccess and finishedResult == true then
-			isFinished = true
-		end
-
-		if isFinished or #entries >= MAX_FETCH_ENTRIES then
-			break
-		end
-
-		local advanced, advanceError = pcall(function()
-			pages:AdvanceToNextPageAsync()
-		end)
-		if not advanced then
-			Logger.Warn(string.format(
-				"[Leaderboards] Failed to advance page for board=%s store=%s: %s",
-				boardName,
-				storeName,
-				tostring(advanceError)
-			))
-			RateLimitTelemetry.Increment("data_store_error", "leaderboard_ordered_list", 1)
-			break
-		end
-	end
-
-	return entries
-end
-
-local function retryStudioRollEntries(dataService, boardName, config, storeName, store, entries)
-	if not isStudioRollsBoard(config) then
-		return entries
-	end
-
-	local localEntries = getCurrentPlayerEntries(dataService, config.key)
-	local missingEntries = getMissingVisibleEntries(localEntries, entries)
-	if #missingEntries == 0 then
-		return entries
-	end
-
-	for _ = 1, STUDIO_ORDERED_STORE_READ_RETRY_COUNT do
-		task.wait(STUDIO_ORDERED_STORE_READ_RETRY_DELAY)
-		entries = getOrderedStoreEntries(boardName, storeName, store)
-		missingEntries = getMissingVisibleEntries(localEntries, entries)
-		if #missingEntries == 0 then
-			return entries
-		end
-	end
-
-	for _, entry in ipairs(missingEntries) do
+	local pageSuccess, currentPage = pcall(function()
+		return pages:GetCurrentPage()
+	end)
+	if not pageSuccess or typeof(currentPage) ~= "table" then
 		Logger.Warn(string.format(
-			"[Leaderboards] Studio rolls entry missing after retry board=%s store=%s userId=%d value=%d",
+			"[Leaderboards] Failed to read current page for board=%s store=%s: %s",
 			boardName,
 			storeName,
-			entry.userId,
-			entry.value
+			tostring(currentPage)
 		))
+		RateLimitTelemetry.Increment("leaderboard", "ordered_list_fetch_failure", 1)
+		return nil, currentPage
 	end
 
-	return entries
+	for _, item in ipairs(currentPage) do
+		local userId = tonumber(item.key)
+		local value = tonumber(item.value) or 0
+		if userId and value > 0 then
+			entries[#entries + 1] = {
+				userId = userId,
+				value = value,
+			}
+		end
+
+		if #entries >= GLOBAL_FETCH_ENTRY_LIMIT then
+			break
+		end
+	end
+
+	return entries, nil
 end
 
-local function getOrderedEntriesForBoard(dataService, boardName, config, storeName, store)
-	local entries = getOrderedStoreEntries(boardName, storeName, store)
+local function updateOrderedEntriesCache(dataService, boardName, config, storeName, store)
+	local cache = getOrderedEntryCache(boardName)
+	if cache.inFlight then
+		RateLimitTelemetry.Increment("leaderboard", "ordered_list_fetch_in_flight_skip", 1)
+		return
+	end
+
+	if getOrderedListBudget() < ORDERED_LIST_BUDGET_FLOOR then
+		RateLimitTelemetry.Increment("leaderboard", "ordered_list_fetch_budget_skip", 1)
+		scheduleNextFetch(cache, GLOBAL_FETCH_INTERVAL_SECONDS)
+		return
+	end
+
+	cache.inFlight = true
+	local entries, errorMessage = getOrderedStoreEntries(boardName, storeName, store)
+	cache.inFlight = false
+
+	if entries then
+		if config.useDirtySync then
+			entries = overlayLiveRollEntries(entries)
+		end
+
+		cache.entries = cloneEntries(entries)
+		cache.lastSuccessfulFetchAt = os.clock()
+		cache.lastError = nil
+		RateLimitTelemetry.Increment("leaderboard", "ordered_list_fetch_success", 1)
+	else
+		cache.lastError = tostring(errorMessage)
+	end
+
+	scheduleNextFetch(cache, GLOBAL_FETCH_INTERVAL_SECONDS)
+end
+
+local function getCachedEntriesForBoard(dataService, boardName, config)
+	local cache = getOrderedEntryCache(boardName)
+	local entries = cloneEntries(cache.entries)
+	if #entries == 0 then
+		RateLimitTelemetry.Increment("leaderboard", "cache_render_fallback", 1)
+		entries = getCurrentPlayerEntries(dataService, config.key)
+	end
+
 	if config.useDirtySync then
 		return overlayLiveRollEntries(entries)
 	end
 
-	return retryStudioRollEntries(dataService, boardName, config, storeName, store, entries)
+	return entries
+end
+
+local function refreshOrderedEntryCaches(dataService)
+	if not shouldUseOrderedStores() then
+		return
+	end
+
+	for boardName, config in pairs(BOARD_CONFIGS) do
+		local boardModels = getBoardModels(config)
+		if #boardModels > 0 then
+			local store = orderedStores[boardName]
+			local storeName = orderedStoreNames[boardName]
+			local cache = getOrderedEntryCache(boardName)
+			if store and storeName and os.clock() >= cache.nextAllowedFetchAt then
+				updateOrderedEntriesCache(dataService, boardName, config, storeName, store)
+				task.wait(GLOBAL_FETCH_BOARD_SPACING_SECONDS)
+			end
+		end
+	end
 end
 
 local function syncLegacyBoards(dataService, options)
@@ -905,13 +987,7 @@ function Leaderboards.refresh(dataService)
 		if #boardModels > 0 then
 			local entries = nil
 			if shouldUseOrderedStores() then
-				local store = orderedStores[boardName]
-				local storeName = orderedStoreNames[boardName]
-				if store then
-					entries = getOrderedEntriesForBoard(dataService, boardName, config, storeName, store)
-				else
-					entries = {}
-				end
+				entries = getCachedEntriesForBoard(dataService, boardName, config)
 			else
 				entries = getCurrentPlayerEntries(dataService, config.key)
 			end
@@ -948,6 +1024,7 @@ function Leaderboards.start(dataService)
 			local storeName = getOrderedStoreName(config)
 			orderedStoreNames[boardName] = storeName
 			orderedStores[boardName] = DataStoreService:GetOrderedDataStore(storeName)
+			scheduleInitialFetch(getOrderedEntryCache(boardName))
 		end
 	end
 
@@ -965,6 +1042,12 @@ function Leaderboards.start(dataService)
 	end
 
 	Leaderboards.refresh(dataService)
+	task.spawn(function()
+		while true do
+			refreshOrderedEntryCaches(dataService)
+			task.wait(RENDER_REFRESH_TIME)
+		end
+	end)
 	task.spawn(function()
 		while true do
 			Leaderboards.refresh(dataService)

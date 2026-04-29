@@ -12,6 +12,7 @@ local CameraShaker = require(ReplicatedStorage.Shared.Camera.CameraShaker)
 local PlayerM1AnimationResolver = require(ReplicatedStorage.Shared.BossArena.PlayerM1AnimationResolver)
 local PlayerM1Config = require(ReplicatedStorage.Shared.BossArena.PlayerM1Config)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
+local Signal = require(ReplicatedStorage.Common.Signal)
 local ToggleSoundUtil = require(ReplicatedStorage.Shared.Audio.ToggleSoundUtil)
 
 local LOCAL_PLAYER = Players.LocalPlayer
@@ -45,6 +46,7 @@ type RequestPlayerM1Response = {
 }
 
 local PvpController = {
+	EnabledChanged = Signal.new(),
 	_started = false,
 	_enabled = false,
 	_requestInFlight = false,
@@ -155,6 +157,10 @@ function PvpController:_renderButtonState()
 	end
 end
 
+function PvpController:IsPvpEnabled(): boolean
+	return self._enabled == true
+end
+
 function PvpController:_ensureRemotes(): PvpRemotes?
 	if self._remotes then
 		return self._remotes
@@ -226,6 +232,7 @@ end
 
 function PvpController:_applyState(state: any)
 	local enabled = typeof(state) == "table" and state.enabled == true
+	local previousEnabled = self._enabled == true
 	self._enabled = enabled
 	if not enabled then
 		self:_clearActiveSwing(true)
@@ -233,6 +240,9 @@ function PvpController:_applyState(state: any)
 
 	self:_renderButtonState()
 	self:_updateMobileAttackButtonState()
+	if enabled ~= previousEnabled then
+		self.EnabledChanged:Fire(enabled)
+	end
 end
 
 function PvpController:_refreshState()

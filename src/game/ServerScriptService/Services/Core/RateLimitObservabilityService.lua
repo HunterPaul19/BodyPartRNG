@@ -57,14 +57,15 @@ function RateLimitObservabilityService:OnStart()
 			local budgets = getBudgetSnapshot()
 			local telemetry = RateLimitTelemetry.GetSnapshot()
 			Logger.Warn(string.format(
-				"[RateLimitObservability] budgets standardRead=%d standardWrite=%d orderedRead=%d orderedWrite=%d | remoteRejected=%s | dataStoreError=%s | platformError=%s",
+				"[RateLimitObservability] budgets standardRead=%d standardWrite=%d orderedRead=%d orderedWrite=%d | remoteRejected=%s | dataStoreError=%s | platformError=%s | leaderboard=%s",
 				budgets.standardRead or -1,
 				budgets.standardWrite or -1,
 				budgets.orderedRead or -1,
 				budgets.orderedWrite or -1,
 				formatCounters(telemetry.remote_rejected),
 				formatCounters(telemetry.data_store_error),
-				formatCounters(telemetry.platform_error)
+				formatCounters(telemetry.platform_error),
+				formatCounters(telemetry.leaderboard)
 			))
 			task.wait(LOG_INTERVAL_SECONDS)
 		end

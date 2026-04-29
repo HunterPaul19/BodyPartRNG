@@ -185,8 +185,21 @@ local function getCharacterLifecycleState(player: Player)
 	return state
 end
 
-local function waitForPlayerDataReady(player: Player, timeoutSeconds: number?): boolean
+local function isPlayerDataReady(player: Player): boolean
 	if playerDataReadyByPlayer[player] == true then
+		return true
+	end
+
+	if DataService:IsPlayerDataLoaded(player) then
+		playerDataReadyByPlayer[player] = true
+		return true
+	end
+
+	return false
+end
+
+local function waitForPlayerDataReady(player: Player, timeoutSeconds: number?): boolean
+	if isPlayerDataReady(player) then
 		return true
 	end
 
@@ -196,14 +209,14 @@ local function waitForPlayerDataReady(player: Player, timeoutSeconds: number?): 
 			return false
 		end
 
-		if playerDataReadyByPlayer[player] == true then
+		if isPlayerDataReady(player) then
 			return true
 		end
 
 		task.wait()
 	end
 
-	return playerDataReadyByPlayer[player] == true
+	return isPlayerDataReady(player)
 end
 
 local function setCharacterBuildLock(character: Model?, isLocked: boolean)
@@ -2537,7 +2550,7 @@ local function tryActivateCharacterRuntime(
 	end
 
 	local state = getCharacterLifecycleState(player)
-	if not playerDataReadyByPlayer[player] then
+	if not isPlayerDataReady(player) then
 		state.pendingRuntimeApply = true
 		return false, "player_data_not_ready"
 	end
@@ -2630,7 +2643,7 @@ local function scheduleCharacterActivationRetry(
 		end
 
 		local _, failureKind = tryActivateCharacterRuntime(player, character, source, options)
-		if failureKind == "placeholder_character" then
+		if failureKind == "placeholder_character" or failureKind == "player_data_not_ready" then
 			scheduleCharacterActivationRetry(player, character, source, retryAttempt + 1, options)
 			return
 		end
@@ -2649,7 +2662,7 @@ local function queueCharacterActivation(
 )
 	task.defer(function()
 		local _, failureKind = tryActivateCharacterRuntime(player, character, source, options)
-		if failureKind == "placeholder_character" then
+		if failureKind == "placeholder_character" or failureKind == "player_data_not_ready" then
 			scheduleCharacterActivationRetry(player, character, source, 1, options)
 		end
 	end)

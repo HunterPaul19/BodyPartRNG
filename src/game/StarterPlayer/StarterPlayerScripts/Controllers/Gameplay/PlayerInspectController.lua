@@ -17,6 +17,7 @@ local AuraPresentation = require(ReplicatedStorage.Shared.UI.AuraPresentation)
 local AvatarViewportPreview = require(ReplicatedStorage.Shared.UI.AvatarViewportPreview)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
 local FrameController = require(script.Parent.FrameController)
+local PvpController = require(script.Parent.PvpController)
 local SlotCardRenderer = require(script.Parent.SlotCardRenderer)
 local UIController = require(script.Parent.UIController)
 
@@ -264,6 +265,10 @@ function PlayerInspectController:_ensureState()
 	self._partInfoLabelFontFaces = nil
 	self._partInfoEverRolledNativeText = nil
 	self._partInfoEverRolledSuffixText = nil
+end
+
+function PlayerInspectController:_isSelectorDisabled(): boolean
+	return PvpController:IsPvpEnabled()
 end
 
 function PlayerInspectController:_getRemotesFolder(): Folder?
@@ -1386,7 +1391,18 @@ function PlayerInspectController:OnStart()
 	self:_bindRegionButtons()
 
 	self._mouse.Move:Connect(function()
+		if self:_isSelectorDisabled() then
+			self:_setHoveredPlayer(nil)
+			return
+		end
+
 		self:_setHoveredPlayer(getPointerInspectablePlayer(self._mouse))
+	end)
+
+	PvpController.EnabledChanged:Connect(function(enabled: boolean)
+		if enabled then
+			self:_setHoveredPlayer(nil)
+		end
 	end)
 
 	UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
@@ -1397,6 +1413,10 @@ function PlayerInspectController:OnStart()
 			return
 		end
 		if UserInputService:GetFocusedTextBox() then
+			return
+		end
+		if self:_isSelectorDisabled() then
+			self:_setHoveredPlayer(nil)
 			return
 		end
 

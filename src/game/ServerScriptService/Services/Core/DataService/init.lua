@@ -421,6 +421,10 @@ DataService.OwnedAuraAdded = OwnedAuraAdded
 DataService.EquippedTitleChanged = EquippedTitleChanged
 DataService.EquippedAuraChanged = EquippedAuraChanged
 
+function DataService:IsPlayerDataLoaded(player: Player): boolean
+	return getActiveProfile(player) ~= nil and getActiveReplica(player) ~= nil
+end
+
 local function isPositiveFiniteNumber(value: any): boolean
 	return typeof(value) == "number" and value > 0 and value == value and value < math.huge and value > -math.huge
 end

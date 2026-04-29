@@ -2,6 +2,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local GameAssetResolver = require(ReplicatedStorage.Shared.Assets.GameAssetResolver)
 local AccessoryScaleUtils = require(script.Parent.AccessoryScaleUtils)
+local BodyPartVisuals = require(script.Parent.BodyPartVisuals)
 
 local GearVisuals = {}
 
@@ -220,8 +221,9 @@ function GearVisuals.Apply(character: Model, config: any?): (boolean, string?)
 		return false, string.format("Gear visual asset '%s' has no renderable parts.", sourceModel.Name)
 	end
 
-	local scaleFactor = AccessoryScaleUtils.ComputeUniformScaleFactor(sourceReferencePart.Size, targetPart.Size)
-	local scaled, scaleError = AccessoryScaleUtils.ScaleModelToPartSize(clone, sourceReferencePart.Size, targetPart.Size)
+	local sourceReferenceSize = BodyPartVisuals.GetBaselinePartSize(character, targetPartName) or sourceReferencePart.Size
+	local scaleFactor = AccessoryScaleUtils.ComputeUniformScaleFactor(sourceReferenceSize, targetPart.Size)
+	local scaled, scaleError = AccessoryScaleUtils.ScaleModelToPartSize(clone, sourceReferenceSize, targetPart.Size)
 	if not scaled then
 		clone:Destroy()
 		return false, scaleError

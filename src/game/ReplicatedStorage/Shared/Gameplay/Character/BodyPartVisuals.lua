@@ -738,7 +738,8 @@ local function cloneRegionRequest(regionRequest: ApplyRegionRequest?): ApplyRegi
 	end
 
 	local bundle = regionRequest.bundle
-	if not (bundle and bundle:IsA("Model")) then
+	local isNativeFallback = regionRequest.isNativeFallback == true
+	if not isNativeFallback and not (bundle and bundle:IsA("Model")) then
 		return nil
 	end
 
@@ -747,6 +748,7 @@ local function cloneRegionRequest(regionRequest: ApplyRegionRequest?): ApplyRegi
 		scale = regionRequest.scale,
 		attachRules = cloneAttachRules(regionRequest.attachRules),
 		mutation = cloneMutationRequest(regionRequest.mutation),
+		isNativeFallback = isNativeFallback,
 		applyPlayerClothing = regionRequest.applyPlayerClothing,
 		applyPlayerBodyColors = regionRequest.applyPlayerBodyColors,
 	}
@@ -1212,6 +1214,19 @@ local function configureVisualPart(part: BasePart)
 	part.BottomSurface = Enum.SurfaceType.Smooth
 end
 
+local function configureAppliedVisualParts(character: Model)
+	local appliedFolder = character:FindFirstChild(APPLIED_FOLDER_NAME)
+	if not appliedFolder then
+		return
+	end
+
+	for _, descendant in ipairs(appliedFolder:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			configureVisualPart(descendant)
+		end
+	end
+end
+
 local function scaleVisualPart(part: BasePart, scale: number, targetSizeOverride: Vector3?)
 	local baseSize = part.Size
 	local targetSize = if typeof(targetSizeOverride) == "Vector3" then targetSizeOverride else (baseSize * scale)
@@ -1301,7 +1316,7 @@ local function getStoredLoadoutEntry(character: Model, region: string): ApplyReg
 end
 
 local function getAuraRequestedScale(character: Model, partName: string): number
-	local region = PART_NAME_TO_REGION[partName]
+	local region = if partName == "HumanoidRootPart" then "Torso" else PART_NAME_TO_REGION[partName]
 	if region == nil then
 		return 1
 	end
@@ -3315,10 +3330,7 @@ local function hideCharacterPart(characterPart: BasePart, region: string)
 	if characterPart:GetAttribute(collisionAttribute) == nil then
 		characterPart:SetAttribute(collisionAttribute, characterPart.CanCollide)
 	end
-	local originalCollision = characterPart:GetAttribute(collisionAttribute)
-	if originalCollision ~= nil then
-		characterPart.CanCollide = originalCollision
-	end
+	characterPart.CanCollide = false
 
 	if characterPart.Name == "Head" then
 		hideHeadTextures(characterPart, region)
@@ -3544,6 +3556,20 @@ function BodyPartVisuals.ClearAll(character: Model)
 	end
 	clearAppliedRegionRequests(character)
 	clearAppliedRegionReferenceOffsets(character)
+end
+
+function BodyPartVisuals.GetBaselinePartSize(character: Model, partName: string): Vector3?
+	if not (character and character:IsA("Model")) then
+		return nil
+	end
+	if typeof(partName) ~= "string" or partName == "" then
+		return nil
+	end
+
+	local snapshot = baselineSnapshots[character]
+	local parts = snapshot and snapshot.parts
+	local size = parts and parts[partName]
+	return if typeof(size) == "Vector3" then size else nil
 end
 
 applyRegion = function(character: Model, region: string, regionRequest: ApplyRegionRequest, referencePose): (boolean, string?)
@@ -3823,7 +3849,11 @@ function BodyPartVisuals.RefreshAppearance(character: Model, request: ApplyReque
 
 	local regionRequests = if typeof(request) == "table" then request.regions else nil
 	if hasAnyRequestedRegions(regionRequests) then
-		return CharacterAppearanceHostApplier.ApplyCharacter(character, regionRequests)
+		local success, err = CharacterAppearanceHostApplier.ApplyCharacter(character, regionRequests)
+		if success then
+			configureAppliedVisualParts(character)
+		end
+		return success, err
 	end
 
 	CharacterAppearanceHostApplier.ClearCharacter(character)
@@ -3836,6 +3866,7 @@ function BodyPartVisuals.Apply(character: Model, request: ApplyRequest): ApplyRe
 
 	local function finalize(result: ApplyResult): ApplyResult
 		releaseBuildPose()
+		configureAppliedVisualParts(character)
 		PerfStats.Measure("BodyPartVisualsApply", startedAt, {
 			success = result.success,
 			appliedRegionCount = #result.appliedRegions,

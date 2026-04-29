@@ -56,7 +56,7 @@ local stub = CreateExplicitBossMoveStub({
 	moveLabel = "War Call",
 	targetMode = "all_players",
 	summaryTemplate = "{moveLabel} summons minions to hunt {targets}",
-	description = "Agrynoth calls six minions into the arena and waits until they are defeated.",
+	description = "Agrynoth calls five minions into the arena and waits until they are defeated.",
 })
 
 local WarCall = {

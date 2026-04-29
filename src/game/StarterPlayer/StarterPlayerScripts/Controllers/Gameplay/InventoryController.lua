@@ -3380,6 +3380,15 @@ function InventoryController:_buildSellAllConfirmationMessage(): string
 	})
 end
 
+function InventoryController:_buildSellOneConfirmationMessage(ownedRecord: OwnedBodyPartRecord): string
+	local piece = BodyPartsCatalog.GetPiece(ownedRecord.pieceId)
+	local bodyPartName = if piece then piece.displayName else "body part"
+
+	return TranslationHelper.formatByKey(LocalizationKeys.Inventory.SellOne.Confirm, {
+		BodyPartName = bodyPartName,
+	})
+end
+
 function InventoryController:_getPendingPotionSellRecord(): (string?, OwnedPotionRecord?)
 	local ownedId = self._pendingPotionSellOwnedId
 	local potionId = PotionController.GetPotionIdFromOwnedId(ownedId)
@@ -4359,13 +4368,21 @@ function InventoryController:_sellPreviewedItem()
 		return
 	end
 
+	if ConfirmationWarning.Prompt(self:_buildSellOneConfirmationMessage(ownedRecord)) ~= true then
+		return
+	end
+
+	self:_confirmSellPreviewedBodyPart(ownedRecord.ownedId)
+end
+
+function InventoryController:_confirmSellPreviewedBodyPart(ownedId: string)
 	if not self:_ensureRemotes() then
 		return
 	end
 
 	local ok, result = pcall(function()
 		return self._remotes.sellOwned:InvokeServer({
-			ownedId = ownedRecord.ownedId,
+			ownedId = ownedId,
 		})
 	end)
 
