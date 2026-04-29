@@ -117,6 +117,7 @@ type CraftingUi = {
 	helpButton: GuiButton?,
 	helpMenu: GuiObject?,
 	helpCloseButton: GuiButton?,
+	menuCloseButton: GuiButton?,
 	storeButton: GuiButton?,
 }
 
@@ -747,6 +748,8 @@ function CraftingController:_ensureUi(): CraftingUi
 
 	local itemSelect = root:WaitForChild("ItemSelect", 30)
 	assert(itemSelect and itemSelect:IsA("Frame"), "CraftingMenu.ItemSelect is missing.")
+	local itemSelectTopbar = itemSelect:FindFirstChild("Topbar")
+	local menuCloseButton = if itemSelectTopbar then itemSelectTopbar:FindFirstChild("CloseButton") else nil
 
 	local searchBar = itemSelect:FindFirstChild("SearchBar")
 	local searchBox = if searchBar then searchBar:FindFirstChild("TextBox") else nil
@@ -869,6 +872,7 @@ function CraftingController:_ensureUi(): CraftingUi
 		helpButton = if helpButton and helpButton:IsA("GuiButton") then helpButton else nil,
 		helpMenu = if helpMenu and helpMenu:IsA("GuiObject") then helpMenu else nil,
 		helpCloseButton = if helpCloseButton and helpCloseButton:IsA("GuiButton") then helpCloseButton else nil,
+		menuCloseButton = if menuCloseButton and menuCloseButton:IsA("GuiButton") then menuCloseButton else nil,
 		storeButton = if storeButton and storeButton:IsA("GuiButton") then storeButton else nil,
 	}
 
@@ -1443,11 +1447,24 @@ function CraftingController:GetTutorialTarget(targetId: string): GuiObject?
 		return nil
 	end
 
+	local isHolidayCrownSelected = self._selectedRecipeId == "holiday_crown"
+	local isIngredientPanelOpen = self._ui.ingredientSelect ~= nil
+		and self._ui.ingredientSelect.Visible == true
+		and self._ui.ingredientMain ~= nil
+		and self._ui.ingredientMain.Visible == true
+
+	if targetId == "closeButton" then
+		local button = self._ui.menuCloseButton
+		return if button and button.Visible == true and button.Active == true then button else nil
+	end
 	if targetId == "accessoriesFilter" then
 		local button = self._ui.accessoriesFilterButton
 		return if button and button.Visible == true and button.Active == true then button else nil
 	end
 	if targetId == "holidayCrownRecipe" then
+		if isHolidayCrownSelected then
+			return nil
+		end
 		self:_syncRecipeRows()
 		local row = self._recipeRowsById["holiday_crown"]
 		if row and row:IsA("GuiButton") and row.Visible == true and row.Active == true then
@@ -1457,14 +1474,21 @@ function CraftingController:GetTutorialTarget(targetId: string): GuiObject?
 		return nil
 	end
 	if targetId == "autoCraft" then
-		if self._selectedRecipeId ~= "holiday_crown" then
+		if not isHolidayCrownSelected then
 			return nil
 		end
 		local button = self._ui.autoCraftButton
 		return if button and button.Visible == true and button.Active == true then button else nil
 	end
+	if targetId == "openRecipe" then
+		if not isHolidayCrownSelected or isIngredientPanelOpen then
+			return nil
+		end
+		local button = self._ui.openRecipeButton
+		return if button and button.Visible == true and button.Active == true then button else nil
+	end
 	if targetId == "craftButton" then
-		if self._selectedRecipeId ~= "holiday_crown" then
+		if not isHolidayCrownSelected or not isIngredientPanelOpen then
 			return nil
 		end
 		local button = self._ui.ingredientCraftButton

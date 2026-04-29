@@ -35,6 +35,7 @@ local ALL_SERVICE_NAMES = {
 	"TestService",
 	"TimeShardService",
 	"TitleService",
+	"TutorialAnalyticsService",
 	"TutorialService",
 	"VoidRecoveryService",
 }

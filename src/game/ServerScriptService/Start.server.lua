@@ -21,6 +21,7 @@ local SERVER_STARTUP_PHASE_DEFINITIONS = {
 			"PotionService",
 			"PassiveIncomeService",
 			"DailyChestService",
+			"TutorialAnalyticsService",
 			"TutorialService",
 			"PurchaseReceiptService",
 			"ChatNotificationService",

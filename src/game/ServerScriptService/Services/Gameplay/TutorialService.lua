@@ -11,6 +11,7 @@ local TutorialConfig = require(ReplicatedStorage.Shared.Config.TutorialConfig)
 local TutorialState = require(ReplicatedStorage.Shared.Character.TutorialState)
 local DataService = require(script.Parent.DataService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
+local TutorialAnalyticsService = require(script.Parent.TutorialAnalyticsService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local TUTORIAL_FOLDER_NAME = "Tutorial"
@@ -204,7 +205,7 @@ local function getPieceIdForCraftIngredient(ingredient: any): string?
 	return bestPieceId
 end
 
-local function getNextNeededCraftIngredientOverride(player: Player): any?
+local function resolveTargetCraftGoal(player: Player): any?
 	local recipe = CraftingRecipeConfig.Get(TutorialConfig.TargetRecipeId)
 	if not recipe then
 		return nil
@@ -218,48 +219,44 @@ local function getNextNeededCraftIngredientOverride(player: Player): any?
 		local current = math.max(0, math.floor(tonumber(progress.bodyPartsByIngredientKey[key]) or 0))
 		if current < required then
 			local forcedPieceId = getPieceIdForCraftIngredient(ingredient)
+			local forcedSetId = if typeof(ingredient.setId) == "string" then ingredient.setId else nil
 			if forcedPieceId ~= nil then
 				local piece = BodyPartsCatalog.GetPiece(forcedPieceId)
 				return {
+					recipe = recipe,
+					recipeId = recipe.id,
+					ready = false,
+					ingredientKey = key,
 					forcedPieceId = forcedPieceId,
-					forcedSetId = if piece then piece.setId else ingredient.setId,
+					forcedSetId = if piece then piece.setId else forcedSetId,
 				}
 			end
-			if typeof(ingredient.setId) == "string" then
-				return {
-					forcedSetId = ingredient.setId,
-				}
-			end
-		end
-	end
-
-	return nil
-end
-
-local function isTargetRecipeReadyToCraft(player: Player): boolean
-	local recipe = CraftingRecipeConfig.Get(TutorialConfig.TargetRecipeId)
-	if not recipe then
-		return false
-	end
-
-	local progressState = DataService:GetCraftingProgress(player)
-	local progress = CraftingProgress.GetRecipeProgress(progressState, recipe.id)
-	for _, ingredient in ipairs(recipe.bodyParts) do
-		local key = CraftingProgress.GetBodyPartIngredientKey(ingredient)
-		local required = math.max(1, math.floor(tonumber(ingredient.amount) or 1))
-		if (progress.bodyPartsByIngredientKey[key] or 0) < required then
-			return false
+			return {
+				recipe = recipe,
+				recipeId = recipe.id,
+				ready = false,
+				ingredientKey = key,
+				forcedSetId = forcedSetId,
+			}
 		end
 	end
 
 	for _, ingredient in ipairs(recipe.materials) do
 		local required = math.max(1, math.floor(tonumber(ingredient.amount) or 1))
 		if (progress.materialsByMaterialId[ingredient.materialId] or 0) < required then
-			return false
+			return {
+				recipe = recipe,
+				recipeId = recipe.id,
+				ready = false,
+			}
 		end
 	end
 
-	return true
+	return {
+		recipe = recipe,
+		recipeId = recipe.id,
+		ready = true,
+	}
 end
 
 local function advanceTo(player: Player, nextStepId: string): TutorialState.TutorialStateValue
@@ -370,15 +367,16 @@ function TutorialService:GetRollOverride(player: Player, context: any): any?
 		and isTargetAutoCraftEnabled(player)
 		and ownsTargetAccessory(player) ~= true
 	then
-		local craftOverride = getNextNeededCraftIngredientOverride(player)
-		if typeof(craftOverride) == "table" then
-			if typeof(craftOverride.forcedPieceId) == "string" then
-				override.forcedPieceId = craftOverride.forcedPieceId
+		local craftGoal = resolveTargetCraftGoal(player)
+		if typeof(craftGoal) == "table" and craftGoal.ready ~= true and typeof(craftGoal.ingredientKey) == "string" then
+			if typeof(craftGoal.forcedPieceId) == "string" then
+				override.forcedPieceId = craftGoal.forcedPieceId
 			end
-			if typeof(craftOverride.forcedSetId) == "string" then
-				override.forcedSetId = craftOverride.forcedSetId
+			if typeof(craftGoal.forcedSetId) == "string" then
+				override.forcedSetId = craftGoal.forcedSetId
 			end
-			override.forceAutoCraftRecipeId = TutorialConfig.TargetRecipeId
+			override.forceAutoCraftRecipeId = craftGoal.recipeId or TutorialConfig.TargetRecipeId
+			override.targetIngredientKey = craftGoal.ingredientKey
 		end
 	end
 
@@ -391,10 +389,12 @@ function TutorialService:ShouldWaiveCraftCost(player: Player, recipeId: string):
 	end
 
 	local state = getState(player)
+	local craftGoal = resolveTargetCraftGoal(player)
 	return state.completed ~= true
 		and state.stepId == TutorialConfig.Steps.CraftHolidayCrown
 		and CraftingRecipeConfig.NormalizeId(recipeId) == TutorialConfig.TargetRecipeId
-		and isTargetRecipeReadyToCraft(player)
+		and typeof(craftGoal) == "table"
+		and craftGoal.ready == true
 end
 
 function TutorialService:RecordRollResult(player: Player, result: any)
@@ -409,6 +409,7 @@ function TutorialService:RecordRollResult(player: Player, result: any)
 
 	if state.stepId == TutorialConfig.Steps.Welcome or state.stepId == TutorialConfig.Steps.RollFree then
 		advanceTo(player, TutorialConfig.Steps.EquipBodyPart)
+		TutorialAnalyticsService:LogOnboardingStep(player, 3, state)
 		return
 	end
 
@@ -419,6 +420,7 @@ function TutorialService:RecordRollResult(player: Player, result: any)
 		state.paidRollCount = math.min(TutorialConfig.PaidRollGoal, state.paidRollCount + 1)
 		if state.paidRollCount >= TutorialConfig.PaidRollGoal then
 			state.stepId = TutorialConfig.Steps.GoAppraise
+			TutorialAnalyticsService:LogOnboardingStep(player, 6, state)
 		end
 		setState(player, state)
 		return
@@ -442,6 +444,7 @@ function TutorialService:RecordRollTypeSelected(player: Player, rollTypeId: stri
 	local state = getState(player)
 	if state.stepId == TutorialConfig.Steps.SelectRoll2 and rollTypeId == TutorialConfig.TargetRollTypeId then
 		advanceTo(player, TutorialConfig.Steps.PaidRolls)
+		TutorialAnalyticsService:LogOnboardingStep(player, 5, state)
 	end
 end
 
@@ -449,6 +452,7 @@ function TutorialService:RecordBodyPartEquipped(player: Player, _payload: any?)
 	local state = getState(player)
 	if state.stepId == TutorialConfig.Steps.EquipBodyPart then
 		advanceTo(player, TutorialConfig.Steps.SelectRoll2)
+		TutorialAnalyticsService:LogOnboardingStep(player, 4, state)
 	end
 end
 
@@ -483,6 +487,7 @@ function TutorialService:RecordAppraisalResult(player: Player, result: any)
 	if result.sizeId == TutorialConfig.AppraisalGuaranteedSizeId then
 		state.appraisalGuaranteeConsumed = true
 		state.stepId = TutorialConfig.Steps.GoCrafting
+		TutorialAnalyticsService:LogOnboardingStep(player, 7, state)
 		setState(player, state)
 	end
 end
@@ -494,6 +499,7 @@ function TutorialService:RecordAutoCraftChanged(player: Player, recipeId: string
 		and enabled == true
 	then
 		advanceTo(player, TutorialConfig.Steps.CraftHolidayCrown)
+		TutorialAnalyticsService:LogOnboardingStep(player, 8, state)
 	end
 end
 
@@ -504,6 +510,7 @@ function TutorialService:RecordCraftResult(player: Player, recipeId: string, res
 	end
 	if typeof(result) == "table" and result.kind == "accessory" then
 		advanceTo(player, TutorialConfig.Steps.EquipHolidayCrown)
+		TutorialAnalyticsService:LogOnboardingStep(player, 9, state)
 	end
 end
 
@@ -517,6 +524,7 @@ function TutorialService:RecordAccessoryEquipped(player: Player, payload: any?)
 	end
 
 	advanceTo(player, TutorialConfig.Steps.ClaimDailyChest)
+	TutorialAnalyticsService:LogOnboardingStep(player, 10, state)
 end
 
 function TutorialService:RecordPotionUsed(player: Player, potionId: string)
@@ -529,6 +537,7 @@ function TutorialService:RecordPotionUsed(player: Player, potionId: string)
 		return
 	end
 
+	TutorialAnalyticsService:LogOnboardingStep(player, 12, state)
 	state.completed = true
 	state.stepId = TutorialConfig.Steps.Completed
 	state.adminReplay = false
@@ -580,6 +589,7 @@ function TutorialService:ClaimTutorialChest(player: Player, payload: any)
 
 	state.tutorialChestClaimed = true
 	state.stepId = TutorialConfig.Steps.UseLuckPotion
+	TutorialAnalyticsService:LogOnboardingStep(player, 11, state)
 	state = setState(player, state)
 	return response(true, "Come back tomorrow for another chest!", state, {
 		chests = result.chests or {},
@@ -598,6 +608,7 @@ function TutorialService:AdvanceTutorialStep(player: Player, payload: any)
 	local state = self:RefreshProgress(player)
 	if state.stepId == TutorialConfig.Steps.Welcome and requestedStepId == TutorialConfig.Steps.RollFree then
 		state = advanceTo(player, TutorialConfig.Steps.RollFree)
+		TutorialAnalyticsService:LogOnboardingStep(player, 2, state)
 		return response(true, "Tutorial started.", state)
 	end
 
@@ -639,6 +650,10 @@ end
 function TutorialService:OnPlayerAdded(player: Player)
 	if not isActive(player) then
 		return
+	end
+	local state = getState(player)
+	if state.completed ~= true then
+		TutorialAnalyticsService:LogOnboardingStep(player, 1, state)
 	end
 	self:RefreshProgress(player)
 end

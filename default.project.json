@@ -260,6 +260,9 @@
         "TutorialService": {
           "$path": "src/game/ServerScriptService/Services/Gameplay/TutorialService.lua"
         },
+        "TutorialAnalyticsService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/TutorialAnalyticsService.lua"
+        },
         "VoidRecoveryService": {
           "$path": "src/game/ServerScriptService/Services/Core/VoidRecoveryService.lua"
         }

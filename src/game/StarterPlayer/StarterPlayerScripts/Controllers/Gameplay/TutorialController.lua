@@ -196,6 +196,13 @@ local function isWelcomeInput(input: InputObject): boolean
 	return inputType.Name:match("^Gamepad") ~= nil
 end
 
+local function formatPaidRollText(state: any): string
+	local paidRollCount = if typeof(state) == "table" then tonumber(state.paidRollCount) or 0 else 0
+	local remaining = math.max(1, TutorialConfig.PaidRollGoal - math.floor(paidRollCount))
+	local unit = if remaining == 1 then "time" else "times"
+	return string.format("Roll %d %s", remaining, unit)
+end
+
 function TutorialController:_claimTutorialChest()
 	if self._claimingChest == true then
 		return
@@ -657,6 +664,11 @@ function TutorialController:_resolveEquipBodyPartSpotlight(): (GuiObject?, strin
 end
 
 function TutorialController:_resolveEquipAccessorySpotlight(): (GuiObject?, string, boolean)
+	if self:_isCraftingOpen() then
+		local closeButton = CraftingController:GetTutorialTarget("closeButton")
+		return closeButton, "Close Crafting.", closeButton ~= nil
+	end
+
 	if not self:_isInventoryOpen() then
 		return InventoryController:GetTutorialTarget("inventoryButton"), "Open Inventory.", true
 	end
@@ -772,6 +784,11 @@ function TutorialController:_resolveBlockingAppraisalResultSpotlight(): (GuiObje
 		return messageClose, "Close the appraisal result.", true
 	end
 
+	if self:_isAppraisalOpen() then
+		local closeButton = AppraisalController:GetTutorialTarget("closeButton")
+		return closeButton, "Close Appraisal.", closeButton ~= nil
+	end
+
 	return nil, "", false
 end
 
@@ -782,21 +799,27 @@ function TutorialController:_resolveCraftingSpotlight(stepId: string): (GuiObjec
 				return nil, "Holiday Crown is ready. Go back to Crafting and press Craft.", false
 			end
 
-			local craftButton = CraftingController:GetTutorialTarget("craftButton")
-			if craftButton then
-				return craftButton, "Press Craft.", true
-			end
-
 			local recipeRow = CraftingController:GetTutorialTarget("holidayCrownRecipe")
 			if recipeRow then
 				return recipeRow, "Select Holiday Crown.", true
+			end
+
+			local openRecipeButton = CraftingController:GetTutorialTarget("openRecipe")
+			if openRecipeButton then
+				return openRecipeButton, "Open Holiday Crown recipe.", true
+			end
+
+			local craftButton = CraftingController:GetTutorialTarget("craftButton")
+			if craftButton then
+				return craftButton, "Press Craft.", true
 			end
 
 			return CraftingController:GetTutorialTarget("accessoriesFilter"), "Show accessories.", true
 		end
 
 		if self:_isCraftingOpen() then
-			return nil, "Close Crafting, then keep rolling.", false
+			local closeButton = CraftingController:GetTutorialTarget("closeButton")
+			return closeButton, "Close Crafting, then keep rolling.", closeButton ~= nil
 		end
 		return nil, "Keep rolling for Holiday Crown.", false
 	end
@@ -829,12 +852,12 @@ function TutorialController:_resolveSpotlight(state: any): (GuiObject?, string, 
 	elseif stepId == TutorialConfig.Steps.SelectRoll2 then
 		return self:_resolveRoll2Spotlight()
 	elseif stepId == TutorialConfig.Steps.PaidRolls then
-		return RollController:GetTutorialTarget("rollButton"), "Roll 2 five times.", true
+		return RollController:GetTutorialTarget("rollButton"), formatPaidRollText(state), true
 	elseif stepId == TutorialConfig.Steps.GoAppraise then
 		return self:_resolveAppraisalSpotlight()
 	elseif stepId == TutorialConfig.Steps.GoCrafting or stepId == TutorialConfig.Steps.CraftHolidayCrown then
 		local target, text, captureInput = self:_resolveBlockingAppraisalResultSpotlight()
-		if target then
+		if target or text ~= "" then
 			return target, text, captureInput
 		end
 		return self:_resolveCraftingSpotlight(stepId)
@@ -869,7 +892,10 @@ function TutorialController:_syncSpotlight()
 		return self:_resolveSpotlight(state)
 	end)
 	if not ok then
-		self:_setTutorialText(TutorialConfig.TextByStepId[state.stepId] or "")
+		local fallbackText = if state.stepId == TutorialConfig.Steps.PaidRolls
+			then formatPaidRollText(state)
+			else TutorialConfig.TextByStepId[state.stepId] or ""
+		self:_setTutorialText(fallbackText)
 		self:_clearSpotlight()
 		return
 	end

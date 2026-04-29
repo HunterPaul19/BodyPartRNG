@@ -755,6 +755,10 @@ function CraftingService:TryAutoCommitRolledBodyPart(player: Player, grantPayloa
 	local progressState = DataService:GetCraftingProgress(player)
 	local hasTargetRecipe = typeof(options) == "table" and typeof(options.targetRecipeId) == "string"
 	local targetRecipeId = if hasTargetRecipe then CraftingRecipeConfig.NormalizeId(options.targetRecipeId) else nil
+	local hasTargetIngredient = typeof(options) == "table" and options.targetIngredientKey ~= nil
+	local targetIngredientKey = if hasTargetIngredient and typeof(options.targetIngredientKey) == "string" and options.targetIngredientKey ~= ""
+		then options.targetIngredientKey
+		else nil
 	local candidates = {}
 	for _, recipe in ipairs(CraftingRecipeConfig.GetAll()) do
 		if (not hasTargetRecipe or recipe.id == targetRecipeId) and progressState.autoRecipeIds[recipe.id] == true then
@@ -763,7 +767,10 @@ function CraftingService:TryAutoCommitRolledBodyPart(player: Player, grantPayloa
 				local ingredientKey = CraftingProgress.GetBodyPartIngredientKey(ingredient)
 				local requiredAmount = getBodyPartIngredientAmount(ingredient)
 				local currentAmount = recipeProgress.bodyPartsByIngredientKey[ingredientKey] or 0
-				if currentAmount < requiredAmount and bodyPartMatchesRequirement(recordLike, ingredient) then
+				if (not hasTargetIngredient or ingredientKey == targetIngredientKey)
+					and currentAmount < requiredAmount
+					and bodyPartMatchesRequirement(recordLike, ingredient)
+				then
 					table.insert(candidates, {
 						recipe = recipe,
 						ingredient = ingredient,

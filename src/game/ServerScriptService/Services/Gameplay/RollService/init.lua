@@ -1620,6 +1620,7 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 	local randomSource = Random.new()
 	local finalSet = chooseWeightedSet(randomSource, activeEntries)
 	local forcedPiece = nil
+	local forcedSetApplied = false
 	if typeof(tutorialRollOverride) == "table" then
 		if typeof(tutorialRollOverride.forcedPieceId) == "string" then
 			forcedPiece = BodyPartsCatalog.GetPiece(tutorialRollOverride.forcedPieceId)
@@ -1627,15 +1628,19 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 				local forcedSet = findRollEntryForPiece(activeEntries, forcedPiece) or findRollEntryForPiece(allEntries, forcedPiece)
 				if forcedSet then
 					finalSet = forcedSet
+					forcedSetApplied = true
 				else
 					forcedPiece = nil
 				end
 			end
 		end
 		if not forcedPiece and typeof(tutorialRollOverride.forcedSetId) == "string" then
-			finalSet = findRollEntryBySetId(activeEntries, tutorialRollOverride.forcedSetId)
+			local forcedSet = findRollEntryBySetId(activeEntries, tutorialRollOverride.forcedSetId)
 				or findRollEntryBySetId(allEntries, tutorialRollOverride.forcedSetId)
-				or finalSet
+			if forcedSet then
+				finalSet = forcedSet
+				forcedSetApplied = true
+			end
 		end
 	end
 	if not finalSet then
@@ -1647,7 +1652,14 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		return false, "No body part sets are configured for rolling.", nil
 	end
 
-	local finalPiece = forcedPiece or choosePieceFromSetForRegion(randomSource, finalSet.setId, selectedRollRegion)
+	local finalPiece = forcedPiece
+	if not finalPiece then
+		if forcedSetApplied then
+			finalPiece = choosePieceFromSet(randomSource, finalSet.setId)
+		else
+			finalPiece = choosePieceFromSetForRegion(randomSource, finalSet.setId, selectedRollRegion)
+		end
+	end
 	if not finalPiece then
 		rollLocks[player] = nil
 		StatsService:RecordRollFailure(player, "missing_config")
@@ -1710,10 +1722,12 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 	}
 	local tutorialCraftPriority = typeof(tutorialRollOverride) == "table"
 		and typeof(tutorialRollOverride.forceAutoCraftRecipeId) == "string"
+		and typeof(tutorialRollOverride.targetIngredientKey) == "string"
 	local autoCraftCommitResult = nil
 	if tutorialCraftPriority then
 		autoCraftCommitResult = CraftingService:TryAutoCommitRolledBodyPart(player, grantPayload, {
 			targetRecipeId = tutorialRollOverride.forceAutoCraftRecipeId,
+			targetIngredientKey = tutorialRollOverride.targetIngredientKey,
 			waiveCraftCost = tutorialRollOverride.waiveCraftCost == true,
 		})
 	end

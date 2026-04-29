@@ -95,6 +95,7 @@ type AppraisalUi = {
 	messageTitle: TextLabel?,
 	messageDescription: TextLabel?,
 	messageClose: GuiButton?,
+	menuCloseButton: GuiButton?,
 }
 
 local AppraisalController = {}
@@ -542,6 +543,14 @@ function AppraisalController:GetTutorialTarget(targetId: string): GuiObject?
 		return nil
 	end
 
+	if targetId == "closeButton" then
+		local closeButton = self._ui.menuCloseButton
+		if isUsableGuiObject(closeButton) then
+			return closeButton
+		end
+		return nil
+	end
+
 	if targetId == "appraiseButton" then
 		if self:_canAppraise() and isUsableGuiObject(self._ui.rollButton) then
 			return self._ui.rollButton
@@ -912,6 +921,8 @@ function AppraisalController:_cacheUi(playerGui: PlayerGui)
 	local previewDetails = previewHolder:WaitForChild("Frame", 30)
 	local selectTextLabel = previewRoot:WaitForChild("SelectText", 30)
 	local main = appraisalRoot:WaitForChild("Main", 30)
+	local topbar = main:FindFirstChild("Topbar")
+	local menuCloseButton = if topbar then topbar:FindFirstChild("CloseButton") else nil
 
 	local slotFrames = {}
 	local slotButtons = {}
@@ -976,6 +987,7 @@ function AppraisalController:_cacheUi(playerGui: PlayerGui)
 		messageTitle = if messageTitle and messageTitle:IsA("TextLabel") then messageTitle else nil,
 		messageDescription = if messageDescription and messageDescription:IsA("TextLabel") then messageDescription else nil,
 		messageClose = if messageClose and messageClose:IsA("GuiButton") then messageClose else nil,
+		menuCloseButton = if menuCloseButton and menuCloseButton:IsA("GuiButton") then menuCloseButton else nil,
 	}
 
 	for _, label in pairs(self._ui.previewLabels) do
