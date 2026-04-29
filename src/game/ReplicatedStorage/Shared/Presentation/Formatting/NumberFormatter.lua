@@ -33,19 +33,40 @@ local SUFFIXES = {
 	{ value = 1e3, suffix = "K" },
 }
 
-function NumberFormatter.Format(n: number): string
+local function formatWithSuffix(n: number, shouldFloorDecimal: boolean?, lowerK: boolean?): string
 	local negative = n < 0
 	n = math.abs(n)
 
 	for _, entry in ipairs(SUFFIXES) do
 		if n >= entry.value then
 			local short = n / entry.value
+			if shouldFloorDecimal == true then
+				short = math.floor(short * 10) / 10
+			end
+
 			local formatted = if short % 1 == 0 then ("%d"):format(short) else ("%.1f"):format(short)
-			return (if negative then "-" else "") .. formatted .. entry.suffix
+			local suffix = if lowerK == true and entry.suffix == "K" then "k" else entry.suffix
+			return (if negative then "-" else "") .. formatted .. suffix
 		end
 	end
 
 	return (if negative then "-" else "") .. tostring(math.floor(n + 0.5))
+end
+
+function NumberFormatter.Format(n: number): string
+	return formatWithSuffix(n, false, false)
+end
+
+function NumberFormatter.FormatExistenceCount(value: any): string
+	local count = math.max(0, math.floor(tonumber(value) or 0))
+	if count < 500 then
+		return "<500"
+	end
+	if count < 1000 then
+		return "<1k"
+	end
+
+	return formatWithSuffix(math.floor(count / 1000) * 1000, true, true)
 end
 
 return NumberFormatter

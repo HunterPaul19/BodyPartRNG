@@ -2,6 +2,7 @@ local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
 local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
@@ -25,6 +26,7 @@ local CombatPower = require(ReplicatedStorage.Shared.Combat.CombatPower)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local AccessoryPresentation = require(ReplicatedStorage.Shared.UI.AccessoryPresentation)
 local AuraPresentation = require(ReplicatedStorage.Shared.UI.AuraPresentation)
+local AvatarViewportPreview = require(ReplicatedStorage.Shared.UI.AvatarViewportPreview)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
 local ConfirmationWarning = require(ReplicatedStorage.Shared.UI.ConfirmationWarning)
 local MaterialPresentation = require(ReplicatedStorage.Shared.UI.MaterialPresentation)
@@ -69,6 +71,8 @@ local ACCESSORY_GET_STATE_REMOTE_NAME = "GetAccessoryState"
 local ACCESSORY_EQUIP_REMOTE_NAME = "EquipOwnedAccessory"
 local ACCESSORY_UNEQUIP_REMOTE_NAME = "UnequipAccessorySlot"
 local ACCESSORY_TOGGLE_FAVORITE_REMOTE_NAME = "ToggleFavoriteOwnedAccessory"
+local HEAD_ACCESSORY_FILTER = "headAccessory"
+local GEAR_ACCESSORY_FILTER = "gearAccessory"
 local SELECTED_COLOR = Color3.fromRGB(116, 192, 255)
 local EQUIPPED_COLOR = Color3.fromRGB(113, 230, 139)
 local DEFAULT_OUTLINE_COLOR = Color3.fromRGB(255, 255, 255)
@@ -82,7 +86,8 @@ local FILTER_ROW_POP_TWEEN = TweenInfo.new(0.14, Enum.EasingStyle.Back, Enum.Eas
 local FILTER_ROW_POP_START_SCALE = 0.9
 local SLOT_OVERLAY_Z_INDEX = 10
 local SELL_WARNING_Z_INDEX = 20
-local AUTO_SIZE_DESCRIPTION_TEXT = "Uses rolled body part sizes visually"
+local VIEWPORT_ROTATION_SPEED_RADIANS = math.rad(24)
+local AUTO_SIZE_DESCRIPTION_TEXT = "Renders body parts at normal 1x size"
 
 local FILTER_BUTTON_TO_REGION = {
 	Heads = "Head",
@@ -120,6 +125,7 @@ local PREVIEW_STAT_NAMES = table.freeze({
 	"Strength",
 	"Speed",
 	"Health",
+	"TotalPower",
 })
 local POTION_PREVIEW_VISIBLE_LABEL_ORDER = table.freeze({
 	"Bundle",
@@ -134,6 +140,21 @@ local MATERIAL_PREVIEW_VISIBLE_LABEL_ORDER = table.freeze({
 	"Rarity",
 	"Mutation",
 	"Content",
+})
+local ACCESSORY_PREVIEW_VISIBLE_LABEL_ORDER = table.freeze({
+	"Bundle",
+	"Part",
+	"Rarity",
+	"Mutation",
+	"Content",
+	"Cash",
+	"Chance",
+})
+local ACCESSORY_PREVIEW_STAT_LABEL_ORDER = table.freeze({
+	"Mutation",
+	"Content",
+	"Cash",
+	"Chance",
 })
 
 type OwnedBodyPartRecord = {
@@ -247,6 +268,7 @@ type InventoryRecordView = {
 	applyPlayerBodyColors: boolean?,
 	sizeTagStyle: any?,
 	iconTexture: string?,
+	cardBackgroundTexture: string?,
 	preferIconOverViewport: boolean?,
 }
 
@@ -329,6 +351,10 @@ end
 
 local function formatWholeNumber(value: any): string
 	return NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0)))
+end
+
+local function formatExistenceCount(value: any): string
+	return NumberFormatter.FormatExistenceCount(value)
 end
 
 local function buildMaterialOwnedId(materialId: any): string?
@@ -429,6 +455,8 @@ local function collectPreviewStatLabels(statsFrame: Instance?): { [string]: Text
 			labels.Speed = descendant
 		elseif string.find(plainText, "health", 1, true) then
 			labels.Health = descendant
+		elseif string.find(plainText, "total power", 1, true) then
+			labels.TotalPower = descendant
 		end
 	end
 
@@ -634,15 +662,16 @@ function InventoryController:_ensureState()
 	self._auraSlotPlaceholderDefault = nil :: SlotPlaceholderState?
 	self._accessorySlotPlaceholderDefaults = {}
 	self._inventoryAnchorTween = nil
-	self._cachedCharacterPreviewModel = nil :: Model?
-	self._isResolvingCharacterPreviewModel = false
-	self._characterPreviewGeneration = 0
+	self._characterPreviewPresenter = nil
 	self._previewExistingRequestToken = 0
 	self._previewRenderKey = nil :: string?
+	self._previewViewportRotationConnection = nil :: RBXScriptConnection?
 	self._previewCountKey = nil :: string?
 	self._previewExistingCountCache = {}
 	self._warnedExistingCountFailure = false
 	self._previewLabelFontFaces = nil
+	self._previewLabelTextColors = nil
+	self._previewLabelRichText = nil
 	self._previewLabelLayouts = nil :: PreviewLabelLayouts?
 	self._previewStatNativeTexts = {}
 	self._powerLabelNativeText = nil :: string?
@@ -1116,7 +1145,25 @@ end
 function InventoryController:_applyPreviewLabelStyles(previewModel: any?)
 	local defaultFontFaces = self._previewLabelFontFaces
 	local previewLabels = self._ui.previewLabels
-	if not (defaultFontFaces and previewLabels) then
+	if not previewLabels then
+		return
+	end
+
+	local defaultTextColors = self._previewLabelTextColors
+	local defaultRichText = self._previewLabelRichText
+	for _, labelName in ipairs(PREVIEW_LABEL_ORDER) do
+		local label = previewLabels[labelName]
+		if label and label:IsA("TextLabel") then
+			if defaultTextColors and defaultTextColors[labelName] then
+				label.TextColor3 = defaultTextColors[labelName]
+			end
+			if defaultRichText and defaultRichText[labelName] ~= nil then
+				label.RichText = defaultRichText[labelName]
+			end
+		end
+	end
+
+	if not defaultFontFaces then
 		return
 	end
 
@@ -1147,6 +1194,8 @@ function InventoryController:_syncPreviewLabelLayout(itemType: string?)
 		visibleLabelOrder = POTION_PREVIEW_VISIBLE_LABEL_ORDER
 	elseif itemType == "material" then
 		visibleLabelOrder = MATERIAL_PREVIEW_VISIBLE_LABEL_ORDER
+	elseif itemType == "accessory" then
+		visibleLabelOrder = ACCESSORY_PREVIEW_VISIBLE_LABEL_ORDER
 	end
 
 	if visibleLabelOrder == nil then
@@ -1192,7 +1241,7 @@ function InventoryController:_requestBodyPartExistingCount(pieceId: string, requ
 	local cachedCount = self._previewExistingCountCache[cacheKey]
 	if cachedCount ~= nil then
 		if requestToken == self._previewExistingRequestToken then
-			self:_setExistingPreviewText(buildExistingPreviewText(formatWholeNumber(cachedCount)))
+			self:_setExistingPreviewText(buildExistingPreviewText(formatExistenceCount(cachedCount)))
 		end
 		return
 	end
@@ -1235,7 +1284,7 @@ function InventoryController:_requestBodyPartExistingCount(pieceId: string, requ
 	end
 
 	self._previewExistingCountCache[cacheKey] = count
-	self:_setExistingPreviewText(buildExistingPreviewText(formatWholeNumber(count)))
+	self:_setExistingPreviewText(buildExistingPreviewText(formatExistenceCount(count)))
 end
 
 function InventoryController:_requestAuraExistingCount(auraId: string, requestToken: number)
@@ -1243,7 +1292,7 @@ function InventoryController:_requestAuraExistingCount(auraId: string, requestTo
 	local cachedCount = self._previewExistingCountCache[cacheKey]
 	if cachedCount ~= nil then
 		if requestToken == self._previewExistingRequestToken then
-			self:_setExistingPreviewText(buildExistingPreviewText(formatWholeNumber(cachedCount)))
+			self:_setExistingPreviewText(buildExistingPreviewText(formatExistenceCount(cachedCount)))
 		end
 		return
 	end
@@ -1286,7 +1335,7 @@ function InventoryController:_requestAuraExistingCount(auraId: string, requestTo
 	end
 
 	self._previewExistingCountCache[cacheKey] = count
-	self:_setExistingPreviewText(buildExistingPreviewText(formatWholeNumber(count)))
+	self:_setExistingPreviewText(buildExistingPreviewText(formatExistenceCount(count)))
 end
 
 function InventoryController:_setPreviewState(previewState: PreviewState?)
@@ -1309,6 +1358,11 @@ function InventoryController:_setPreviewTab(tabName: string?)
 
 	local infoFrame = self._ui.infoFrame
 	local statsFrame = self._ui.statsFrame
+	local statsViewButton = self._ui.statsViewButton
+	if statsViewButton then
+		statsViewButton.Visible = hasPreviewBodyPart
+		statsViewButton.Active = hasPreviewBodyPart
+	end
 	if not (infoFrame and statsFrame) then
 		return
 	end
@@ -1431,7 +1485,7 @@ function InventoryController:_setPreviewForAccessorySlot(slot: AccessoryConfig.A
 		})
 	else
 		self:_setPreviewState(nil)
-		self:_applySpecialFilter("accessory")
+		self:_applySpecialFilter(if slot == "GearAccessory" then GEAR_ACCESSORY_FILTER else HEAD_ACCESSORY_FILTER)
 	end
 
 	self:_syncList()
@@ -1566,7 +1620,9 @@ function InventoryController:_buildCardPayloadForRecord(recordView: InventoryRec
 		mutationCoverTexture = recordView.mutationCoverTexture,
 		sizeTagStyle = recordView.sizeTagStyle,
 		iconTexture = recordView.iconTexture,
+		cardBackgroundTexture = recordView.cardBackgroundTexture,
 		preferIconOverViewport = recordView.preferIconOverViewport,
+		hideUsageText = recordView.itemType == "accessory",
 	}
 end
 
@@ -1779,6 +1835,7 @@ function InventoryController:_buildMaterialRecordView(materialId: string, record
 		mutationCoverTexture = nil,
 		sizeTagStyle = nil,
 		iconTexture = previewPresentation.iconTexture,
+		cardBackgroundTexture = previewPresentation.cardBackgroundTexture,
 		preferIconOverViewport = previewPresentation.preferIconOverViewport == true,
 	}
 end
@@ -2016,7 +2073,25 @@ function InventoryController:_recordMatchesFilters(record: InventoryRecordView):
 	local selectedSpecialFilter = self._selectedSpecialFilter
 
 	if selectedSpecialFilter ~= nil then
-		if record.itemType ~= selectedSpecialFilter then
+		if selectedSpecialFilter == HEAD_ACCESSORY_FILTER then
+			if record.itemType ~= "accessory" then
+				return false
+			end
+
+			local accessoryRecord = record.record :: any
+			if accessoryRecord.slot ~= "HeadAccessory" then
+				return false
+			end
+		elseif selectedSpecialFilter == GEAR_ACCESSORY_FILTER then
+			if record.itemType ~= "accessory" then
+				return false
+			end
+
+			local accessoryRecord = record.record :: any
+			if accessoryRecord.slot ~= "GearAccessory" then
+				return false
+			end
+		elseif record.itemType ~= selectedSpecialFilter then
 			return false
 		end
 	else
@@ -2492,7 +2567,7 @@ function InventoryController:_syncAutoSizeButton(overrideEnabled: boolean?, shou
 	local isEnabled = self:_getResolvedAutoSizeEnabled(overrideEnabled)
 	label.RichText = true
 	label.Text = string.format(
-		"<b>Auto Scale [%s]</b> <br /> %s",
+		"<b>Regular Scale [%s]</b> <br /> %s",
 		if isEnabled then "ON" else "OFF",
 		self._autoSizeDescriptionText
 	)
@@ -2511,17 +2586,17 @@ function InventoryController:_toggleAutoSize()
 	end)
 
 	if not ok then
-		Logger.Warn(string.format("[InventoryController] Failed to toggle auto scale: %s", tostring(result)))
+		Logger.Warn(string.format("[InventoryController] Failed to toggle regular scale: %s", tostring(result)))
 		return
 	end
 
 	if typeof(result) ~= "table" then
-		Logger.Warn("[InventoryController] Auto scale toggle returned an invalid response.")
+		Logger.Warn("[InventoryController] Regular scale toggle returned an invalid response.")
 		return
 	end
 
 	if result.ok ~= true then
-		Logger.Warn(string.format("[InventoryController] Failed to toggle auto scale: %s", tostring(result.message)))
+		Logger.Warn(string.format("[InventoryController] Failed to toggle regular scale: %s", tostring(result.message)))
 		if typeof(result.state) == "table" then
 			self:_applyLoadoutState(result.state)
 			self:_syncAutoSizeButton(result.state.autoSizeEnabled == true, false)
@@ -2571,6 +2646,32 @@ function InventoryController:_equipBestLoadout()
 
 	showNotification(tostring(result.message or "Equipped best loadout."))
 	self:_applyLoadoutState(result.state)
+
+	if self:_ensureAuraRemotes() then
+		local auraOk, auraResult = pcall(function()
+			return self._remotes.auraGetState:InvokeServer()
+		end)
+		if auraOk and typeof(auraResult) == "table" and typeof(auraResult.state) == "table" then
+			self:_applyAuraState(auraResult.state)
+		else
+			self:_refreshAuraStateFromData()
+		end
+	else
+		self:_refreshAuraStateFromData()
+	end
+
+	if self:_ensureAccessoryRemotes() then
+		local accessoryOk, accessoryResult = pcall(function()
+			return self._remotes.accessoryGetState:InvokeServer()
+		end)
+		if accessoryOk and typeof(accessoryResult) == "table" and typeof(accessoryResult.state) == "table" then
+			self:_applyAccessoryState(accessoryResult.state)
+		else
+			self:_refreshAccessoryStateFromData()
+		end
+	else
+		self:_refreshAccessoryStateFromData()
+	end
 end
 
 function InventoryController:_syncFilterButtons()
@@ -2592,8 +2693,13 @@ function InventoryController:_syncFilterButtons()
 	end
 
 	for _, accessoryButton in ipairs(self._ui.accessoryButtons) do
-		local isActive = self._selectedSpecialFilter == "accessory"
+		local isActive = self._selectedSpecialFilter == HEAD_ACCESSORY_FILTER
 		self:_setOutlineColor(accessoryButton, if isActive then SELECTED_COLOR else DEFAULT_OUTLINE_COLOR, if isActive then 0 else 0.2)
+	end
+
+	for _, gearButton in ipairs(self._ui.gearButtons) do
+		local isActive = self._selectedSpecialFilter == GEAR_ACCESSORY_FILTER
+		self:_setOutlineColor(gearButton, if isActive then SELECTED_COLOR else DEFAULT_OUTLINE_COLOR, if isActive then 0 else 0.2)
 	end
 
 	for _, materialButton in ipairs(self._ui.materialButtons) do
@@ -2680,7 +2786,12 @@ function InventoryController:_applyFilterRegion(region: string?)
 end
 
 function InventoryController:_applySpecialFilter(filterType: string?)
-	local nextFilterType = if filterType == "aura" or filterType == "potion" or filterType == "accessory" or filterType == "material"
+	local nextFilterType = if filterType == "aura"
+			or filterType == "potion"
+			or filterType == "accessory"
+			or filterType == HEAD_ACCESSORY_FILTER
+			or filterType == GEAR_ACCESSORY_FILTER
+			or filterType == "material"
 		then filterType
 		else nil
 	local shouldAnimate = self._selectedSpecialFilter ~= nextFilterType or (nextFilterType ~= nil and self._selectedFilterRegion ~= nil)
@@ -2878,6 +2989,16 @@ function InventoryController:_syncCapacityLabel()
 		label = "Accessories"
 		maxCount = OwnedAccessories.MAX_OWNED_COUNT
 		capacityKey = LocalizationKeys.Inventory.Capacity.Accessories
+	elseif self._selectedSpecialFilter == HEAD_ACCESSORY_FILTER then
+		currentCount = #self:_getVisibleRecords()
+		label = "Head Accessories"
+		maxCount = OwnedAccessories.MAX_OWNED_COUNT
+		capacityKey = LocalizationKeys.Inventory.Capacity.Accessories
+	elseif self._selectedSpecialFilter == GEAR_ACCESSORY_FILTER then
+		currentCount = #self:_getVisibleRecords()
+		label = "Gear"
+		maxCount = OwnedAccessories.MAX_OWNED_COUNT
+		capacityKey = LocalizationKeys.Inventory.Capacity.Accessories
 	elseif self._selectedSpecialFilter == "material" then
 		currentCount = #self:_getVisibleRecords()
 		label = "Materials"
@@ -2946,6 +3067,7 @@ function InventoryController:_syncPreviewStatLabels()
 	else
 		statTexts = BodyPartPresentation.BuildBodyPartContributionStatTexts(
 			if previewBodyPartContext then previewBodyPartContext.piece else nil,
+			if previewBodyPartContext then previewBodyPartContext.ownedRecord else nil,
 			self._previewStatNativeTexts
 		)
 	end
@@ -2957,6 +3079,74 @@ function InventoryController:_syncPreviewStatLabels()
 			TranslationHelper.setLiteralText(label, text)
 		end
 	end
+end
+
+function InventoryController:_stopPreviewViewportRotation()
+	if self._previewViewportRotationConnection then
+		self._previewViewportRotationConnection:Disconnect()
+		self._previewViewportRotationConnection = nil
+	end
+end
+
+function InventoryController:_startPreviewViewportRotation(viewportFrame: ViewportFrame)
+	if self._previewViewportRotationConnection then
+		return
+	end
+
+	self._previewViewportRotationConnection = RunService.RenderStepped:Connect(function(deltaTime: number)
+		local ui = self._ui
+		local activeViewportFrame = ui and ui.previewViewport
+		if
+			not FrameController:IsOpen(WINDOW_NAME)
+			or activeViewportFrame ~= viewportFrame
+			or not viewportFrame.Parent
+			or not viewportFrame.Visible
+		then
+			self:_stopPreviewViewportRotation()
+			return
+		end
+
+		local didRotate = ViewportModelRenderer.RotatePreview(viewportFrame, VIEWPORT_ROTATION_SPEED_RADIANS * deltaTime)
+		if not didRotate then
+			self:_stopPreviewViewportRotation()
+		end
+	end)
+end
+
+function InventoryController:_syncAccessoryPreviewInfo(previewModel: any)
+	local previewLabels = self._ui.previewLabels
+	if not previewLabels then
+		return
+	end
+
+	TranslationHelper.setLiteralText(previewLabels.Bundle, previewModel.inventoryBundleText or previewModel.bundleText or "")
+	TranslationHelper.setLiteralText(previewLabels.Part, previewModel.partText or "")
+	TranslationHelper.setLiteralText(previewLabels.Rarity, previewModel.rarityText or "")
+
+	local statRows = if typeof(previewModel.statRows) == "table"
+		then previewModel.statRows
+		else AccessoryPresentation.BuildStatRows(previewModel.accessoryConfig or previewModel.accessoryId)
+
+	for index, labelName in ipairs(ACCESSORY_PREVIEW_STAT_LABEL_ORDER) do
+		local label = previewLabels[labelName]
+		local rowData = statRows[index]
+		if label and label:IsA("TextLabel") then
+			if rowData then
+				label.RichText = false
+				if typeof(rowData.color) == "Color3" then
+					label.TextColor3 = rowData.color
+				end
+				TranslationHelper.setLiteralText(label, string.format("%s %s", tostring(rowData.valueText), tostring(rowData.labelText)))
+				label.Visible = true
+			else
+				TranslationHelper.setLiteralText(label, "")
+				label.Visible = false
+			end
+		end
+	end
+
+	self:_setExistingPreviewText("")
+	TranslationHelper.setLiteralText(previewLabels.EverRolled, "")
 end
 
 function InventoryController:_syncPreview()
@@ -2982,6 +3172,7 @@ function InventoryController:_syncPreview()
 	previewHolder.Visible = previewModel ~= nil
 
 	if not previewModel then
+		self:_stopPreviewViewportRotation()
 		if self._previewRenderKey ~= "none" then
 			ViewportModelRenderer.Clear(previewViewport)
 		end
@@ -3006,6 +3197,7 @@ function InventoryController:_syncPreview()
 		and iconTexture ~= nil
 
 	if shouldUsePreviewIcon then
+		self:_stopPreviewViewportRotation()
 		if self._previewRenderKey ~= renderKey then
 			ViewportModelRenderer.Clear(previewViewport)
 		end
@@ -3016,13 +3208,14 @@ function InventoryController:_syncPreview()
 		previewIcon.Visible = false
 		previewIcon.Image = ""
 		previewViewport.Visible = true
+		local rendered = true
 		if self._previewRenderKey ~= renderKey then
 			if previewModel.itemType == "potion" then
-				ViewportModelRenderer.RenderPotion(previewViewport, previewModel.bundleModel)
+				rendered = ViewportModelRenderer.RenderPotion(previewViewport, previewModel.bundleModel)
 			else
 				local appearanceSnapshot = PreviewAppearanceRegistry.GetSnapshotForUserId(previewModel.appearanceUserId)
 				if appearanceSnapshot ~= nil and typeof(previewModel.region) == "string" and previewModel.region ~= "" then
-					ViewportModelRenderer.RenderBodyPartPreview(
+					rendered = ViewportModelRenderer.RenderBodyPartPreview(
 						previewViewport,
 						previewModel.bundleModel,
 						previewModel.region,
@@ -3034,27 +3227,37 @@ function InventoryController:_syncPreview()
 						}
 					)
 				else
-					ViewportModelRenderer.RenderBundle(previewViewport, previewModel.bundleModel)
+					rendered = ViewportModelRenderer.RenderBundle(previewViewport, previewModel.bundleModel)
 				end
 			end
+		end
+		previewViewport.Visible = rendered
+		if rendered then
+			self:_startPreviewViewportRotation(previewViewport)
+		else
+			self:_stopPreviewViewportRotation()
 		end
 	end
 
 	self._previewRenderKey = renderKey
 	self:_applyPreviewLabelStyles(previewModel)
 	self:_syncPreviewLabelLayout(previewModel.itemType)
-	TranslationHelper.setLiteralText(self._ui.previewLabels.Bundle, previewModel.inventoryBundleText or previewModel.bundleText)
-	TranslationHelper.setLiteralText(self._ui.previewLabels.Part, previewModel.partText)
-	TranslationHelper.setLiteralText(self._ui.previewLabels.Rarity, previewModel.rarityText)
-	TranslationHelper.setLiteralText(self._ui.previewLabels.Mutation, previewModel.mutationText)
-	TranslationHelper.setLiteralText(self._ui.previewLabels.Content, previewModel.sizeText)
-	self:_setExistingPreviewText(
-		previewModel.existingText
-			or buildExistingPreviewText(TranslationHelper.formatByKey(LocalizationKeys.Common.NotAvailable))
-	)
-	self:_setEverRolledPreviewText(previewModel.inventoryEverRolledText)
-	TranslationHelper.setLiteralText(self._ui.previewLabels.Cash, previewModel.cashText)
-	TranslationHelper.setLiteralText(self._ui.previewLabels.Chance, previewModel.chanceText)
+	if previewModel.itemType == "accessory" then
+		self:_syncAccessoryPreviewInfo(previewModel)
+	else
+		TranslationHelper.setLiteralText(self._ui.previewLabels.Bundle, previewModel.inventoryBundleText or previewModel.bundleText)
+		TranslationHelper.setLiteralText(self._ui.previewLabels.Part, previewModel.partText)
+		TranslationHelper.setLiteralText(self._ui.previewLabels.Rarity, previewModel.rarityText)
+		TranslationHelper.setLiteralText(self._ui.previewLabels.Mutation, previewModel.mutationText)
+		TranslationHelper.setLiteralText(self._ui.previewLabels.Content, previewModel.sizeText)
+		self:_setExistingPreviewText(
+			previewModel.existingText
+				or buildExistingPreviewText(TranslationHelper.formatByKey(LocalizationKeys.Common.NotAvailable))
+		)
+		self:_setEverRolledPreviewText(previewModel.inventoryEverRolledText)
+		TranslationHelper.setLiteralText(self._ui.previewLabels.Cash, previewModel.cashText)
+		TranslationHelper.setLiteralText(self._ui.previewLabels.Chance, previewModel.chanceText)
+	end
 	self:_syncPreviewStatLabels()
 	self:_syncInventoryAnchor(true)
 
@@ -3077,7 +3280,7 @@ function InventoryController:_syncPreview()
 		end)
 	elseif self._previewExistingCountCache[countKey] ~= nil then
 		self:_setExistingPreviewText(TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Existing, {
-			Count = formatWholeNumber(self._previewExistingCountCache[countKey]),
+			Count = formatExistenceCount(self._previewExistingCountCache[countKey]),
 		}))
 	else
 		task.spawn(function()
@@ -3322,127 +3525,17 @@ function InventoryController:_syncSecondaryActionButtons()
 	end
 end
 
-function InventoryController:_destroyCachedCharacterPreviewModel()
-	local cachedModel = self._cachedCharacterPreviewModel
-	if cachedModel and cachedModel.Parent == nil then
-		cachedModel:Destroy()
-	end
-
-	self._cachedCharacterPreviewModel = nil
-end
-
 function InventoryController:_invalidateCharacterPreviewModel()
-	self._characterPreviewGeneration += 1
-	self._isResolvingCharacterPreviewModel = false
-	self:_destroyCachedCharacterPreviewModel()
-end
-
-function InventoryController:_getCurrentHumanoidDescription(): HumanoidDescription?
-	local character = LOCAL_PLAYER.Character
-	if not character then
-		return nil
+	local presenter = self._characterPreviewPresenter
+	if presenter then
+		presenter:Clear()
 	end
-
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	if not humanoid then
-		return nil
-	end
-
-	local ok, description = pcall(function()
-		return humanoid:GetAppliedDescription()
-	end)
-
-	if not ok or not description or not description:IsA("HumanoidDescription") then
-		return nil
-	end
-
-	return description
-end
-
-function InventoryController:_createCharacterPreviewModelFromDescription(description: HumanoidDescription?): Model?
-	if not description then
-		return nil
-	end
-
-	local baseRigModel = BodyPartsCatalog.GetDefaultBaseRig()
-	if not (baseRigModel and baseRigModel:IsA("Model")) then
-		return nil
-	end
-
-	local previewModel = baseRigModel:Clone()
-	previewModel.Name = "InventoryCharacterPreview"
-
-	local humanoid = previewModel:FindFirstChildOfClass("Humanoid")
-	if not humanoid then
-		previewModel:Destroy()
-		return nil
-	end
-
-	local ok = pcall(function()
-		humanoid:ApplyDescriptionReset(description)
-	end)
-
-	if not ok then
-		previewModel:Destroy()
-		return nil
-	end
-
-	return previewModel
-end
-
-function InventoryController:_buildDefaultCharacterPreviewModel(): Model?
-	local previewModel = self:_createCharacterPreviewModelFromDescription(self:_getCurrentHumanoidDescription())
-	if previewModel then
-		return previewModel
-	end
-
-	local ok, description = pcall(function()
-		return Players:GetHumanoidDescriptionFromUserId(LOCAL_PLAYER.UserId)
-	end)
-
-	if not ok or not description or not description:IsA("HumanoidDescription") then
-		return nil
-	end
-
-	return self:_createCharacterPreviewModelFromDescription(description)
-end
-
-function InventoryController:_resolveCharacterPreviewModelAsync()
-	if self._cachedCharacterPreviewModel or self._isResolvingCharacterPreviewModel then
-		return
-	end
-
-	self._isResolvingCharacterPreviewModel = true
-	local generation = self._characterPreviewGeneration
-
-	task.spawn(function()
-		local previewModel = self:_buildDefaultCharacterPreviewModel()
-		if self._characterPreviewGeneration ~= generation then
-			if previewModel and previewModel.Parent == nil then
-				previewModel:Destroy()
-			end
-			return
-		end
-
-		self._isResolvingCharacterPreviewModel = false
-
-		if not previewModel then
-			return
-		end
-
-		self:_destroyCachedCharacterPreviewModel()
-		self._cachedCharacterPreviewModel = previewModel
-		ViewportModelRenderer.RenderCharacterModel(self._ui.characterViewport, previewModel, BodyPartsCatalog.GetDefaultBaseRig())
-	end)
 end
 
 function InventoryController:_syncCharacterViewport()
-	local framingModel = BodyPartsCatalog.GetDefaultBaseRig()
-	local previewModel = self._cachedCharacterPreviewModel or BodyPartsCatalog.GetDefaultBaseRig()
-	ViewportModelRenderer.RenderCharacterModel(self._ui.characterViewport, previewModel, framingModel)
-
-	if self._cachedCharacterPreviewModel == nil then
-		self:_resolveCharacterPreviewModelAsync()
+	local presenter = self._characterPreviewPresenter
+	if presenter then
+		presenter:RenderUser(LOCAL_PLAYER.UserId, LOCAL_PLAYER)
 	end
 end
 
@@ -4365,7 +4458,15 @@ function InventoryController:_bindFilterButtons()
 		accessoryButton.Visible = true
 		accessoryButton.Active = true
 		UIController:CreateButton(accessoryButton, function()
-			self:_applySpecialFilter(if self._selectedSpecialFilter == "accessory" then nil else "accessory")
+			self:_applySpecialFilter(if self._selectedSpecialFilter == HEAD_ACCESSORY_FILTER then nil else HEAD_ACCESSORY_FILTER)
+		end)
+	end
+
+	for _, gearButton in ipairs(self._ui.gearButtons) do
+		gearButton.Visible = true
+		gearButton.Active = true
+		UIController:CreateButton(gearButton, function()
+			self:_applySpecialFilter(if self._selectedSpecialFilter == GEAR_ACCESSORY_FILTER then nil else GEAR_ACCESSORY_FILTER)
 		end)
 	end
 
@@ -4412,7 +4513,7 @@ function InventoryController:_bindSlotButtons()
 		local button = self._ui.accessorySlotButtons and self._ui.accessorySlotButtons[slot]
 		if button then
 			UIController:CreateButton(button, function()
-				self:_applySpecialFilter("accessory")
+				self:_applySpecialFilter(if slot == "GearAccessory" then GEAR_ACCESSORY_FILTER else HEAD_ACCESSORY_FILTER)
 
 				if self._equippedAccessoryOwnedIdBySlot[slot] then
 					self:_setPreviewForAccessorySlot(slot)
@@ -4429,7 +4530,9 @@ function InventoryController:_bindOpenButton(openButton: GuiButton)
 	UIController:CreateButton(openButton, function()
 		local wasOpen = FrameController:IsOpen(WINDOW_NAME)
 		FrameController:ToggleFrame(WINDOW_NAME)
-		if not wasOpen then
+		if wasOpen then
+			self:_invalidateCharacterPreviewModel()
+		else
 			task.defer(function()
 				self:_ensureFullUi(self._playerGui or LOCAL_PLAYER:WaitForChild("PlayerGui"))
 				self._selectedFilterRegion = nil
@@ -4552,10 +4655,13 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 	self._listTemplate = template
 	self._slotCardRenderer = SlotCardRenderer.new(playerGui)
 
+	local applyRig = characterFrame:FindFirstChild("ApplyRig")
+
 	local filterButtons = {}
 	local auraButtons = {}
 	local potionButtons = {}
 	local accessoryButtons = {}
+	local gearButtons = {}
 	local materialButtons = {}
 	for _, child in ipairs(topBarButtons:GetChildren()) do
 		if child:IsA("ImageButton") then
@@ -4565,6 +4671,8 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 				table.insert(potionButtons, child)
 			elseif child.Name == "Accesories" or child.Name == "Accessories" then
 				table.insert(accessoryButtons, child)
+			elseif child.Name == "Gears" or child.Name == "Gear" then
+				table.insert(gearButtons, child)
 			elseif child.Name == "Materials" then
 				table.insert(materialButtons, child)
 			elseif FILTER_BUTTON_TO_REGION[child.Name] then
@@ -4603,12 +4711,21 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 
 	local accessorySlotFrames = {}
 	local accessorySlotButtons = {}
-	local uiSlotNameBySlot = {
-		HeadAccessory = "HeadAccesory",
-		ArmAccessory = "ArmAccesory",
+	local uiSlotNamesBySlot = {
+		HeadAccessory = { "HeadAccessory", "HeadAccesory", "Accessory" },
+		GearAccessory = { "Gear", "GearAccessory", "GearAccesory" },
 	}
 	for _, slot in ipairs(OwnedAccessories.SlotOrder) do
-		local slotFrame = characterFrame:FindFirstChild(uiSlotNameBySlot[slot])
+		local slotFrame = nil
+		local slotNames = uiSlotNamesBySlot[slot]
+		if slotNames then
+			for _, slotName in ipairs(slotNames) do
+				slotFrame = characterFrame:FindFirstChild(slotName)
+				if slotFrame then
+					break
+				end
+			end
+		end
 		if slotFrame and slotFrame:IsA("Frame") then
 			accessorySlotFrames[slot] = slotFrame
 
@@ -4652,6 +4769,7 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		auraButtons = auraButtons,
 		potionButtons = potionButtons,
 		accessoryButtons = accessoryButtons,
+		gearButtons = gearButtons,
 		materialButtons = materialButtons,
 		searchBox = topBar:WaitForChild("TextBox", 30),
 		slotFrames = slotFrames,
@@ -4683,6 +4801,15 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		Bundle = self._ui.previewLabels.Bundle.FontFace,
 		Rarity = self._ui.previewLabels.Rarity.FontFace,
 	}
+	self._previewLabelTextColors = {}
+	self._previewLabelRichText = {}
+	for _, labelName in ipairs(PREVIEW_LABEL_ORDER) do
+		local label = self._ui.previewLabels[labelName]
+		if label and label:IsA("TextLabel") then
+			self._previewLabelTextColors[labelName] = label.TextColor3
+			self._previewLabelRichText[labelName] = label.RichText
+		end
+	end
 	self._previewSecondaryActionButtonLayouts = {
 		favorite = favoriteButtonLayout,
 		sell = sellButtonLayout,
@@ -4708,6 +4835,17 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 	self._inventoryRoot.AnchorPoint = Vector2.new(INVENTORY_DEFAULT_ANCHOR_X, INVENTORY_ANCHOR_Y)
 	self._ui.previewHolder.Visible = false
 	self:_setPreviewTab("info")
+	if self._characterPreviewPresenter then
+		self._characterPreviewPresenter:Destroy()
+	end
+	self._characterPreviewPresenter = AvatarViewportPreview.new({
+		viewportFrame = characterFrame,
+		applyRig = if applyRig and applyRig:IsA("Model") then applyRig else nil,
+		logPrefix = "[InventoryController]",
+		isActive = function()
+			return FrameController:IsOpen(WINDOW_NAME)
+		end,
+	})
 	self._ui.previewIcon.Visible = false
 	self._ui.potionSellFrame.Visible = false
 end

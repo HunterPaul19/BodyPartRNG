@@ -153,6 +153,15 @@ local rawOrdered: { TitleConfigEntry } = {
 		achievementId = "launch_week_player",
 		sortOrder = 16,
 	},
+	{
+		id = "founder",
+		label = "Founder",
+		description = "You backed Body Part RNG from the beginning.",
+		howToGet = "Purchase the Starter Pack.",
+		displayColor = Color3.fromRGB(255, 214, 76),
+		achievementId = "starter_pack_founder",
+		sortOrder = 17,
+	},
 }
 
 table.sort(rawOrdered, function(a, b)

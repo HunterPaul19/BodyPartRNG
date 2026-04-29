@@ -86,7 +86,7 @@ function MaterialPresentation.BuildPreviewPresentation(payload: any)
 	local amount = math.max(0, math.floor(tonumber(record and record.amount) or 0))
 	local displayColor = config.displayColor
 	local labelText = escapeRichText(config.label)
-	local iconTexture = if typeof(config.iconTexture) == "string" and config.iconTexture ~= "" then config.iconTexture else nil
+	local iconTexture = CraftingMaterialConfig.ResolveIconTexture(config)
 
 	return {
 		itemType = "material",
@@ -105,6 +105,7 @@ function MaterialPresentation.BuildPreviewPresentation(payload: any)
 		inventoryEverRolledText = nil,
 		bundleModel = MaterialPresentation.GetPlaceholderModel(config),
 		iconTexture = iconTexture,
+		cardBackgroundTexture = iconTexture,
 		cardAccentColor = displayColor,
 		baseFillColor = displayColor,
 		selectedFillColor = displayColor:Lerp(Color3.new(1, 1, 1), 0.3),

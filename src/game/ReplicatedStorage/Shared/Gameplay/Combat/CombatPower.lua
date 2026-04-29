@@ -1,3 +1,8 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
+local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
+
 local CombatPower = {}
 
 export type Stats = {
@@ -13,6 +18,35 @@ function CombatPower.Calculate(stats: Stats?): number
 	local speed = math.max(0, tonumber(safeStats.speed) or 0)
 
 	return damage + (health * 8) + (speed * 25)
+end
+
+function CombatPower.GetBodyPartCombatMultiplier(record: any): number
+	local mutationMultiplier = tonumber(record and record.mutationMultiplier)
+	if mutationMultiplier == nil or mutationMultiplier <= 0 then
+		mutationMultiplier = MutationConfig.GetMultiplier(record and (record.mutationId or record.mutation))
+	end
+
+	local sizeMultiplier = SizeConfig.GetMoneyMultiplierForScale(record and record.sizeMultiplier)
+	if record and record.sizeMultiplier == nil then
+		sizeMultiplier = SizeConfig.GetMoneyMultiplier(record.sizeId)
+	end
+
+	return math.max(0, mutationMultiplier) * math.max(0, sizeMultiplier)
+end
+
+function CombatPower.GetBodyPartContributionStats(piece: any, record: any): Stats
+	local safePiece = if typeof(piece) == "table" then piece else {}
+	local multiplier = CombatPower.GetBodyPartCombatMultiplier(record)
+
+	return {
+		damage = math.max(0, tonumber(safePiece.damageBonus) or 0) * multiplier,
+		health = math.max(0, tonumber(safePiece.healthBonus) or 0) * multiplier,
+		speed = math.max(0, tonumber(safePiece.speedBonus) or 0) * multiplier,
+	}
+end
+
+function CombatPower.CalculateBodyPartPower(piece: any, record: any): number
+	return CombatPower.Calculate(CombatPower.GetBodyPartContributionStats(piece, record))
 end
 
 return CombatPower

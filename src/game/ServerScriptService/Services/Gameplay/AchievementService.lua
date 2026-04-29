@@ -176,6 +176,25 @@ function AchievementService:_grantAchievement(player: Player, achievementId: str
 	return #unlockedAchievementIds > 0
 end
 
+function AchievementService:GrantDirectAward(player: Player, achievementId: string): (boolean, string?)
+	local achievement = AchievementConfig.Get(achievementId)
+	if not achievement then
+		return false, "That achievement does not exist."
+	end
+	if achievement.triggerType ~= "direct_award" then
+		return false, "That achievement is not a direct award."
+	end
+	if not self:_seedPlayerProgress(player) then
+		return false, "Player achievement state is not ready."
+	end
+	if AchievementState.HasCompleted(DataService:GetAchievementsState(player), achievementId) then
+		return true, nil
+	end
+
+	local granted = self:_grantAchievement(player, achievementId)
+	return granted == true or AchievementState.HasCompleted(DataService:GetAchievementsState(player), achievementId), nil
+end
+
 function AchievementService:_grantLaunchWeekTitleIfEligible(player: Player)
 	if isWithinReleaseWeek() then
 		self:_grantAchievement(player, LAUNCH_WEEK_ACHIEVEMENT_ID)

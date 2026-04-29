@@ -25,6 +25,7 @@ local MANAGED_ATTRIBUTE = "AppearanceTransferApplied"
 local SOURCE_ATTRIBUTE = "AppearanceTransferSource"
 local COMPATIBLE_ATTRIBUTE = "AppearanceTransferCompatible"
 local REASON_ATTRIBUTE = "AppearanceTransferReason"
+local VISUAL_ONLY_HEAD_ACCESSORY_ATTRIBUTE = "VisualOnlyHeadAccessory"
 
 local ALL_RIG_PARTS = {
 	"Head",
@@ -74,6 +75,12 @@ local REGION_VISUAL_PART_ORDER = {
 
 local function isManagedClone(instance: Instance): boolean
 	return instance:GetAttribute(MANAGED_ATTRIBUTE) == true
+end
+
+local function isNativeAppearanceAccessory(accessory: Instance): boolean
+	return accessory:IsA("Accessory")
+		and not isManagedClone(accessory)
+		and accessory:GetAttribute(VISUAL_ONLY_HEAD_ACCESSORY_ATTRIBUTE) ~= true
 end
 
 local function ensureFolder(parent: Instance, name: string): Folder
@@ -543,7 +550,7 @@ local function buildAccessoryQueue(character: Model): ({ [string]: { Accessory }
 	local seenCount = 0
 
 	for _, child in ipairs(character:GetChildren()) do
-		if child:IsA("Accessory") and not isManagedClone(child) then
+		if isNativeAppearanceAccessory(child) then
 			seenCount += 1
 
 			local _, handleAttachment = getHandleAndSingleAttachment(child)
@@ -761,13 +768,13 @@ local function iterSnapshotAccessorySources(character: Model): { Accessory }
 	local hiddenFolder = ensureHiddenNativeFolder(character)
 
 	for _, child in ipairs(character:GetChildren()) do
-		if child:IsA("Accessory") and not isManagedClone(child) then
+		if isNativeAppearanceAccessory(child) then
 			accessories[#accessories + 1] = child
 		end
 	end
 
 	for _, child in ipairs(hiddenFolder:GetChildren()) do
-		if child:IsA("Accessory") and not isManagedClone(child) then
+		if isNativeAppearanceAccessory(child) then
 			accessories[#accessories + 1] = child
 		end
 	end

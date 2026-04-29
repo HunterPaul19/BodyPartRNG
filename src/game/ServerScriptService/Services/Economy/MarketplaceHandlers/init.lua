@@ -1,4 +1,5 @@
 local MerchantTeleporterHandler = require(script.MerchantTeleporterHandler)
+local PotionHandler = require(script.PotionHandler)
 local QuickRollHandler = require(script.QuickRollHandler)
 local StarterPackHandler = require(script.StarterPackHandler)
 local TimeShardHandler = require(script.TimeShardHandler)
@@ -7,6 +8,7 @@ local VipPlusHandler = require(script.VipPlusHandler)
 
 local MarketplaceHandlers = {
 	merchant_teleporter = MerchantTeleporterHandler,
+	potion = PotionHandler,
 	quick_roll = QuickRollHandler,
 	starter_pack = StarterPackHandler,
 	time_shards = TimeShardHandler,

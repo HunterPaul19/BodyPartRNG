@@ -2,6 +2,7 @@ local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared
 
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
 
 local AccessoryScaleUtils = require(script.Parent.AccessoryScaleUtils)
 local BodyPartRegions = require(script.Parent.BodyPartRegions)
@@ -140,6 +141,9 @@ local AURA_ATTACHMENT_REFERENCE_PROPERTIES_BY_CLASS = table.freeze({
 	Beam = { "Attachment0", "Attachment1" },
 	Trail = { "Attachment0", "Attachment1" },
 })
+local AURA_FLOOR_ATTACHMENT_NAME = "Floor"
+local AURA_FLOOR_RAYCAST_START_HEIGHT = 512
+local AURA_FLOOR_RAYCAST_DISTANCE = 4096
 
 local MUTATION_RUNTIME_ALLOWED_CHILD_CLASSES = table.freeze({
 	ParticleEmitter = true,
@@ -1509,6 +1513,41 @@ local function resolveAuraAttachmentReference(
 	return resolvedAttachmentsBySource[sourceAttachment]
 end
 
+local function buildAuraFloorRaycastParams(character: Model): RaycastParams
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+	raycastParams.FilterDescendantsInstances = { character }
+	raycastParams.IgnoreWater = true
+	return raycastParams
+end
+
+local function raycastAuraFloorPosition(character: Model, position: Vector3): Vector3?
+	local rayOrigin = position + Vector3.new(0, AURA_FLOOR_RAYCAST_START_HEIGHT, 0)
+	local rayDirection = Vector3.new(0, -(AURA_FLOOR_RAYCAST_START_HEIGHT + AURA_FLOOR_RAYCAST_DISTANCE), 0)
+	local result = Workspace:Raycast(rayOrigin, rayDirection, buildAuraFloorRaycastParams(character))
+	return if result then result.Position else nil
+end
+
+local function resolveGroundedAuraFloorAttachmentCFrame(
+	character: Model,
+	targetPart: BasePart,
+	sourceAttachment: Attachment
+): CFrame?
+	local authoredWorldCFrame = targetPart.CFrame * sourceAttachment.CFrame
+	local floorPosition = raycastAuraFloorPosition(character, authoredWorldCFrame.Position)
+	if floorPosition == nil then
+		return nil
+	end
+
+	local groundedWorldPosition = Vector3.new(
+		authoredWorldCFrame.Position.X,
+		floorPosition.Y,
+		authoredWorldCFrame.Position.Z
+	)
+	local groundedWorldCFrame = composeCFrame(groundedWorldPosition, getRotationOnly(authoredWorldCFrame))
+	return targetPart.CFrame:ToObjectSpace(groundedWorldCFrame)
+end
+
 local function buildAuraRuntimePlan(character: Model, auraRequest: ApplyAuraRequest): (any?, string?)
 	if typeof(auraRequest) ~= "table" then
 		return nil, "Aura request must be a table."
@@ -1601,11 +1640,37 @@ local function applyAuraRuntime(character: Model, auraRequest: ApplyAuraRequest)
 
 		for _, sourceDescendant in ipairs(sourcePart:GetDescendants()) do
 			if sourceDescendant:IsA("Attachment") then
-				local targetAttachment = findDirectAttachment(targetPart, sourceDescendant.Name)
-				if targetAttachment == nil then
+				local targetAttachment = nil
+				if sourceDescendant.Name == AURA_FLOOR_ATTACHMENT_NAME then
 					local cloneAttachment = sourceToClone[sourceDescendant]
-					if cloneAttachment and cloneAttachment:IsA("Attachment") then
-						targetAttachment = cloneAttachment
+					if not (cloneAttachment and cloneAttachment:IsA("Attachment")) then
+						return false, string.format(
+							'Aura "%s" could not clone attachment "%s" for "%s".',
+							runtimePlan.auraId,
+							sourceDescendant.Name,
+							targetPart.Name
+						)
+					end
+
+					local groundedCFrame =
+						resolveGroundedAuraFloorAttachmentCFrame(character, targetPart, sourceDescendant)
+					if groundedCFrame == nil then
+						return false, string.format(
+							'Aura "%s" could not place Floor attachment on "%s" because no ground was found below it.',
+							runtimePlan.auraId,
+							targetPart.Name
+						)
+					end
+
+					cloneAttachment.CFrame = groundedCFrame
+					targetAttachment = cloneAttachment
+				else
+					targetAttachment = findDirectAttachment(targetPart, sourceDescendant.Name)
+					if targetAttachment == nil then
+						local cloneAttachment = sourceToClone[sourceDescendant]
+						if cloneAttachment and cloneAttachment:IsA("Attachment") then
+							targetAttachment = cloneAttachment
+						end
 					end
 				end
 
@@ -2127,9 +2192,8 @@ local function captureAttachmentData(character: Model)
 	return attachments
 end
 
-local function computeLowestPointYForPart(part: BasePart): number
-	local halfSize = part.Size * 0.5
-	local cframe = part.CFrame
+local function computeLowestPointY(size: Vector3, cframe: CFrame): number
+	local halfSize = size * 0.5
 	local lowestY = math.huge
 
 	for xSign = -1, 1, 2 do
@@ -2142,6 +2206,10 @@ local function computeLowestPointYForPart(part: BasePart): number
 	end
 
 	return lowestY
+end
+
+local function computeLowestPointYForPart(part: BasePart): number
+	return computeLowestPointY(part.Size, part.CFrame)
 end
 
 local function computeLowestFootBottomY(character: Model): number?
@@ -2280,7 +2348,11 @@ local function applyMotorScaling(snapshot, targetSizes: { [string]: Vector3 })
 	end
 end
 
-local function settleCharacterFooting(character: Model, previousLowestFootBottomY: number?): number?
+local function settleCharacterFooting(
+	character: Model,
+	previousLowestFootBottomY: number?,
+	neutralSupportDistance: number?
+): number?
 	local rootPart = character:FindFirstChild("HumanoidRootPart")
 	if not (rootPart and rootPart:IsA("BasePart")) then
 		return nil
@@ -2299,7 +2371,8 @@ local function settleCharacterFooting(character: Model, previousLowestFootBottom
 			end
 		end
 
-		finalHipHeight = setHipHeightFromSupportDistance(character, computeFootSupportDistance(character))
+		finalHipHeight =
+			setHipHeightFromSupportDistance(character, neutralSupportDistance or computeFootSupportDistance(character))
 
 		if not previousLowestFootBottomY or not currentLowestFootBottomY then
 			break
@@ -2345,6 +2418,13 @@ local function buildTargetSizes(baseRig: Model, request: ApplyRequest): ({ [stri
 		local regionRequest = request.regions and request.regions[region] or nil
 		if regionRequest then
 			if regionRequest.isNativeFallback == true then
+				local scale = getFinalScale(regionRequest)
+				for _, partName in ipairs(getRigPartNames(region) or {}) do
+					local baseSize = targetSizes[partName]
+					if baseSize then
+						targetSizes[partName] = baseSize * scale
+					end
+				end
 				continue
 			end
 
@@ -2964,6 +3044,36 @@ local function buildReferencePose(character: Model): ({ rootCFrame: CFrame, part
 	}, nil, nil
 end
 
+local function computeNeutralFootSupportDistance(
+	character: Model,
+	referencePose: { rootCFrame: CFrame, partCFrames: { [string]: CFrame } }?
+): number?
+	local resolvedReferencePose = referencePose
+	if not resolvedReferencePose then
+		resolvedReferencePose = buildReferencePose(character)
+	end
+	if not resolvedReferencePose then
+		return nil
+	end
+
+	local lowestFootBottomY = math.huge
+	for _, partName in ipairs(SUPPORT_PART_NAMES) do
+		local part = character:FindFirstChild(partName)
+		local referenceCFrame = resolvedReferencePose.partCFrames[partName]
+		if not (part and part:IsA("BasePart") and referenceCFrame) then
+			return nil
+		end
+
+		lowestFootBottomY = math.min(lowestFootBottomY, computeLowestPointY(part.Size, referenceCFrame))
+	end
+
+	if lowestFootBottomY == math.huge then
+		return nil
+	end
+
+	return resolvedReferencePose.rootCFrame.Position.Y - lowestFootBottomY
+end
+
 function BodyPartVisuals.ValidateReferencePose(character: Model): (boolean, string?, string?)
 	if not (character and character:IsA("Model")) then
 		return false, "Character must be a Model.", "invalid_character"
@@ -3490,7 +3600,9 @@ applyRegion = function(character: Model, region: string, regionRequest: ApplyReg
 		sanitizeVisualPartChildren(visualPart, allowedAnimationConstraintNames)
 		configureVisualPart(visualPart)
 		templateCFramesByName[bodyPartName] = visualPart.CFrame
-		if not isNativeFallback and region == "Torso" and bodyPartName == "UpperTorso" then
+		if isNativeFallback then
+			-- Native fallback sources are cloned from the live rig after applyRig has already resized it.
+		elseif region == "Torso" and bodyPartName == "UpperTorso" then
 			scaleVisualPart(visualPart, finalScale, getBodyPartTargetSize(bundle, bodyPartName, source, finalScale))
 		else
 			scaleVisualPart(visualPart, finalScale)
@@ -3675,7 +3787,8 @@ local function applyRig(character: Model, baseRig: Model, request: ApplyRequest)
 	applyAttachmentScaling(snapshot, targetSizes)
 	applyMotorScaling(snapshot, targetSizes)
 
-	settleCharacterFooting(character, previousLowestFootBottomY)
+	local neutralSupportDistance = computeNeutralFootSupportDistance(character)
+	settleCharacterFooting(character, previousLowestFootBottomY, neutralSupportDistance)
 	return true, nil
 end
 
@@ -3778,6 +3891,7 @@ function BodyPartVisuals.Apply(character: Model, request: ApplyRequest): ApplyRe
 			table.insert(errors, referenceError or "Failed to build the neutral reference pose.")
 			return buildResult(false, errors, appliedRegions, character)
 		end
+		local neutralSupportDistance = computeNeutralFootSupportDistance(character, referencePose)
 
 		clearAuraRuntime(character)
 
@@ -3817,7 +3931,7 @@ function BodyPartVisuals.Apply(character: Model, request: ApplyRequest): ApplyRe
 
 			if #errors == 0 then
 				local previousLowestFootBottomY = computeLowestFootBottomY(character)
-				settleCharacterFooting(character, previousLowestFootBottomY)
+				settleCharacterFooting(character, previousLowestFootBottomY, neutralSupportDistance)
 
 				local finalAccessoryAlignmentSuccess, finalAccessoryAlignmentError =
 					CharacterAppearanceHostApplier.RefreshManagedAccessoryAlignment(character, request.regions)
@@ -3886,7 +4000,8 @@ function BodyPartVisuals.Reset(character: Model, _baseRig: Model?): ApplyResult
 		applyAttachmentScaling(snapshot, snapshot.parts)
 		applyMotorScaling(snapshot, snapshot.parts)
 
-		settleCharacterFooting(character, previousLowestFootBottomY)
+		local neutralSupportDistance = computeNeutralFootSupportDistance(character)
+		settleCharacterFooting(character, previousLowestFootBottomY, neutralSupportDistance)
 
 		local appearanceSuccess, appearanceError = CharacterAppearanceHostApplier.RestoreNativeCharacterAppearance(character)
 		if not appearanceSuccess and appearanceError then

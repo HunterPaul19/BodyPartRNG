@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
+local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local CraftingRecipeConfig = require(ReplicatedStorage.Shared.Config.CraftingRecipeConfig)
 local OwnedAccessories = require(ReplicatedStorage.Shared.Character.OwnedAccessories)
 local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
@@ -144,12 +145,94 @@ local function normalizeOwnedIdList(value: any): ({ string }?, string?)
 	return ownedIds, nil
 end
 
-local function buildRequiredPieceCounts(recipe: CraftingRecipeConfig.CraftingRecipeEntry): { [string]: number }
-	local counts = {}
-	for _, ingredient in ipairs(recipe.bodyParts) do
-		counts[ingredient.pieceId] = (counts[ingredient.pieceId] or 0) + math.max(1, math.floor(tonumber(ingredient.amount) or 1))
+local function getRequirementSpecificity(requirement: CraftingRecipeConfig.BodyPartIngredientConfig): number
+	if requirement.pieceId then
+		return 3
 	end
-	return counts
+	if requirement.setId and requirement.region then
+		return 2
+	end
+	if requirement.setId then
+		return 1
+	end
+	return 0
+end
+
+local function buildBodyPartRequirements(recipe: CraftingRecipeConfig.CraftingRecipeEntry): { CraftingRecipeConfig.BodyPartIngredientConfig }
+	local requirements = {}
+	for _, ingredient in ipairs(recipe.bodyParts) do
+		for _ = 1, math.max(1, math.floor(tonumber(ingredient.amount) or 1)) do
+			table.insert(requirements, {
+				pieceId = ingredient.pieceId,
+				setId = ingredient.setId,
+				region = ingredient.region,
+				amount = 1,
+			})
+		end
+	end
+
+	table.sort(requirements, function(left, right)
+		local leftSpecificity = getRequirementSpecificity(left)
+		local rightSpecificity = getRequirementSpecificity(right)
+		if leftSpecificity ~= rightSpecificity then
+			return leftSpecificity > rightSpecificity
+		end
+		return tostring(left.pieceId or left.setId or "") < tostring(right.pieceId or right.setId or "")
+	end)
+
+	return requirements
+end
+
+local function bodyPartMatchesRequirement(record: any, requirement: CraftingRecipeConfig.BodyPartIngredientConfig): boolean
+	if typeof(record) ~= "table" then
+		return false
+	end
+
+	if requirement.pieceId then
+		return record.pieceId == requirement.pieceId
+	end
+
+	if not requirement.setId then
+		return false
+	end
+
+	local piece = if typeof(record.pieceId) == "string" then BodyPartsCatalog.GetPiece(record.pieceId) else nil
+	if not piece or piece.setId ~= requirement.setId then
+		return false
+	end
+
+	return requirement.region == nil or piece.region == requirement.region
+end
+
+local function selectedBodyPartsMatchRequirements(
+	selectedRecords: { any },
+	requirements: { CraftingRecipeConfig.BodyPartIngredientConfig }
+): boolean
+	if #selectedRecords ~= #requirements then
+		return false
+	end
+
+	local usedRecordIndexes = {}
+	local function assignRequirement(requirementIndex: number): boolean
+		if requirementIndex > #requirements then
+			return true
+		end
+
+		local requirement = requirements[requirementIndex]
+		for recordIndex, record in ipairs(selectedRecords) do
+			if not usedRecordIndexes[recordIndex] and bodyPartMatchesRequirement(record, requirement) then
+				usedRecordIndexes[recordIndex] = true
+				if assignRequirement(requirementIndex + 1) then
+					return true
+				end
+				usedRecordIndexes[recordIndex] = nil
+			end
+		end
+
+		return false
+	end
+
+	return assignRequirement(1)
 end
 
 local function hasEquippedOwnedId(equippedLoadout: BodyPartLoadout.EquippedState, ownedId: string): boolean
@@ -161,6 +244,10 @@ local function hasEquippedOwnedId(equippedLoadout: BodyPartLoadout.EquippedState
 	return false
 end
 
+local function getRecipeMoneyCost(recipe: CraftingRecipeConfig.CraftingRecipeEntry): number
+	return math.max(0, math.floor(tonumber(recipe.moneyCost) or 0))
+end
+
 function CraftingService:GetCraftingState(player: Player, message: string?)
 	return {
 		recipes = CraftingRecipeConfig.GetAll(),
@@ -168,6 +255,7 @@ function CraftingService:GetCraftingState(player: Player, message: string?)
 		ownedBodyParts = DataService:GetOwnedBodyParts(player),
 		ownedAccessories = DataService:GetOwnedAccessories(player),
 		equippedAccessories = DataService:GetEquippedAccessories(player),
+		money = DataService:GetMoney(player),
 		message = message,
 	}
 end
@@ -195,11 +283,8 @@ function CraftingService:CraftRecipe(player: Player, recipeId: string, bodyPartO
 		return false, ownedIdError or "Invalid body part ingredients.", nil
 	end
 
-	local requiredPieceCounts = buildRequiredPieceCounts(recipe)
-	local requiredBodyPartCount = 0
-	for _, amount in pairs(requiredPieceCounts) do
-		requiredBodyPartCount += amount
-	end
+	local bodyPartRequirements = buildBodyPartRequirements(recipe)
+	local requiredBodyPartCount = #bodyPartRequirements
 	if #normalizedOwnedIds ~= requiredBodyPartCount then
 		return false, "Body part ingredient count does not match the recipe.", nil
 	end
@@ -207,7 +292,7 @@ function CraftingService:CraftRecipe(player: Player, recipeId: string, bodyPartO
 	local bodyPartsState = DataService:GetBodyPartsState(player)
 	local ownedBodyParts = bodyPartsState.ownedById
 	local equippedLoadout = BodyPartLoadout.NormalizeEquippedState(DataService:GetEquippedLoadout(player), ownedBodyParts)
-	local selectedPieceCounts = {}
+	local selectedRecords = {}
 	for _, ownedId in ipairs(normalizedOwnedIds) do
 		local ownedRecord = ownedBodyParts[ownedId]
 		if not ownedRecord then
@@ -220,13 +305,11 @@ function CraftingService:CraftRecipe(player: Player, recipeId: string, bodyPartO
 			return false, "Equipped body parts cannot be used as ingredients.", nil
 		end
 
-		selectedPieceCounts[ownedRecord.pieceId] = (selectedPieceCounts[ownedRecord.pieceId] or 0) + 1
+		table.insert(selectedRecords, ownedRecord)
 	end
 
-	for pieceId, amount in pairs(requiredPieceCounts) do
-		if (selectedPieceCounts[pieceId] or 0) ~= amount then
-			return false, "Selected body part ingredients do not match the recipe.", nil
-		end
+	if not selectedBodyPartsMatchRequirements(selectedRecords, bodyPartRequirements) then
+		return false, "Selected body part ingredients do not match the recipe.", nil
 	end
 
 	local materialAmounts = DataService:GetCraftingMaterialAmounts(player)
@@ -258,10 +341,37 @@ function CraftingService:CraftRecipe(player: Player, recipeId: string, bodyPartO
 		return false, "Recipe yield is invalid.", nil
 	end
 
+	local moneyCost = getRecipeMoneyCost(recipe)
+	if moneyCost > 0 and DataService:GetMoney(player) < moneyCost then
+		return false, "You do not have enough money.", nil
+	end
+
+	local moneyCharged = false
+	local function refundMoney()
+		if moneyCharged and moneyCost > 0 then
+			moneyCharged = false
+			DataService:AddMoney(player, moneyCost, "other")
+		end
+	end
+
+	if moneyCost > 0 then
+		local previousMoney = DataService:GetMoney(player)
+		if previousMoney < moneyCost then
+			return false, "You do not have enough money.", nil
+		end
+
+		local updatedMoney = DataService:AddMoney(player, -moneyCost, "crafting_cost")
+		if updatedMoney > previousMoney then
+			return false, "Could not process the crafting payment.", nil
+		end
+		moneyCharged = true
+	end
+
 	local reservation = nil
 	if recipeYield.kind == "bodyPart" then
 		local _, reservedGrant, reserveError = DataService:ReserveBodyPartRollRecord(player, recipeYield.bodyPartGrant)
 		if not reservedGrant then
+			refundMoney()
 			return false, reserveError or "Failed to reserve crafted body part.", nil
 		end
 		reservation = reservedGrant
@@ -269,6 +379,7 @@ function CraftingService:CraftRecipe(player: Player, recipeId: string, bodyPartO
 
 	local removedRecords, removeError = DataService:RemoveOwnedBodyParts(player, normalizedOwnedIds)
 	if not removedRecords then
+		refundMoney()
 		return false, removeError or "Failed to consume body part ingredients.", nil
 	end
 
@@ -278,6 +389,7 @@ function CraftingService:CraftRecipe(player: Player, recipeId: string, bodyPartO
 	end
 	local materialsOk, materialsError = DataService:SetCraftingMaterialAmounts(player, updatedMaterialAmounts)
 	if not materialsOk then
+		refundMoney()
 		return false, materialsError or "Failed to consume crafting materials.", nil
 	end
 
@@ -286,6 +398,7 @@ function CraftingService:CraftRecipe(player: Player, recipeId: string, bodyPartO
 			accessoryId = recipeYield.accessoryId,
 		})
 		if not createdAccessory then
+			refundMoney()
 			return false, grantError or "Failed to grant crafted accessory.", nil
 		end
 
@@ -299,6 +412,7 @@ function CraftingService:CraftRecipe(player: Player, recipeId: string, bodyPartO
 
 	local createdBodyPart, grantError = DataService:AddOwnedBodyPart(player, recipeYield.bodyPartGrant, reservation)
 	if not createdBodyPart then
+		refundMoney()
 		return false, grantError or "Failed to grant crafted body part.", nil
 	end
 

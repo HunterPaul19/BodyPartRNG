@@ -27,6 +27,7 @@ local PROMPT_GIFT_PURCHASE_REMOTE_NAME = "PromptGiftPurchase"
 local MARKETPLACE_UPDATED_REMOTE_NAME = "Updated"
 local OFFER_KEY_ATTR = "MarketplaceOfferKey"
 local IS_GIFT_ATTR = "MarketplaceIsGift"
+local HIDE_WHEN_OWNED_ATTR = "MarketplaceHideWhenOwned"
 local GIFT_RECIPIENT_USER_ID_ATTR = "MarketplaceGiftRecipientUserId"
 local THUMBNAIL_TYPE = Enum.ThumbnailType.HeadShot
 local THUMBNAIL_SIZE = Enum.ThumbnailSize.Size150x150
@@ -145,8 +146,12 @@ function MarketplaceController:_ensureState()
 	self._ui = {}
 	self._trackedPriceLabels = {}
 	self._authoredPriceTextByLabel = {}
+	self._trackedOwnedVisibilityRows = {}
+	self._authoredVisibilityByRow = {}
 	self._priceRefreshQueued = false
 	self._pendingPriceOfferKeys = {}
+	self._ownedVisibilityRefreshQueued = false
+	self._pendingOwnedVisibilityOfferKeys = {}
 	self._storeVisibilityConnections = {}
 end
 
@@ -351,6 +356,57 @@ function MarketplaceController:_collectTrackedPriceOfferKeys(filterOfferKeys: { 
 	return offerKeys
 end
 
+function MarketplaceController:_resolveOwnedVisibilityOfferKey(row: GuiObject): string
+	local rowOfferKey = normalizeString(row:GetAttribute(OFFER_KEY_ATTR))
+	if rowOfferKey ~= "" then
+		return rowOfferKey
+	end
+
+	local seen = {}
+	local offerKeys = {}
+	for _, descendant in ipairs(row:GetDescendants()) do
+		local offerKey = normalizeString(descendant:GetAttribute(OFFER_KEY_ATTR))
+		if offerKey ~= "" and not seen[offerKey] then
+			seen[offerKey] = true
+			table.insert(offerKeys, offerKey)
+		end
+	end
+
+	if #offerKeys ~= 1 then
+		return ""
+	end
+
+	return offerKeys[1]
+end
+
+function MarketplaceController:_getTrackedOwnedVisibilityRowsForOffer(offerKey: string): { GuiObject }
+	local rows = {}
+	for row in pairs(self._trackedOwnedVisibilityRows) do
+		if row.Parent and self:_resolveOwnedVisibilityOfferKey(row) == offerKey then
+			table.insert(rows, row)
+		end
+	end
+	return rows
+end
+
+function MarketplaceController:_collectTrackedOwnedVisibilityOfferKeys(filterOfferKeys: { [string]: boolean }?): { string }
+	local offerKeys = {}
+	local seen = {}
+
+	for row in pairs(self._trackedOwnedVisibilityRows) do
+		if row.Parent then
+			local offerKey = self:_resolveOwnedVisibilityOfferKey(row)
+			if offerKey ~= "" and not seen[offerKey] and (filterOfferKeys == nil or filterOfferKeys[offerKey] == true) then
+				seen[offerKey] = true
+				table.insert(offerKeys, offerKey)
+			end
+		end
+	end
+
+	table.sort(offerKeys)
+	return offerKeys
+end
+
 function MarketplaceController:_getOfferPresentations(offerKeys: { string })
 	if #offerKeys == 0 then
 		return {}, nil
@@ -368,6 +424,80 @@ function MarketplaceController:_getOfferPresentations(offerKeys: { string })
 	end
 
 	return result.offers, nil
+end
+
+function MarketplaceController:_restoreAuthoredOwnedVisibility(row: GuiObject)
+	if self._authoredVisibilityByRow[row] == nil then
+		self._authoredVisibilityByRow[row] = row.Visible
+	end
+
+	local authoredVisible = self._authoredVisibilityByRow[row]
+	if typeof(authoredVisible) == "boolean" then
+		row.Visible = authoredVisible
+	end
+end
+
+function MarketplaceController:_applyOwnedVisibility(offerKey: string, presentation: any)
+	local isOwned = typeof(presentation) == "table" and presentation.isOwned == true
+	for _, row in ipairs(self:_getTrackedOwnedVisibilityRowsForOffer(offerKey)) do
+		if isOwned then
+			row.Visible = false
+		else
+			self:_restoreAuthoredOwnedVisibility(row)
+		end
+	end
+end
+
+function MarketplaceController:_requestOwnedVisibilityRefresh(offerKeys: { string }?)
+	if typeof(offerKeys) == "table" then
+		for _, offerKey in ipairs(offerKeys) do
+			local normalizedOfferKey = normalizeString(offerKey)
+			if normalizedOfferKey ~= "" then
+				self._pendingOwnedVisibilityOfferKeys[normalizedOfferKey] = true
+			end
+		end
+	else
+		self._pendingOwnedVisibilityOfferKeys = {}
+	end
+
+	if self._ownedVisibilityRefreshQueued then
+		return
+	end
+
+	self._ownedVisibilityRefreshQueued = true
+	task.defer(function()
+		self:_flushPendingOwnedVisibilityRefresh()
+	end)
+end
+
+function MarketplaceController:_flushPendingOwnedVisibilityRefresh()
+	self._ownedVisibilityRefreshQueued = false
+
+	local filterOfferKeys = nil
+	if next(self._pendingOwnedVisibilityOfferKeys) ~= nil then
+		filterOfferKeys = self._pendingOwnedVisibilityOfferKeys
+	end
+	self._pendingOwnedVisibilityOfferKeys = {}
+
+	local offerKeys = self:_collectTrackedOwnedVisibilityOfferKeys(filterOfferKeys)
+	if #offerKeys == 0 then
+		return
+	end
+
+	local presentations, err = self:_getOfferPresentations(offerKeys)
+	if presentations == nil then
+		Logger.Warn(string.format("[MarketplaceController] Failed to fetch marketplace visibility data: %s", tostring(err)))
+		for _, offerKey in ipairs(offerKeys) do
+			for _, row in ipairs(self:_getTrackedOwnedVisibilityRowsForOffer(offerKey)) do
+				self:_restoreAuthoredOwnedVisibility(row)
+			end
+		end
+		return
+	end
+
+	for _, offerKey in ipairs(offerKeys) do
+		self:_applyOwnedVisibility(offerKey, presentations[offerKey])
+	end
 end
 
 function MarketplaceController:_resolvePriceLabelText(presentation: any): (string?, string?)
@@ -497,6 +627,30 @@ function MarketplaceController:_bindPriceLabel(instance: Instance)
 	self:_requestPriceLabelRefresh({ normalizeString(instance:GetAttribute(OFFER_KEY_ATTR)) })
 end
 
+function MarketplaceController:_bindOwnedVisibilityRow(instance: Instance)
+	local playerGui = self:_getPlayerGui()
+	if not (instance and instance:IsA("GuiObject") and instance:IsDescendantOf(playerGui)) then
+		return
+	end
+	if instance:GetAttribute(HIDE_WHEN_OWNED_ATTR) ~= true then
+		return
+	end
+	if self._trackedOwnedVisibilityRows[instance] then
+		return
+	end
+
+	self._trackedOwnedVisibilityRows[instance] = true
+	self._authoredVisibilityByRow[instance] = instance.Visible
+	self:_requestOwnedVisibilityRefresh({ self:_resolveOwnedVisibilityOfferKey(instance) })
+end
+
+function MarketplaceController:_unbindOwnedVisibilityRow(instance: Instance)
+	if instance and instance:IsA("GuiObject") then
+		self._trackedOwnedVisibilityRows[instance] = nil
+		self._authoredVisibilityByRow[instance] = nil
+	end
+end
+
 function MarketplaceController:_unbindPriceLabel(instance: Instance)
 	if instance and instance:IsA("TextLabel") then
 		self._trackedPriceLabels[instance] = nil
@@ -521,6 +675,26 @@ function MarketplaceController:_refreshTaggedPriceLabels()
 	end
 end
 
+function MarketplaceController:_refreshOwnedVisibilityRows()
+	local playerGui = self:_getPlayerGui()
+	local activeRows = {}
+
+	for _, instance in ipairs(playerGui:GetDescendants()) do
+		if instance:IsA("GuiObject") and instance:GetAttribute(HIDE_WHEN_OWNED_ATTR) == true then
+			activeRows[instance] = true
+			self:_bindOwnedVisibilityRow(instance)
+		end
+	end
+
+	for row in pairs(self._trackedOwnedVisibilityRows) do
+		if not activeRows[row] or not row.Parent then
+			self:_unbindOwnedVisibilityRow(row)
+		end
+	end
+
+	self:_requestOwnedVisibilityRefresh()
+end
+
 function MarketplaceController:_trackStoreRoot(instance: Instance)
 	if not (instance and instance:IsA("GuiObject") and instance.Name == STORE_NAME) then
 		return
@@ -532,11 +706,13 @@ function MarketplaceController:_trackStoreRoot(instance: Instance)
 	self._storeVisibilityConnections[instance] = instance:GetPropertyChangedSignal("Visible"):Connect(function()
 		if instance.Visible then
 			self:_requestPriceLabelRefresh()
+			self:_requestOwnedVisibilityRefresh()
 		end
 	end)
 
 	if instance.Visible then
 		self:_requestPriceLabelRefresh()
+		self:_requestOwnedVisibilityRefresh()
 	end
 end
 
@@ -907,6 +1083,7 @@ function MarketplaceController:OnStart()
 	end
 	self._marketplaceUpdatedConnection = remotes.marketplaceUpdated.OnClientEvent:Connect(function()
 		self:_requestPriceLabelRefresh()
+		self:_requestOwnedVisibilityRefresh()
 	end)
 
 	CollectionService:GetInstanceAddedSignal(TAG_NAME):Connect(function(instance)
@@ -928,6 +1105,7 @@ function MarketplaceController:OnStart()
 		if CollectionService:HasTag(instance, PRICE_LABEL_TAG_NAME) then
 			self:_bindPriceLabel(instance)
 		end
+		self:_bindOwnedVisibilityRow(instance)
 		if instance.Name == STORE_NAME and instance:IsA("GuiObject") then
 			self:_trackStoreRoot(instance)
 		end
@@ -939,6 +1117,7 @@ function MarketplaceController:OnStart()
 		if CollectionService:HasTag(instance, PRICE_LABEL_TAG_NAME) then
 			self:_unbindPriceLabel(instance)
 		end
+		self:_unbindOwnedVisibilityRow(instance)
 		if instance.Name == STORE_NAME and instance:IsA("GuiObject") then
 			self:_untrackStoreRoot(instance)
 		end
@@ -959,8 +1138,10 @@ function MarketplaceController:OnStart()
 
 	self:_refreshTaggedButtons()
 	self:_refreshTaggedPriceLabels()
+	self:_refreshOwnedVisibilityRows()
 	self:_refreshTrackedStoreRoots()
 	self:_requestPriceLabelRefresh()
+	self:_requestOwnedVisibilityRefresh()
 end
 
 return MarketplaceController

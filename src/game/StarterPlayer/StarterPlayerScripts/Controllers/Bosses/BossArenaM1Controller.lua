@@ -7,6 +7,7 @@ local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
 local CameraShaker = require(ReplicatedStorage.Shared.Camera.CameraShaker)
+local CombatSoundUtil = require(ReplicatedStorage.Shared.Audio.CombatSoundUtil)
 local AnimationUtil = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Utilities.AnimationUtil)
 local PlayerM1AnimationResolver = require(ReplicatedStorage.Shared.BossArena.PlayerM1AnimationResolver)
 local PlayerM1Config = require(ReplicatedStorage.Shared.BossArena.PlayerM1Config)
@@ -358,6 +359,7 @@ function BossArenaM1Controller:_playApprovedSwing(response: RequestPlayerM1Respo
 		return
 	end
 
+	CombatSoundUtil.PlayLocalSwing()
 	self:_bindApprovedImpact(track, response)
 end
 

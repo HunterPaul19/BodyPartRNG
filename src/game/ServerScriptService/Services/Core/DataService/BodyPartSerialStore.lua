@@ -9,7 +9,10 @@ local RateLimitTelemetry = require(script.Parent.Parent.Common.RateLimitTelemetr
 local STORE_NAME = "BodyPartSerials"
 local REUSABLE_STORE_NAME = "BodyPartSerialReusableRanges"
 local SERIAL_BLOCK_SIZE = 500
-local EXISTENCE_CACHE_TTL_SECONDS = 45
+local EXISTENCE_CACHE_REFRESH_SECONDS = 60 * 60
+local EXISTENCE_REFRESH_SET_PACING_SECONDS = 0.1
+local EXISTENCE_REFRESH_PIECE_PACING_SECONDS = 0.1
+local EXISTENCE_REFRESH_WAIT_TIMEOUT_SECONDS = 30
 
 local BodyPartSerialStore = {}
 
@@ -25,9 +28,11 @@ local reservedSerialRangesByPieceId: {
 local cachedHighWaterByPieceId: {
 	[string]: {
 		value: number,
-		expiresAt: number,
+		refreshedAt: number,
 	},
 } = {}
+local refreshingSetIds: { [string]: boolean } = {}
+local existenceRefreshLoopStarted = false
 
 local function validatePieceId(pieceId: string): string?
 	if typeof(pieceId) ~= "string" or pieceId == "" then
@@ -91,10 +96,10 @@ local function normalizeReusableRanges(value: any): { { startSerial: number, max
 	return merged
 end
 
-local function cacheHighWater(pieceId: string, value: number, ttlSeconds: number?)
+local function cacheHighWater(pieceId: string, value: number)
 	cachedHighWaterByPieceId[pieceId] = {
 		value = math.max(0, math.floor(tonumber(value) or 0)),
-		expiresAt = os.clock() + math.max(1, math.floor(tonumber(ttlSeconds) or EXISTENCE_CACHE_TTL_SECONDS)),
+		refreshedAt = os.clock(),
 	}
 end
 
@@ -104,12 +109,80 @@ local function getCachedHighWater(pieceId: string): number?
 		return nil
 	end
 
-	if os.clock() >= cachedEntry.expiresAt then
-		cachedHighWaterByPieceId[pieceId] = nil
-		return nil
+	return cachedEntry.value
+end
+
+local function waitForSetRefresh(setId: string): boolean
+	local timeoutAt = os.clock() + EXISTENCE_REFRESH_WAIT_TIMEOUT_SECONDS
+	while refreshingSetIds[setId] == true and os.clock() < timeoutAt do
+		task.wait()
 	end
 
-	return cachedEntry.value
+	return refreshingSetIds[setId] ~= true
+end
+
+local function loadExistenceForPiece(pieceId: string): (number?, string?)
+	local success, result = pcall(function()
+		return serialStore:GetAsync(pieceId)
+	end)
+
+	if success then
+		local totalInExistence = math.max(0, math.floor(tonumber(result) or 0))
+		cacheHighWater(pieceId, totalInExistence)
+		return totalInExistence, nil
+	end
+
+	if RunService:IsStudio() then
+		local totalInExistence = studioFallbackCounters[pieceId] or 0
+		cacheHighWater(pieceId, totalInExistence)
+		return totalInExistence, nil
+	end
+
+	RateLimitTelemetry.Increment("data_store_error", "serial_body_part_standard_read", 1)
+	return nil, tostring(result)
+end
+
+local function refreshExistenceForSet(setId: string): (boolean, string?)
+	if refreshingSetIds[setId] == true then
+		if waitForSetRefresh(setId) then
+			return true, nil
+		end
+
+		return false, string.format("Timed out waiting for body part set '%s' existence refresh.", setId)
+	end
+
+	local pieces = Catalog.GetPiecesForSet(setId)
+	if pieces == nil then
+		return false, string.format("Unknown body part setId '%s'.", setId)
+	end
+
+	refreshingSetIds[setId] = true
+	local success, didRefreshAny, lastError = pcall(function()
+		local refreshedAny = false
+		local refreshError = nil
+
+		for _, pieceConfig in ipairs(pieces) do
+			local pieceId = pieceConfig.id
+			if typeof(pieceId) == "string" and pieceId ~= "" then
+				local value, message = loadExistenceForPiece(pieceId)
+				if value ~= nil then
+					refreshedAny = true
+				else
+					refreshError = message
+				end
+				task.wait(EXISTENCE_REFRESH_PIECE_PACING_SECONDS)
+			end
+		end
+
+		return refreshedAny, refreshError
+	end)
+	refreshingSetIds[setId] = nil
+
+	if not success then
+		return false, tostring(didRefreshAny)
+	end
+
+	return didRefreshAny == true, lastError
 end
 
 local function consumeReservedSerial(pieceId: string): number?
@@ -245,6 +318,82 @@ local function returnReusableRange(pieceId: string, startSerial: number, maxSeri
 	return true, nil
 end
 
+function BodyPartSerialStore:ReleaseSerialRangeForPiece(
+	pieceId: string,
+	startSerial: number,
+	maxSerial: number
+): (boolean, string?)
+	local validationError = validatePieceId(pieceId)
+	if validationError then
+		return false, validationError
+	end
+
+	return returnReusableRange(pieceId, startSerial, maxSerial)
+end
+
+function BodyPartSerialStore:ReleaseSerialForPiece(pieceId: string, serialNumber: number): (boolean, string?)
+	local resolvedSerialNumber = math.floor(tonumber(serialNumber) or 0)
+	if resolvedSerialNumber <= 0 then
+		return false, "serialNumber is required."
+	end
+
+	return self:ReleaseSerialRangeForPiece(pieceId, resolvedSerialNumber, resolvedSerialNumber)
+end
+
+function BodyPartSerialStore:ReleaseSerialsForPiece(pieceId: string, serialNumbers: { number }): (boolean, string?)
+	local validationError = validatePieceId(pieceId)
+	if validationError then
+		return false, validationError
+	end
+	if typeof(serialNumbers) ~= "table" then
+		return false, "serialNumbers must be a table."
+	end
+
+	local normalizedSerials = {}
+	local seenSerials = {}
+	for _, serialNumber in ipairs(serialNumbers) do
+		local resolvedSerialNumber = math.floor(tonumber(serialNumber) or 0)
+		if resolvedSerialNumber > 0 and seenSerials[resolvedSerialNumber] ~= true then
+			seenSerials[resolvedSerialNumber] = true
+			table.insert(normalizedSerials, resolvedSerialNumber)
+		end
+	end
+
+	table.sort(normalizedSerials)
+
+	local didReleaseAll = true
+	local lastError = nil
+	local rangeStart = nil
+	local previousSerial = nil
+	local function flushRange()
+		if rangeStart == nil or previousSerial == nil then
+			return
+		end
+
+		local didRelease, releaseError = returnReusableRange(pieceId, rangeStart, previousSerial)
+		if not didRelease then
+			didReleaseAll = false
+			lastError = releaseError
+		end
+	end
+
+	for _, serialNumber in ipairs(normalizedSerials) do
+		if rangeStart == nil then
+			rangeStart = serialNumber
+			previousSerial = serialNumber
+		elseif previousSerial ~= nil and serialNumber == previousSerial + 1 then
+			previousSerial = serialNumber
+		else
+			flushRange()
+			rangeStart = serialNumber
+			previousSerial = serialNumber
+		end
+	end
+	flushRange()
+
+	return didReleaseAll, lastError
+end
+
 function BodyPartSerialStore:FlushUnusedReservedSerials(): boolean
 	local didFlushAll = true
 	for pieceId, reservedRange in pairs(reservedSerialRangesByPieceId) do
@@ -277,24 +426,37 @@ function BodyPartSerialStore:GetTotalInExistenceForPiece(pieceId: string): (numb
 		return cachedHighWater, nil
 	end
 
-	local success, result = pcall(function()
-		return serialStore:GetAsync(pieceId)
+	local pieceConfig = Catalog.GetPiece(pieceId)
+	local setId = pieceConfig and pieceConfig.setId
+	if typeof(setId) ~= "string" or setId == "" then
+		return nil, string.format("Body part piece '%s' is missing a setId.", pieceId)
+	end
+
+	local _, refreshError = refreshExistenceForSet(setId)
+	cachedHighWater = getCachedHighWater(pieceId)
+	if cachedHighWater ~= nil then
+		return cachedHighWater, nil
+	end
+
+	return nil, refreshError or "Failed to refresh body part existence count."
+end
+
+function BodyPartSerialStore:StartExistenceRefreshLoop()
+	if existenceRefreshLoopStarted then
+		return
+	end
+
+	existenceRefreshLoopStarted = true
+	task.spawn(function()
+		while true do
+			for _, setConfig in ipairs(Catalog.GetAllSets()) do
+				refreshExistenceForSet(setConfig.id)
+				task.wait(EXISTENCE_REFRESH_SET_PACING_SECONDS)
+			end
+
+			task.wait(EXISTENCE_CACHE_REFRESH_SECONDS)
+		end
 	end)
-
-	if success then
-		local totalInExistence = math.max(0, math.floor(tonumber(result) or 0))
-		cacheHighWater(pieceId, totalInExistence)
-		return totalInExistence, nil
-	end
-
-	if RunService:IsStudio() then
-		local totalInExistence = studioFallbackCounters[pieceId] or 0
-		cacheHighWater(pieceId, totalInExistence)
-		return totalInExistence, nil
-	end
-
-	RateLimitTelemetry.Increment("data_store_error", "serial_body_part_standard_read", 1)
-	return nil, tostring(result)
 end
 
 return BodyPartSerialStore

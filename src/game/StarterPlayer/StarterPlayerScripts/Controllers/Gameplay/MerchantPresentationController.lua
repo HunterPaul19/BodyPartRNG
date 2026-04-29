@@ -29,6 +29,8 @@ local BLUR_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirecti
 local BACKDROP_TRANSPARENCY = 0.45
 local BLUR_SIZE = 18
 local INITIAL_SCALE = 0.9
+local RUNTIME_WRAPPER_Z_INDEX = 20
+local TRANSITION_OVERLAY_MIN_Z_INDEX = 100
 local CAMERA_OFFSET_X = 0.35
 local CAMERA_OFFSET_Y = 0.18
 local CAMERA_RESPONSE = 11
@@ -40,6 +42,7 @@ type OpenOptions = {
 	speakerModel: Model?,
 	blurSize: number?,
 	backdropTransparency: number?,
+	crispContent: boolean?,
 }
 
 type CameraSnapshot = {
@@ -55,6 +58,8 @@ type RootLayoutSnapshot = {
 	size: UDim2,
 	anchorPoint: Vector2,
 	zIndex: number,
+	zIndexByGuiObject: { [GuiObject]: number },
+	zIndexLiftDelta: number,
 	visible: boolean,
 	backgroundTransparency: number,
 }
@@ -471,17 +476,98 @@ function MerchantPresentationController:_computeRootBounds(root: GuiObject): (Ve
 	return flooredMin, Vector2.new(math.max(1, ceiledMax.X - flooredMin.X), math.max(1, ceiledMax.Y - flooredMin.Y))
 end
 
+local function collectGuiTreeZIndexes(root: GuiObject): ({ [GuiObject]: number }, number, number)
+	local zIndexByGuiObject = {
+		[root] = root.ZIndex,
+	}
+	local minZIndex = root.ZIndex
+	local maxZIndex = root.ZIndex
+
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("GuiObject") then
+			zIndexByGuiObject[descendant] = descendant.ZIndex
+			minZIndex = math.min(minZIndex, descendant.ZIndex)
+			maxZIndex = math.max(maxZIndex, descendant.ZIndex)
+		end
+	end
+
+	return zIndexByGuiObject, minZIndex, maxZIndex
+end
+
+local function applyGuiTreeZIndexLift(
+	zIndexByGuiObject: { [GuiObject]: number },
+	minZIndex: number,
+	targetMinZIndex: number
+): number
+	local delta = math.max(0, targetMinZIndex - minZIndex)
+
+	for guiObject, originalZIndex in pairs(zIndexByGuiObject) do
+		if guiObject.Parent then
+			guiObject.ZIndex = originalZIndex + delta
+		end
+	end
+
+	return delta
+end
+
+local function restoreGuiTreeZIndexes(root: GuiObject, snapshot: RootLayoutSnapshot)
+	local function restoreGuiObject(guiObject: GuiObject)
+		local originalZIndex = snapshot.zIndexByGuiObject[guiObject]
+		if originalZIndex ~= nil then
+			guiObject.ZIndex = originalZIndex
+		elseif snapshot.zIndexLiftDelta > 0 then
+			guiObject.ZIndex = math.max(0, guiObject.ZIndex - snapshot.zIndexLiftDelta)
+		end
+	end
+
+	restoreGuiObject(root)
+
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("GuiObject") then
+			restoreGuiObject(descendant)
+		end
+	end
+end
+
+function MerchantPresentationController:_raiseTransitionOverlayAbove(root: GuiObject?)
+	local overlay = self:_ensureOverlay()
+	local highestZIndex = TRANSITION_OVERLAY_MIN_Z_INDEX - 1
+
+	if root then
+		local _, _, maxRootZIndex = collectGuiTreeZIndexes(root)
+		highestZIndex = math.max(highestZIndex, maxRootZIndex)
+	end
+
+	local runtimeWrapper = root and self._runtimeWrapperByRoot[root] or nil
+	if runtimeWrapper then
+		highestZIndex = math.max(highestZIndex, runtimeWrapper.ZIndex)
+	end
+
+	local backdrop = self._backdrop
+	if backdrop then
+		highestZIndex = math.max(highestZIndex, backdrop.ZIndex)
+	end
+
+	overlay.ZIndex = highestZIndex + 1
+end
+
 function MerchantPresentationController:_restoreShopRoot(root: GuiObject)
 	local snapshot = self._rootLayoutSnapshotsByRoot[root]
 	local runtimeWrapper = self._runtimeWrapperByRoot[root]
 	local runtimeContent = self._runtimeContentByRoot[root]
 	local runtimeScale = self._runtimeScaleByRoot[root]
 
-	if runtimeContent and root.Parent == runtimeContent and snapshot then
+	if snapshot
+		and (
+			(runtimeContent and root.Parent == runtimeContent)
+			or (runtimeWrapper and root.Parent == runtimeWrapper)
+		)
+	then
 		root.Parent = snapshot.parent
 	end
 
 	if snapshot then
+		restoreGuiTreeZIndexes(root, snapshot)
 		root.AnchorPoint = snapshot.anchorPoint
 		root.Position = snapshot.position
 		root.Size = snapshot.size
@@ -614,12 +700,19 @@ end
 
 function MerchantPresentationController:_setBlurSize(targetSize: number, tweenInfo: TweenInfo?, enabled: boolean?)
 	local blur = self:_getBlur()
-	blur.Enabled = if enabled == nil then targetSize > 0 else enabled
 
 	if self._blurTween then
 		self._blurTween:Cancel()
 		self._blurTween = nil
 	end
+
+	if targetSize <= 0 then
+		blur.Size = 0
+		blur.Enabled = false
+		return
+	end
+
+	blur.Enabled = if enabled == nil then true else enabled
 
 	if tweenInfo then
 		self._blurTween = TweenService:Create(blur, tweenInfo, {
@@ -630,17 +723,6 @@ function MerchantPresentationController:_setBlurSize(targetSize: number, tweenIn
 		blur.Size = targetSize
 	end
 
-	if targetSize <= 0 then
-		if tweenInfo then
-			task.delay(tweenInfo.Time, function()
-				if blur.Size <= 0.01 then
-					blur.Enabled = false
-				end
-			end)
-		else
-			blur.Enabled = false
-		end
-	end
 end
 
 function MerchantPresentationController:_setCameraBase(cameraPart: BasePart?, frameName: string)
@@ -721,7 +803,7 @@ function MerchantPresentationController:_startCameraParallax(cameraPart: BasePar
 	end)
 end
 
-function MerchantPresentationController:_prepareShopRoot(root: GuiObject)
+function MerchantPresentationController:_prepareShopRoot(root: GuiObject, crispContent: boolean?)
 	self:_cleanupLegacyRuntimeContent(root)
 	self:_restoreShopRoot(root)
 
@@ -732,6 +814,7 @@ function MerchantPresentationController:_prepareShopRoot(root: GuiObject)
 	local originalZIndex = root.ZIndex
 	local originalVisibility = root.Visible
 	local originalBackgroundTransparency = root.BackgroundTransparency
+	local originalZIndexes, minZIndex = collectGuiTreeZIndexes(root)
 
 	root.Visible = true
 	local rootAbsolutePosition = root.AbsolutePosition
@@ -747,49 +830,70 @@ function MerchantPresentationController:_prepareShopRoot(root: GuiObject)
 		size = originalSize,
 		anchorPoint = originalAnchorPoint,
 		zIndex = originalZIndex,
+		zIndexByGuiObject = originalZIndexes,
+		zIndexLiftDelta = 0,
 		visible = originalVisibility,
 		backgroundTransparency = originalBackgroundTransparency,
 	}
 
 	runtimeState.wrapper.Position = UDim2.fromOffset(wrapperPosition.X, wrapperPosition.Y)
 	runtimeState.wrapper.Size = UDim2.fromOffset(wrapperSize.X, wrapperSize.Y)
-	runtimeState.wrapper.ZIndex = 20
+	runtimeState.wrapper.ZIndex = RUNTIME_WRAPPER_Z_INDEX
 	runtimeState.wrapper.Visible = true
 	runtimeState.content.ZIndex = runtimeState.wrapper.ZIndex + 1
 	runtimeState.content.GroupTransparency = 1
-	runtimeState.scale.Scale = INITIAL_SCALE
+	runtimeState.scale.Scale = if crispContent then 1 else INITIAL_SCALE
 
-	root.Parent = runtimeState.content
+	local rootParent = if crispContent then runtimeState.wrapper else runtimeState.content
+	local targetMinZIndex = if crispContent then runtimeState.wrapper.ZIndex + 1 else runtimeState.content.ZIndex + 1
+
+	root.Parent = rootParent
 	root.AnchorPoint = Vector2.zero
 	root.Position = UDim2.fromOffset(rootOffset.X, rootOffset.Y)
 	root.Size = UDim2.fromOffset(rootAbsoluteSize.X, rootAbsoluteSize.Y)
-	root.ZIndex = runtimeState.content.ZIndex + 1
+	local zIndexLiftDelta = applyGuiTreeZIndexLift(
+		originalZIndexes,
+		minZIndex,
+		targetMinZIndex
+	)
+	self._rootLayoutSnapshotsByRoot[root].zIndexLiftDelta = zIndexLiftDelta
+	self:_raiseTransitionOverlayAbove(root)
 	root.Visible = true
 end
 
-function MerchantPresentationController:_playOpenReveal(root: GuiObject)
+function MerchantPresentationController:_playOpenReveal(root: GuiObject, crispContent: boolean?)
 	local runtimeState = self:_ensureRuntimeContent(root)
 	local overlay = self:_ensureOverlay()
+	self:_raiseTransitionOverlayAbove(root)
 
 	local fadeTween = TweenService:Create(overlay, OPEN_REVEAL_TWEEN, {
 		BackgroundTransparency = 1,
 	})
-	local groupTween = TweenService:Create(runtimeState.content, OPEN_REVEAL_TWEEN, {
-		GroupTransparency = 0,
-	})
-	local scaleTween = TweenService:Create(runtimeState.scale, OPEN_SCALE_TWEEN, {
-		Scale = 1,
-	})
 
 	fadeTween:Play()
-	groupTween:Play()
-	scaleTween:Play()
+
+	if crispContent then
+		runtimeState.content.GroupTransparency = 1
+		runtimeState.scale.Scale = 1
+	else
+		local groupTween = TweenService:Create(runtimeState.content, OPEN_REVEAL_TWEEN, {
+			GroupTransparency = 0,
+		})
+		local scaleTween = TweenService:Create(runtimeState.scale, OPEN_SCALE_TWEEN, {
+			Scale = 1,
+		})
+
+		groupTween:Play()
+		scaleTween:Play()
+	end
 
 	fadeTween.Completed:Wait()
+	self:_hideOverlay()
 end
 
 function MerchantPresentationController:_playCloseBlackout()
 	local overlay = self:_ensureOverlay()
+	self:_raiseTransitionOverlayAbove(self._activeRoot)
 	overlay.Visible = true
 	overlay.BackgroundTransparency = 1
 	tweenAsync(overlay, CLOSE_BLACKOUT_TWEEN, {
@@ -799,6 +903,7 @@ end
 
 function MerchantPresentationController:_playOpenBlackout()
 	local overlay = self:_ensureOverlay()
+	self:_raiseTransitionOverlayAbove(nil)
 	overlay.Visible = true
 	overlay.BackgroundTransparency = 1
 	tweenAsync(overlay, OPEN_BLACKOUT_TWEEN, {
@@ -854,7 +959,8 @@ function MerchantPresentationController:_midpointOpen(frameName: string, root: G
 	self:_freezePlayer()
 
 	local backdrop = self:_ensureBackdrop()
-	self:_prepareShopRoot(root)
+	local crispContent = options and options.crispContent == true
+	self:_prepareShopRoot(root, crispContent)
 	local runtimeWrapper = self._runtimeWrapperByRoot[root]
 	local backdropTransparency = if options and typeof(options.backdropTransparency) == "number"
 		then math.clamp(options.backdropTransparency, 0, 1)
@@ -913,7 +1019,7 @@ function MerchantPresentationController:Open(frameName: string, options: OpenOpt
 	local ok, err = xpcall(function()
 		self:_playOpenBlackout()
 		self:_midpointOpen(frameName, root, options)
-		self:_playOpenReveal(root)
+		self:_playOpenReveal(root, if options then options.crispContent == true else false)
 		self:_hideOverlay()
 		self:_startCameraParallax(if options then options.cameraPart else nil)
 	end, debug.traceback)

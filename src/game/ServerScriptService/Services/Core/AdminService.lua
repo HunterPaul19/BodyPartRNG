@@ -21,6 +21,7 @@ local BodyPartVisuals = require(ReplicatedStorage.Shared.Character.BodyPartVisua
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local AuraConfig = require(ReplicatedStorage.Shared.Config.AuraConfig)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local CraftingMaterialConfig = require(ReplicatedStorage.Shared.Config.CraftingMaterialConfig)
 local MerchantShopConfig = require(ReplicatedStorage.Shared.Config.MerchantShopConfig)
 local MerchantShopService = require(script.Parent.MerchantShopService)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
@@ -33,6 +34,7 @@ local RollTypes = require(ReplicatedStorage.Shared.Config.RollTypes)
 local RollTargetRegions = require(ReplicatedStorage.Shared.Character.RollTargetRegions)
 local Schema = require(ReplicatedStorage.Lists.Schema)
 local TitleConfig = require(ReplicatedStorage.Shared.Config.TitleConfig)
+local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local ADMIN_ACTION_REMOTE_NAME = "AdminAction"
@@ -1096,6 +1098,111 @@ local function handleGrantAura(player: Player, payload: any)
 	})
 end
 
+local function handleGrantAccessory(player: Player, payload: any, expectedSlot: AccessoryConfig.AccessorySlot)
+	local accessoryId = payload.accessoryId
+	if typeof(accessoryId) ~= "string" or accessoryId == "" then
+		return response(false, "BAD_REQUEST", "A valid accessoryId is required.")
+	end
+
+	local accessoryConfig = AccessoryConfig.Get(accessoryId)
+	if not accessoryConfig then
+		return response(false, "BAD_REQUEST", string.format("Unknown accessoryId '%s'.", tostring(accessoryId)))
+	end
+	if accessoryConfig.slot ~= expectedSlot then
+		return response(false, "BAD_REQUEST", string.format('"%s" is not a %s accessory.', accessoryConfig.label, expectedSlot))
+	end
+
+	local grantedRecord, grantError = DataService:AddOwnedAccessory(player, {
+		accessoryId = accessoryConfig.id,
+	})
+	if not grantedRecord then
+		return response(false, "GRANT_FAILED", grantError or "Could not grant that accessory.")
+	end
+
+	return response(true, "OK", string.format('Granted "%s" (%s).', accessoryConfig.label, grantedRecord.ownedId), {
+		grantedRecord = grantedRecord,
+		accessoryState = {
+			ownedAccessories = DataService:GetOwnedAccessories(player),
+			equippedAccessories = DataService:GetEquippedAccessories(player),
+		},
+	})
+end
+
+local function resolvePayloadTargetOrSelf(player: Player, payload: any): (Player?, string?)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, player)
+	if targetPlayer then
+		return targetPlayer, nil
+	end
+	if payload and payload.userId ~= nil then
+		return nil, errorMessage or "Could not resolve the target player."
+	end
+	return player, nil
+end
+
+local function buildCraftingMaterialGrantData(targetPlayer: Player)
+	return {
+		craftingMaterials = DataService:GetCraftingMaterialsState(targetPlayer),
+	}
+end
+
+local function handleGrantCraftingMaterial(player: Player, payload: any)
+	local targetPlayer, errorMessage = resolvePayloadTargetOrSelf(player, payload)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local materialId = trimText(payload.materialId)
+	local materialConfig = CraftingMaterialConfig.Get(materialId)
+	if not materialConfig then
+		return response(false, "BAD_REQUEST", "A valid materialId is required.")
+	end
+
+	local amount = math.max(1, toWholeNumber(payload.amount, 1))
+	local updatedAmount, grantError = DataService:AddCraftingMaterial(targetPlayer, materialConfig.id, amount)
+	if not updatedAmount then
+		return response(false, "GRANT_FAILED", grantError or "Could not grant that crafting material.")
+	end
+
+	return response(
+		true,
+		"OK",
+		string.format('Granted %s x%d to %s (%d total).', materialConfig.label, amount, targetPlayer.Name, updatedAmount),
+		buildCraftingMaterialGrantData(targetPlayer)
+	)
+end
+
+local function handleGrantAllCraftingMaterials(player: Player, payload: any)
+	local targetPlayer, errorMessage = resolvePayloadTargetOrSelf(player, payload)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local amount = math.max(1, toWholeNumber(payload.amount, 1))
+	local grantedAmounts = {}
+	for _, materialConfig in ipairs(CraftingMaterialConfig.GetAll()) do
+		local updatedAmount, grantError = DataService:AddCraftingMaterial(targetPlayer, materialConfig.id, amount)
+		if not updatedAmount then
+			return response(
+				false,
+				"GRANT_FAILED",
+				grantError or string.format("Could not grant %s.", materialConfig.label),
+				buildCraftingMaterialGrantData(targetPlayer)
+			)
+		end
+		grantedAmounts[materialConfig.id] = updatedAmount
+	end
+
+	return response(
+		true,
+		"OK",
+		string.format("Granted %d of each configured crafting material to %s.", amount, targetPlayer.Name),
+		{
+			grantedAmounts = grantedAmounts,
+			craftingMaterials = DataService:GetCraftingMaterialsState(targetPlayer),
+		}
+	)
+end
+
 local function handleApplyVisualRegion(player: Player, payload: any)
 	local region = payload.region
 	local bundleName = payload.bundleName
@@ -1668,6 +1775,22 @@ function AdminService:HandleAction(player: Player, request: any)
 	if tabId == BODY_PARTS_TAB_ID then
 		if actionId == "grant_body_part" then
 			return handleGrantBodyPart(player, payload)
+		end
+
+		if actionId == "grant_head_accessory" then
+			return handleGrantAccessory(player, payload, "HeadAccessory")
+		end
+
+		if actionId == "grant_gear_accessory" then
+			return handleGrantAccessory(player, payload, "GearAccessory")
+		end
+
+		if actionId == "grant_crafting_material" then
+			return handleGrantCraftingMaterial(player, payload)
+		end
+
+		if actionId == "grant_all_crafting_materials" then
+			return handleGrantAllCraftingMaterials(player, payload)
 		end
 
 		if actionId == "grant_full_set" then

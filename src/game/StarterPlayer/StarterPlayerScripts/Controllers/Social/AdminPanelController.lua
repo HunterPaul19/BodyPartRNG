@@ -5,8 +5,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
+local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
 local AuraConfig = require(ReplicatedStorage.Shared.Config.AuraConfig)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local CraftingMaterialConfig = require(ReplicatedStorage.Shared.Config.CraftingMaterialConfig)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
 local AdminPanelDefinitions = require(ReplicatedStorage.Shared.UI.AdminPanelDefinitions)
@@ -21,6 +23,8 @@ local OVERVIEW_TAB_ID = "overview"
 local PLAYERS_TAB_ID = "players"
 local PROGRESSION_TAB_ID = "progression"
 local BODY_PARTS_TAB_ID = "bodyParts"
+local HEAD_ACCESSORY_SLOT = "HeadAccessory"
+local GEAR_ACCESSORY_SLOT = "GearAccessory"
 local WINDOW_NAME = "AdminPanel"
 local TOGGLE_KEY = Enum.KeyCode.P
 local SUCCESS_COLOR = Color3.fromRGB(120, 255, 178)
@@ -34,6 +38,7 @@ local SANDBOX_STROKE_COLOR = Color3.fromRGB(62, 74, 111)
 local SANDBOX_FIELD_COLOR = Color3.fromRGB(24, 31, 55)
 local SANDBOX_BUTTON_COLOR = Color3.fromRGB(45, 59, 103)
 local SANDBOX_BUTTON_TEXT_COLOR = Color3.fromRGB(235, 240, 255)
+local DEFAULT_CRAFTING_MATERIAL_GRANT_AMOUNT = "25"
 
 local AdminPanelController = {}
 
@@ -69,6 +74,10 @@ function AdminPanelController:_ensureState()
 	self._runtimeUi = {}
 	self._grantSelectedPieceId = nil :: string?
 	self._grantSelectedAuraId = nil :: string?
+	self._grantSelectedHeadAccessoryId = nil :: string?
+	self._grantSelectedGearAccessoryId = nil :: string?
+	self._grantSelectedCraftingMaterialId = nil :: string?
+	self._grantCraftingMaterialAmountText = DEFAULT_CRAFTING_MATERIAL_GRANT_AMOUNT
 	self._grantUi = {}
 	self._playerStatsSelectedUserId = nil
 	self._playerStatsSummary = nil
@@ -1494,11 +1503,74 @@ function AdminPanelController:_getGrantAuraOptions()
 	return auras
 end
 
+function AdminPanelController:_getGrantAccessoryOptions(slot: string)
+	local accessories = {}
+
+	for _, accessoryConfig in ipairs(AccessoryConfig.GetAll()) do
+		if accessoryConfig.slot == slot then
+			table.insert(accessories, accessoryConfig)
+		end
+	end
+
+	return accessories
+end
+
+function AdminPanelController:_getGrantCraftingMaterialOptions()
+	local materials = {}
+
+	for _, materialConfig in ipairs(CraftingMaterialConfig.GetAll()) do
+		table.insert(materials, materialConfig)
+	end
+
+	return materials
+end
+
 function AdminPanelController:_getSelectedGrantAura()
 	local selectedAuraId = self._grantSelectedAuraId
 	for _, auraConfig in ipairs(self:_getGrantAuraOptions()) do
 		if auraConfig.id == selectedAuraId then
 			return auraConfig
+		end
+	end
+
+	return nil
+end
+
+function AdminPanelController:_getSelectedGrantCraftingMaterial()
+	local selectedMaterialId = self._grantSelectedCraftingMaterialId
+	for _, materialConfig in ipairs(self:_getGrantCraftingMaterialOptions()) do
+		if materialConfig.id == selectedMaterialId then
+			return materialConfig
+		end
+	end
+
+	return nil
+end
+
+function AdminPanelController:_getSelectedGrantAccessoryId(slot: string): string?
+	if slot == HEAD_ACCESSORY_SLOT then
+		return self._grantSelectedHeadAccessoryId
+	end
+	if slot == GEAR_ACCESSORY_SLOT then
+		return self._grantSelectedGearAccessoryId
+	end
+
+	return nil
+end
+
+function AdminPanelController:_setSelectedGrantAccessoryId(slot: string, accessoryId: string?)
+	if slot == HEAD_ACCESSORY_SLOT then
+		self._grantSelectedHeadAccessoryId = accessoryId
+	elseif slot == GEAR_ACCESSORY_SLOT then
+		self._grantSelectedGearAccessoryId = accessoryId
+	end
+end
+
+function AdminPanelController:_getSelectedGrantAccessory(slot: string)
+	local selectedAccessoryId = self:_getSelectedGrantAccessoryId(slot)
+	for _, accessoryConfig in ipairs(self:_getGrantAccessoryOptions(slot)) do
+		if accessoryConfig.id == selectedAccessoryId then
+			return accessoryConfig
 		end
 	end
 
@@ -1545,6 +1617,87 @@ function AdminPanelController:_formatGrantAura(auraConfig: AuraConfig.AuraConfig
 	}, "\n")
 end
 
+local function formatAccessoryBonusSummary(accessoryConfig: any): string
+	local bonuses = if typeof(accessoryConfig.bonuses) == "table" then accessoryConfig.bonuses else {}
+	local parts = {}
+
+	local function addPercent(key: string, label: string)
+		local value = tonumber(bonuses[key])
+		if value and math.abs(value) > 0.0001 then
+			table.insert(parts, string.format("%s %s", label, formatSignedPercent(value)))
+		end
+	end
+
+	local function addMultiplier(key: string, label: string)
+		local value = tonumber(bonuses[key])
+		if value and math.abs(value - 1) > 0.0001 then
+			table.insert(parts, string.format("%s x%s", label, formatNumberish(value)))
+		end
+	end
+
+	local function addFlat(key: string, label: string)
+		local value = tonumber(bonuses[key])
+		if value and math.abs(value) > 0.0001 then
+			table.insert(parts, string.format("%s +%s", label, formatNumberish(value)))
+		end
+	end
+
+	addPercent("luckBonus", "Luck")
+	addMultiplier("luckMultiplier", "Luck")
+	addPercent("rollSpeedBonus", "Roll Speed")
+	addFlat("passiveIncomePerSecondBonus", "Income / s")
+	addMultiplier("passiveIncomeMultiplier", "Income")
+	addFlat("damageBonus", "Damage")
+	addMultiplier("damageMultiplier", "Damage")
+	addFlat("healthBonus", "Health")
+	addMultiplier("healthMultiplier", "Health")
+	addFlat("speedBonus", "Speed")
+	addMultiplier("speedMultiplier", "Speed")
+
+	if #parts == 0 then
+		return "None"
+	end
+
+	return table.concat(parts, ", ")
+end
+
+function AdminPanelController:_formatGrantAccessory(accessoryConfig: any): string
+	if not accessoryConfig then
+		return "No accessories are available."
+	end
+
+	local source = if accessoryConfig.bossId and accessoryConfig.bossId ~= "" then accessoryConfig.bossId else "General"
+
+	return table.concat({
+		accessoryConfig.label,
+		string.format("Accessory ID: %s", accessoryConfig.id),
+		string.format("Tier: %s", accessoryConfig.tierLabel),
+		string.format("Source: %s", source),
+		string.format("Bonuses: %s", formatAccessoryBonusSummary(accessoryConfig)),
+	}, "\n")
+end
+
+function AdminPanelController:_formatGrantCraftingMaterial(materialConfig: any): string
+	if not materialConfig then
+		return "No crafting materials are available."
+	end
+
+	return table.concat({
+		materialConfig.label,
+		string.format("Material ID: %s", materialConfig.id),
+		materialConfig.description,
+	}, "\n")
+end
+
+function AdminPanelController:_getGrantCraftingMaterialAmount(): number?
+	local amount = tonumber(trimText(self._grantCraftingMaterialAmountText))
+	if amount == nil or amount ~= amount then
+		return nil
+	end
+
+	return math.max(1, math.floor(amount))
+end
+
 function AdminPanelController:_syncGrantUi()
 	local ui = self._grantUi
 	if not ui or next(ui) == nil then
@@ -1553,8 +1706,14 @@ function AdminPanelController:_syncGrantUi()
 
 	local bodyPartOptions = self:_getGrantBodyPartOptions()
 	local auraOptions = self:_getGrantAuraOptions()
+	local headAccessoryOptions = self:_getGrantAccessoryOptions(HEAD_ACCESSORY_SLOT)
+	local gearAccessoryOptions = self:_getGrantAccessoryOptions(GEAR_ACCESSORY_SLOT)
+	local craftingMaterialOptions = self:_getGrantCraftingMaterialOptions()
 	local selectedPiece = self:_getSelectedGrantBodyPart()
 	local selectedAura = self:_getSelectedGrantAura()
+	local selectedHeadAccessory = self:_getSelectedGrantAccessory(HEAD_ACCESSORY_SLOT)
+	local selectedGearAccessory = self:_getSelectedGrantAccessory(GEAR_ACCESSORY_SLOT)
+	local selectedCraftingMaterial = self:_getSelectedGrantCraftingMaterial()
 
 	if selectedPiece == nil and bodyPartOptions[1] then
 		self._grantSelectedPieceId = bodyPartOptions[1].id
@@ -1566,8 +1725,39 @@ function AdminPanelController:_syncGrantUi()
 		selectedAura = auraOptions[1]
 	end
 
+	if selectedHeadAccessory == nil and headAccessoryOptions[1] then
+		self._grantSelectedHeadAccessoryId = headAccessoryOptions[1].id
+		selectedHeadAccessory = headAccessoryOptions[1]
+	end
+
+	if selectedGearAccessory == nil and gearAccessoryOptions[1] then
+		self._grantSelectedGearAccessoryId = gearAccessoryOptions[1].id
+		selectedGearAccessory = gearAccessoryOptions[1]
+	end
+
+	if selectedCraftingMaterial == nil and craftingMaterialOptions[1] then
+		self._grantSelectedCraftingMaterialId = craftingMaterialOptions[1].id
+		selectedCraftingMaterial = craftingMaterialOptions[1]
+	end
+
 	if ui.bodyPartValue and ui.bodyPartValue:IsA("TextLabel") then
 		ui.bodyPartValue.Text = self:_formatGrantBodyPart(selectedPiece)
+	end
+
+	if ui.headAccessoryValue and ui.headAccessoryValue:IsA("TextLabel") then
+		ui.headAccessoryValue.Text = self:_formatGrantAccessory(selectedHeadAccessory)
+	end
+
+	if ui.gearAccessoryValue and ui.gearAccessoryValue:IsA("TextLabel") then
+		ui.gearAccessoryValue.Text = self:_formatGrantAccessory(selectedGearAccessory)
+	end
+
+	if ui.craftingMaterialValue and ui.craftingMaterialValue:IsA("TextLabel") then
+		ui.craftingMaterialValue.Text = self:_formatGrantCraftingMaterial(selectedCraftingMaterial)
+	end
+
+	if ui.craftingMaterialAmountInput and ui.craftingMaterialAmountInput:IsA("TextBox") and not ui.craftingMaterialAmountInput:IsFocused() then
+		ui.craftingMaterialAmountInput.Text = self._grantCraftingMaterialAmountText
 	end
 
 	if ui.auraValue and ui.auraValue:IsA("TextLabel") then
@@ -1576,9 +1766,29 @@ function AdminPanelController:_syncGrantUi()
 
 	local hasBodyPartOptions = #bodyPartOptions > 0
 	local hasAuraOptions = #auraOptions > 0
+	local hasHeadAccessoryOptions = #headAccessoryOptions > 0
+	local hasGearAccessoryOptions = #gearAccessoryOptions > 0
+	local hasCraftingMaterialOptions = #craftingMaterialOptions > 0
 
 	for _, button in ipairs({ ui.bodyPartPrevButton, ui.bodyPartNextButton, ui.grantBodyPartButton }) do
 		setSandboxButtonEnabled(button, hasBodyPartOptions)
+	end
+
+	for _, button in ipairs({ ui.headAccessoryPrevButton, ui.headAccessoryNextButton, ui.grantHeadAccessoryButton }) do
+		setSandboxButtonEnabled(button, hasHeadAccessoryOptions)
+	end
+
+	for _, button in ipairs({ ui.gearAccessoryPrevButton, ui.gearAccessoryNextButton, ui.grantGearAccessoryButton }) do
+		setSandboxButtonEnabled(button, hasGearAccessoryOptions)
+	end
+
+	for _, button in ipairs({
+		ui.craftingMaterialPrevButton,
+		ui.craftingMaterialNextButton,
+		ui.grantCraftingMaterialButton,
+		ui.grantAllCraftingMaterialsButton,
+	}) do
+		setSandboxButtonEnabled(button, hasCraftingMaterialOptions)
 	end
 
 	for _, button in ipairs({ ui.auraPrevButton, ui.auraNextButton, ui.grantAuraButton }) do
@@ -1630,6 +1840,52 @@ function AdminPanelController:_cycleGrantAura(direction: number)
 	self:_syncGrantUi()
 end
 
+function AdminPanelController:_cycleGrantAccessory(slot: string, direction: number)
+	local options = self:_getGrantAccessoryOptions(slot)
+	local slotLabel = if slot == HEAD_ACCESSORY_SLOT then "head accessories" else "gear accessories"
+	if #options == 0 then
+		self:_setSelectedGrantAccessoryId(slot, nil)
+		self:_syncGrantUi()
+		self:_setStatus(string.format("No %s are configured to grant.", slotLabel), ERROR_COLOR)
+		return
+	end
+
+	local currentIndex = 1
+	local selectedAccessoryId = self:_getSelectedGrantAccessoryId(slot)
+	for index, accessoryConfig in ipairs(options) do
+		if accessoryConfig.id == selectedAccessoryId then
+			currentIndex = index
+			break
+		end
+	end
+
+	local nextIndex = ((currentIndex - 1 + direction) % #options) + 1
+	self:_setSelectedGrantAccessoryId(slot, options[nextIndex].id)
+	self:_syncGrantUi()
+end
+
+function AdminPanelController:_cycleGrantCraftingMaterial(direction: number)
+	local options = self:_getGrantCraftingMaterialOptions()
+	if #options == 0 then
+		self._grantSelectedCraftingMaterialId = nil
+		self:_syncGrantUi()
+		self:_setStatus("No crafting materials are configured to grant.", ERROR_COLOR)
+		return
+	end
+
+	local currentIndex = 1
+	for index, materialConfig in ipairs(options) do
+		if materialConfig.id == self._grantSelectedCraftingMaterialId then
+			currentIndex = index
+			break
+		end
+	end
+
+	local nextIndex = ((currentIndex - 1 + direction) % #options) + 1
+	self._grantSelectedCraftingMaterialId = options[nextIndex].id
+	self:_syncGrantUi()
+end
+
 function AdminPanelController:_grantSelectedBodyPart()
 	local selectedPiece = self:_getSelectedGrantBodyPart()
 	if not selectedPiece then
@@ -1650,6 +1906,72 @@ function AdminPanelController:_grantSelectedBodyPart()
 
 	if typeof(result.data) == "table" and typeof(result.data.runtimeState) == "table" then
 		self:_applyRuntimeState(result.data.runtimeState)
+	end
+
+	self:_setStatus(tostring(result.message or "No response message provided."), if result.ok then SUCCESS_COLOR else ERROR_COLOR)
+end
+
+function AdminPanelController:_grantSelectedAccessory(slot: string)
+	local selectedAccessory = self:_getSelectedGrantAccessory(slot)
+	local slotLabel = if slot == HEAD_ACCESSORY_SLOT then "head accessory" else "gear accessory"
+	if not selectedAccessory then
+		self:_setStatus(string.format("Select a %s to grant first.", slotLabel), ERROR_COLOR)
+		return
+	end
+
+	local actionId = if slot == HEAD_ACCESSORY_SLOT then "grant_head_accessory" else "grant_gear_accessory"
+	local ok, result = self:_invokeAdminRequest(BODY_PARTS_TAB_ID, actionId, string.format("Granting %s", slotLabel), {
+		accessoryId = selectedAccessory.id,
+	})
+	if not ok or not result then
+		return
+	end
+
+	self:_setStatus(tostring(result.message or "No response message provided."), if result.ok then SUCCESS_COLOR else ERROR_COLOR)
+end
+
+function AdminPanelController:_grantSelectedCraftingMaterial()
+	local selectedMaterial = self:_getSelectedGrantCraftingMaterial()
+	if not selectedMaterial then
+		self:_setStatus("Select a crafting material to grant first.", ERROR_COLOR)
+		return
+	end
+
+	local amount = self:_getGrantCraftingMaterialAmount()
+	if not amount then
+		self:_setStatus("Enter a valid material amount.", ERROR_COLOR)
+		return
+	end
+
+	self._grantCraftingMaterialAmountText = tostring(amount)
+	self:_syncGrantUi()
+
+	local ok, result = self:_invokeAdminRequest(BODY_PARTS_TAB_ID, "grant_crafting_material", "Granting crafting material", {
+		materialId = selectedMaterial.id,
+		amount = amount,
+	})
+	if not ok or not result then
+		return
+	end
+
+	self:_setStatus(tostring(result.message or "No response message provided."), if result.ok then SUCCESS_COLOR else ERROR_COLOR)
+end
+
+function AdminPanelController:_grantAllCraftingMaterials()
+	local amount = self:_getGrantCraftingMaterialAmount()
+	if not amount then
+		self:_setStatus("Enter a valid material amount.", ERROR_COLOR)
+		return
+	end
+
+	self._grantCraftingMaterialAmountText = tostring(amount)
+	self:_syncGrantUi()
+
+	local ok, result = self:_invokeAdminRequest(BODY_PARTS_TAB_ID, "grant_all_crafting_materials", "Granting crafting materials", {
+		amount = amount,
+	})
+	if not ok or not result then
+		return
 	end
 
 	self:_setStatus(tostring(result.message or "No response message provided."), if result.ok then SUCCESS_COLOR else ERROR_COLOR)
@@ -2299,7 +2621,7 @@ function AdminPanelController:_createVisualSandboxSection(parent: ScrollingFrame
 end
 
 function AdminPanelController:_createGrantInventorySection(parent: ScrollingFrame)
-	self:_createSectionHeader(parent, "Grant Inventory", "Grant a selected body part or aura directly to your own account for testing without leaving the admin panel.")
+	self:_createSectionHeader(parent, "Grant Inventory", "Grant selected body parts, accessories, or auras directly to your own account for testing without leaving the admin panel.")
 
 	local card = Instance.new("Frame")
 	card.Name = "GrantInventoryCard"
@@ -2341,7 +2663,7 @@ function AdminPanelController:_createGrantInventorySection(parent: ScrollingFram
 	description.Size = UDim2.new(1, 0, 0, 34)
 	description.AutomaticSize = Enum.AutomaticSize.Y
 	description.Font = Enum.Font.Gotham
-	description.Text = "These grants go straight to your live profile data. Body parts are stored with default None/Normal variants, and aura grants reuse the normal unlock path."
+	description.Text = "These grants go straight to your live profile data. Body parts use default None/Normal variants, accessories add owned inventory records, materials update crafting amounts, and aura grants reuse the normal unlock path."
 	description.TextWrapped = true
 	description.TextSize = 14
 	description.TextXAlignment = Enum.TextXAlignment.Left
@@ -2385,6 +2707,142 @@ function AdminPanelController:_createGrantInventorySection(parent: ScrollingFram
 		self:_grantSelectedBodyPart()
 	end)
 
+	local headAccessoryField = self:_createSandboxField(card, "Grant Head Accessory")
+	local headAccessoryRow = Instance.new("Frame")
+	headAccessoryRow.Name = "ValueRow"
+	headAccessoryRow.BackgroundTransparency = 1
+	headAccessoryRow.Size = UDim2.new(1, 0, 0, 104)
+	headAccessoryRow.Parent = headAccessoryField
+	setGenerated(headAccessoryRow)
+
+	local headAccessoryPrevButton = self:_createSandboxButton(headAccessoryRow, "PrevButton", "<", UDim2.fromOffset(38, 36), function()
+		self:_cycleGrantAccessory(HEAD_ACCESSORY_SLOT, -1)
+	end)
+
+	local headAccessoryValue = Instance.new("TextLabel")
+	headAccessoryValue.Name = "ValueLabel"
+	headAccessoryValue.BackgroundTransparency = 1
+	headAccessoryValue.Position = UDim2.fromOffset(48, 0)
+	headAccessoryValue.Size = UDim2.new(1, -96, 1, 0)
+	headAccessoryValue.Font = Enum.Font.GothamSemibold
+	headAccessoryValue.TextColor3 = Color3.fromRGB(244, 247, 255)
+	headAccessoryValue.TextSize = 14
+	headAccessoryValue.TextWrapped = true
+	headAccessoryValue.TextXAlignment = Enum.TextXAlignment.Left
+	headAccessoryValue.TextYAlignment = Enum.TextYAlignment.Top
+	headAccessoryValue.Parent = headAccessoryRow
+	setGenerated(headAccessoryValue)
+
+	local headAccessoryNextButton = self:_createSandboxButton(headAccessoryRow, "NextButton", ">", UDim2.fromOffset(38, 36), function()
+		self:_cycleGrantAccessory(HEAD_ACCESSORY_SLOT, 1)
+	end)
+	headAccessoryNextButton.Position = UDim2.new(1, -38, 0, 0)
+
+	local grantHeadAccessoryButton = self:_createSandboxButton(card, "GrantHeadAccessoryButton", "Grant Selected Head Accessory", UDim2.new(1, 0, 0, 40), function()
+		self:_grantSelectedAccessory(HEAD_ACCESSORY_SLOT)
+	end)
+
+	local gearAccessoryField = self:_createSandboxField(card, "Grant Gear Accessory")
+	local gearAccessoryRow = Instance.new("Frame")
+	gearAccessoryRow.Name = "ValueRow"
+	gearAccessoryRow.BackgroundTransparency = 1
+	gearAccessoryRow.Size = UDim2.new(1, 0, 0, 104)
+	gearAccessoryRow.Parent = gearAccessoryField
+	setGenerated(gearAccessoryRow)
+
+	local gearAccessoryPrevButton = self:_createSandboxButton(gearAccessoryRow, "PrevButton", "<", UDim2.fromOffset(38, 36), function()
+		self:_cycleGrantAccessory(GEAR_ACCESSORY_SLOT, -1)
+	end)
+
+	local gearAccessoryValue = Instance.new("TextLabel")
+	gearAccessoryValue.Name = "ValueLabel"
+	gearAccessoryValue.BackgroundTransparency = 1
+	gearAccessoryValue.Position = UDim2.fromOffset(48, 0)
+	gearAccessoryValue.Size = UDim2.new(1, -96, 1, 0)
+	gearAccessoryValue.Font = Enum.Font.GothamSemibold
+	gearAccessoryValue.TextColor3 = Color3.fromRGB(244, 247, 255)
+	gearAccessoryValue.TextSize = 14
+	gearAccessoryValue.TextWrapped = true
+	gearAccessoryValue.TextXAlignment = Enum.TextXAlignment.Left
+	gearAccessoryValue.TextYAlignment = Enum.TextYAlignment.Top
+	gearAccessoryValue.Parent = gearAccessoryRow
+	setGenerated(gearAccessoryValue)
+
+	local gearAccessoryNextButton = self:_createSandboxButton(gearAccessoryRow, "NextButton", ">", UDim2.fromOffset(38, 36), function()
+		self:_cycleGrantAccessory(GEAR_ACCESSORY_SLOT, 1)
+	end)
+	gearAccessoryNextButton.Position = UDim2.new(1, -38, 0, 0)
+
+	local grantGearAccessoryButton = self:_createSandboxButton(card, "GrantGearAccessoryButton", "Grant Selected Gear Accessory", UDim2.new(1, 0, 0, 40), function()
+		self:_grantSelectedAccessory(GEAR_ACCESSORY_SLOT)
+	end)
+
+	local craftingMaterialField = self:_createSandboxField(card, "Grant Crafting Material")
+	local craftingMaterialRow = Instance.new("Frame")
+	craftingMaterialRow.Name = "ValueRow"
+	craftingMaterialRow.BackgroundTransparency = 1
+	craftingMaterialRow.Size = UDim2.new(1, 0, 0, 74)
+	craftingMaterialRow.Parent = craftingMaterialField
+	setGenerated(craftingMaterialRow)
+
+	local craftingMaterialPrevButton = self:_createSandboxButton(craftingMaterialRow, "PrevButton", "<", UDim2.fromOffset(38, 36), function()
+		self:_cycleGrantCraftingMaterial(-1)
+	end)
+
+	local craftingMaterialValue = Instance.new("TextLabel")
+	craftingMaterialValue.Name = "ValueLabel"
+	craftingMaterialValue.BackgroundTransparency = 1
+	craftingMaterialValue.Position = UDim2.fromOffset(48, 0)
+	craftingMaterialValue.Size = UDim2.new(1, -96, 1, 0)
+	craftingMaterialValue.Font = Enum.Font.GothamSemibold
+	craftingMaterialValue.TextColor3 = Color3.fromRGB(244, 247, 255)
+	craftingMaterialValue.TextSize = 14
+	craftingMaterialValue.TextWrapped = true
+	craftingMaterialValue.TextXAlignment = Enum.TextXAlignment.Left
+	craftingMaterialValue.TextYAlignment = Enum.TextYAlignment.Top
+	craftingMaterialValue.Parent = craftingMaterialRow
+	setGenerated(craftingMaterialValue)
+
+	local craftingMaterialNextButton = self:_createSandboxButton(craftingMaterialRow, "NextButton", ">", UDim2.fromOffset(38, 36), function()
+		self:_cycleGrantCraftingMaterial(1)
+	end)
+	craftingMaterialNextButton.Position = UDim2.new(1, -38, 0, 0)
+
+	local materialAmountField = self:_createSandboxField(card, "Crafting Material Amount")
+	local craftingMaterialAmountInput = self:_createSandboxTextInput(
+		materialAmountField,
+		"CraftingMaterialAmountInput",
+		self._grantCraftingMaterialAmountText,
+		"25",
+		38
+	)
+	craftingMaterialAmountInput.FocusLost:Connect(function()
+		self._grantCraftingMaterialAmountText = craftingMaterialAmountInput.Text
+	end)
+
+	local materialActionRow = Instance.new("Frame")
+	materialActionRow.Name = "CraftingMaterialActionRow"
+	materialActionRow.BackgroundTransparency = 1
+	materialActionRow.Size = UDim2.new(1, 0, 0, 40)
+	materialActionRow.Parent = card
+	setGenerated(materialActionRow)
+
+	local materialActionLayout = Instance.new("UIListLayout")
+	materialActionLayout.FillDirection = Enum.FillDirection.Horizontal
+	materialActionLayout.Padding = UDim.new(0, 10)
+	materialActionLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+	materialActionLayout.Parent = materialActionRow
+	setGenerated(materialActionLayout)
+
+	local materialButtonSize = UDim2.new(0.5, -5, 1, 0)
+	local grantCraftingMaterialButton = self:_createSandboxButton(materialActionRow, "GrantCraftingMaterialButton", "Grant Selected Material", materialButtonSize, function()
+		self:_grantSelectedCraftingMaterial()
+	end)
+
+	local grantAllCraftingMaterialsButton = self:_createSandboxButton(materialActionRow, "GrantAllCraftingMaterialsButton", "Grant All Materials", materialButtonSize, function()
+		self:_grantAllCraftingMaterials()
+	end)
+
 	local auraField = self:_createSandboxField(card, "Grant Aura")
 	local auraRow = Instance.new("Frame")
 	auraRow.Name = "ValueRow"
@@ -2425,6 +2883,20 @@ function AdminPanelController:_createGrantInventorySection(parent: ScrollingFram
 		bodyPartNextButton = bodyPartNextButton,
 		bodyPartValue = bodyPartValue,
 		grantBodyPartButton = grantBodyPartButton,
+		headAccessoryPrevButton = headAccessoryPrevButton,
+		headAccessoryNextButton = headAccessoryNextButton,
+		headAccessoryValue = headAccessoryValue,
+		grantHeadAccessoryButton = grantHeadAccessoryButton,
+		gearAccessoryPrevButton = gearAccessoryPrevButton,
+		gearAccessoryNextButton = gearAccessoryNextButton,
+		gearAccessoryValue = gearAccessoryValue,
+		grantGearAccessoryButton = grantGearAccessoryButton,
+		craftingMaterialPrevButton = craftingMaterialPrevButton,
+		craftingMaterialNextButton = craftingMaterialNextButton,
+		craftingMaterialValue = craftingMaterialValue,
+		craftingMaterialAmountInput = craftingMaterialAmountInput,
+		grantCraftingMaterialButton = grantCraftingMaterialButton,
+		grantAllCraftingMaterialsButton = grantAllCraftingMaterialsButton,
 		auraPrevButton = auraPrevButton,
 		auraNextButton = auraNextButton,
 		auraValue = auraValue,
@@ -2836,8 +3308,15 @@ function AdminPanelController:_buildPage(tabDefinition: any, page: ScrollingFram
 
 		for _, action in ipairs(section.actions) do
 			local isCustomPlayerInspector = tabDefinition.id == PLAYERS_TAB_ID and action.id == "inspect_player_profile"
-			local isCustomBodyPartGrant = tabDefinition.id == BODY_PARTS_TAB_ID and action.id == "grant_body_part"
-			if not (isCustomPlayerInspector or isCustomBodyPartGrant) then
+			local isCustomGrantInventoryAction = tabDefinition.id == BODY_PARTS_TAB_ID
+				and (
+					action.id == "grant_body_part"
+					or action.id == "grant_head_accessory"
+					or action.id == "grant_gear_accessory"
+					or action.id == "grant_crafting_material"
+					or action.id == "grant_all_crafting_materials"
+				)
+			if not (isCustomPlayerInspector or isCustomGrantInventoryAction) then
 				self:_createActionCard(page, tabDefinition.id, action, actionTemplate)
 			end
 		end

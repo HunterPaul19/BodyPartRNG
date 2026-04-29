@@ -24,6 +24,10 @@ local GUI_ROOT_TIMEOUT = 10
 local PRELOAD_ROOT_TIMEOUT = 5
 local FADE_DURATION = 0.35
 local OPTIONAL_PRELOAD_TIMEOUT = 5
+local REMOTES_FOLDER_NAME = "Remotes"
+local BOSS_ARENA_FOLDER_NAME = "BossArena"
+local MARK_LOADING_DISMISSED_REMOTE_NAME = "MarkLoadingScreenDismissed"
+local BOSS_ARENA_PROFILE_ID = "boss_arena"
 
 local player = Players.LocalPlayer
 if not player then
@@ -390,6 +394,37 @@ local function fadeOutAndDestroy()
 	loadingScreen:Destroy()
 end
 
+local function markBossArenaLoadingDismissed()
+	if activeProfile.id ~= BOSS_ARENA_PROFILE_ID then
+		return
+	end
+
+	local remotesFolder = ReplicatedStorage:WaitForChild(REMOTES_FOLDER_NAME, 30)
+	if not (remotesFolder and remotesFolder:IsA("Folder")) then
+		Logger.Warn("[LoadingBootstrap] ReplicatedStorage.Remotes is missing; boss loading readiness was not sent.")
+		return
+	end
+
+	local bossArenaFolder = remotesFolder:WaitForChild(BOSS_ARENA_FOLDER_NAME, 30)
+	if not (bossArenaFolder and bossArenaFolder:IsA("Folder")) then
+		Logger.Warn("[LoadingBootstrap] ReplicatedStorage.Remotes.BossArena is missing; boss loading readiness was not sent.")
+		return
+	end
+
+	local markLoadingDismissed = bossArenaFolder:WaitForChild(MARK_LOADING_DISMISSED_REMOTE_NAME, 30)
+	if not (markLoadingDismissed and markLoadingDismissed:IsA("RemoteEvent")) then
+		Logger.Warn("[LoadingBootstrap] BossArena.MarkLoadingScreenDismissed is missing; boss loading readiness was not sent.")
+		return
+	end
+
+	local ok, err = pcall(function()
+		markLoadingDismissed:FireServer()
+	end)
+	if not ok then
+		Logger.Warn(string.format("[LoadingBootstrap] Failed to send boss loading readiness: %s", tostring(err)))
+	end
+end
+
 updateProgress()
 
 if skipButton and skipButton:IsA("GuiButton") then
@@ -507,3 +542,4 @@ if skipConnection then
 end
 
 fadeOutAndDestroy()
+markBossArenaLoadingDismissed()

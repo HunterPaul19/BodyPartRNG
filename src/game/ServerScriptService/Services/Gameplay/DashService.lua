@@ -10,6 +10,7 @@ local DashStateRules = require(ReplicatedStorage.Shared.Combat.DashStateRules)
 local REMOTES_FOLDER_NAME = "Remotes"
 local DASH_FOLDER_NAME = "Dash"
 local REQUEST_DASH_REMOTE_NAME = "RequestDash"
+local DASH_STARTED_REMOTE_NAME = "DashStarted"
 
 local FRONT_DASH_DURATION_SECONDS = 0.5
 local BACK_DASH_DURATION_SECONDS = 0.5
@@ -36,6 +37,7 @@ type CharacterHealthState = {
 local remotesFolder: Folder? = nil
 local dashFolder: Folder? = nil
 local requestDashRemote: RemoteFunction? = nil
+local dashStartedRemote: RemoteEvent? = nil
 
 local cooldownEndsAtByPlayer: { [Player]: number } = {}
 local characterStateByPlayer: { [Player]: CharacterHealthState } = {}
@@ -116,6 +118,28 @@ local function ensureRequestDashRemote(): RemoteFunction
 	remote.Name = REQUEST_DASH_REMOTE_NAME
 	remote.Parent = folder
 	requestDashRemote = remote
+	return remote
+end
+
+local function ensureDashStartedRemote(): RemoteEvent
+	local folder = ensureDashFolder()
+	if dashStartedRemote and dashStartedRemote.Parent == folder then
+		return dashStartedRemote
+	end
+
+	local existing = folder:FindFirstChild(DASH_STARTED_REMOTE_NAME)
+	if existing and existing:IsA("RemoteEvent") then
+		dashStartedRemote = existing
+		return existing
+	end
+	if existing then
+		existing:Destroy()
+	end
+
+	local remote = Instance.new("RemoteEvent")
+	remote.Name = DASH_STARTED_REMOTE_NAME
+	remote.Parent = folder
+	dashStartedRemote = remote
 	return remote
 end
 
@@ -321,6 +345,15 @@ function DashService:_approveDash(player: Player, rawDirection: any): { [string]
 		StateUtil.createState(character, "DashStun", POST_DASH_STUN_SECONDS)
 	end)
 
+	ensureDashStartedRemote():FireAllClients({
+		player = player,
+		userId = player.UserId,
+		direction = direction,
+		durationSeconds = durationSeconds,
+		serverStartedAt = now,
+		position = rootPart.Position,
+	})
+
 	return {
 		ok = true,
 		direction = direction,
@@ -336,6 +369,7 @@ function DashService:OnStart()
 	self._started = true
 
 	local requestRemote = ensureRequestDashRemote()
+	ensureDashStartedRemote()
 	requestRemote.OnServerInvoke = function(player: Player, direction: any): { [string]: any }
 		return self:_approveDash(player, direction)
 	end

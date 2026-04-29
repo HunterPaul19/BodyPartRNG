@@ -20,6 +20,8 @@ local GET_PVP_STATE_REMOTE_NAME = "GetPvpState"
 local SET_PVP_ENABLED_REMOTE_NAME = "SetPvpEnabled"
 local REQUEST_M1_REMOTE_NAME = "RequestPlayerM1"
 local PVP_STATE_CHANGED_REMOTE_NAME = "PvpStateChanged"
+local PLAYER_M1_STARTED_REMOTE_NAME = "PlayerM1Started"
+local PLAYER_HIT_CONFIRMED_REMOTE_NAME = "PlayerHitConfirmed"
 local SET_ENABLED_RATE_LIMIT_KEY = "remote.pvp.set_enabled"
 local REQUEST_M1_RATE_LIMIT_KEY = "remote.pvp.player_m1"
 local IMPACT_MARKER_NAME = "Impact"
@@ -60,6 +62,8 @@ local getPvpStateRemote: RemoteFunction? = nil
 local setPvpEnabledRemote: RemoteFunction? = nil
 local requestM1Remote: RemoteFunction? = nil
 local pvpStateChangedRemote: RemoteEvent? = nil
+local playerM1StartedRemote: RemoteEvent? = nil
+local playerHitConfirmedRemote: RemoteEvent? = nil
 local impactDelayCache: { [string]: number } = {}
 local pvpEnabledByPlayer: { [Player]: boolean } = {}
 local activeSwingByPlayer: { [Player]: SwingState } = {}
@@ -220,6 +224,16 @@ end
 local function ensurePvpStateChangedRemote(): RemoteEvent
 	pvpStateChangedRemote = ensureRemoteEvent(pvpStateChangedRemote, PVP_STATE_CHANGED_REMOTE_NAME)
 	return pvpStateChangedRemote
+end
+
+local function ensurePlayerM1StartedRemote(): RemoteEvent
+	playerM1StartedRemote = ensureRemoteEvent(playerM1StartedRemote, PLAYER_M1_STARTED_REMOTE_NAME)
+	return playerM1StartedRemote
+end
+
+local function ensurePlayerHitConfirmedRemote(): RemoteEvent
+	playerHitConfirmedRemote = ensureRemoteEvent(playerHitConfirmedRemote, PLAYER_HIT_CONFIRMED_REMOTE_NAME)
+	return playerHitConfirmedRemote
 end
 
 local function getM1Animations(): { Animation }
@@ -531,6 +545,17 @@ function PvpService:_spawnHitboxForSwing(player: Player, swingId: string)
 
 			targetHumanoid:TakeDamage(damage)
 			damagedTarget = true
+			local targetRootPart = resolveRootPart(targetModel, targetHumanoid)
+			ensurePlayerHitConfirmedRemote():FireAllClients({
+				attacker = player,
+				attackerUserId = player.UserId,
+				target = targetPlayer,
+				targetUserId = targetPlayer.UserId,
+				damage = damage,
+				serverTime = Workspace:GetServerTimeNow(),
+				position = rootPart.Position,
+				targetPosition = if targetRootPart then targetRootPart.Position else nil,
+			})
 			self:_schedulePvpStateBroadcast()
 		end,
 		HitboxDestroy = function()
@@ -641,6 +666,16 @@ function PvpService:_handleRequestM1(player: Player, predictedAnimationName: any
 	activeSwingByPlayer[player] = swingState
 	cooldownEndsAtByPlayer[player] = now + PlayerM1Config.CooldownSeconds
 
+	ensurePlayerM1StartedRemote():FireAllClients({
+		player = player,
+		userId = player.UserId,
+		swingId = swingId,
+		animationName = animationInstance.Name,
+		serverStartedAt = now,
+		impactDelaySeconds = impactDelaySeconds,
+		position = rootPart.Position,
+	})
+
 	task.delay(impactDelaySeconds, function()
 		self:_spawnHitboxForSwing(player, swingId)
 	end)
@@ -665,6 +700,8 @@ function PvpService:OnStart()
 	end
 
 	ensurePvpStateChangedRemote()
+	ensurePlayerM1StartedRemote()
+	ensurePlayerHitConfirmedRemote()
 
 	local getStateRemote = ensureGetPvpStateRemote()
 	getStateRemote.OnServerInvoke = function(player: Player)

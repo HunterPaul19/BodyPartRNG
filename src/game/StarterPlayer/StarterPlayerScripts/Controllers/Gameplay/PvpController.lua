@@ -6,6 +6,7 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
+local CombatSoundUtil = require(ReplicatedStorage.Shared.Audio.CombatSoundUtil)
 local AnimationUtil = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Utilities.AnimationUtil)
 local CameraShaker = require(ReplicatedStorage.Shared.Camera.CameraShaker)
 local PlayerM1AnimationResolver = require(ReplicatedStorage.Shared.BossArena.PlayerM1AnimationResolver)
@@ -464,6 +465,7 @@ function PvpController:_playApprovedSwing(response: RequestPlayerM1Response)
 		return
 	end
 
+	CombatSoundUtil.PlayLocalSwing()
 	self:_bindApprovedImpact(track, response)
 end
 

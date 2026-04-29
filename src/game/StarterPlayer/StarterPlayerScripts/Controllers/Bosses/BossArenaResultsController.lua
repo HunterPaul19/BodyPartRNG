@@ -5,6 +5,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local BossQueueConstants = require(ReplicatedStorage.Shared.BossQueue.Constants)
+local CraftingMaterialConfig = require(ReplicatedStorage.Shared.Config.CraftingMaterialConfig)
+local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 
@@ -21,12 +23,18 @@ local TEMPLATE_SUFFIX = "Template"
 local DEFEAT_COLOR = Color3.fromRGB(255, 67, 67)
 
 type BossResultRewardEntry = {
-	pieceId: string,
+	kind: string?,
+	pieceId: string?,
 	displayName: string,
-	setId: string,
-	displayRarity: string,
-	displayOddsDenominator: number,
-	isBossPart: boolean,
+	setId: string?,
+	displayRarity: string?,
+	displayOddsDenominator: number?,
+	isBossPart: boolean?,
+	materialId: string?,
+	amount: number?,
+	dropTier: string?,
+	chance: number?,
+	displayColor: Color3?,
 }
 
 type BossResultsState = {
@@ -37,6 +45,7 @@ type BossResultsState = {
 	endsAtServerTime: number,
 	durationSeconds: number,
 	rewards: { BossResultRewardEntry },
+	rewardStatus: string,
 	readyCount: number,
 	capacity: number,
 	isReplayReady: boolean,
@@ -94,12 +103,43 @@ local function normalizeRarity(value: any): string
 	return value
 end
 
+local function materialTierToTemplateRarity(dropTier: any): string
+	if dropTier == "Epic" then
+		return "Elite"
+	end
+	if dropTier == "Rare" then
+		return "Prime"
+	end
+	return "Basic"
+end
+
+local function isMaterialReward(reward: BossResultRewardEntry): boolean
+	return reward.kind == "material" or typeof(reward.materialId) == "string"
+end
+
+local function getRewardTemplateRarity(reward: BossResultRewardEntry): string
+	if isMaterialReward(reward) then
+		return materialTierToTemplateRarity(reward.dropTier)
+	end
+
+	return normalizeRarity(reward.displayRarity)
+end
+
 local function escapeRichText(value: any): string
 	local text = tostring(value or "")
 	text = string.gsub(text, "&", "&amp;")
 	text = string.gsub(text, "<", "&lt;")
 	text = string.gsub(text, ">", "&gt;")
 	return text
+end
+
+local function toRichTextColor(color: Color3): string
+	return string.format(
+		"rgb(%d,%d,%d)",
+		math.round(color.R * 255),
+		math.round(color.G * 255),
+		math.round(color.B * 255)
+	)
 end
 
 local function captureTextLabelState(label: TextLabel): TextLabelState
@@ -162,6 +202,25 @@ local function parseTemplateRichTextColor(template: Frame): string
 end
 
 local function formatRewardDescription(template: Frame, reward: BossResultRewardEntry): string
+	if isMaterialReward(reward) then
+		local materialConfig = if typeof(reward.materialId) == "string" then CraftingMaterialConfig.Get(reward.materialId) else nil
+		local displayName = escapeRichText(reward.displayName or (materialConfig and materialConfig.label) or "Material")
+		local amount = math.max(1, math.floor(tonumber(reward.amount) or 1))
+		local displayColor = Color3.new(1, 1, 1)
+		if typeof(reward.displayColor) == "Color3" then
+			displayColor = reward.displayColor
+		elseif materialConfig then
+			displayColor = materialConfig.displayColor
+		end
+
+		return string.format(
+			"<font color=\"%s\">%s</font> x%s",
+			toRichTextColor(displayColor),
+			displayName,
+			NumberFormatter.Format(amount)
+		)
+	end
+
 	local colorText = parseTemplateRichTextColor(template)
 	local displayName = escapeRichText(reward.displayName)
 	local oddsDenominator = math.max(1, math.floor(tonumber(reward.displayOddsDenominator) or 1))
@@ -230,6 +289,10 @@ local function normalizeResultsState(state: any): BossResultsState?
 		endsAtServerTime = endsAtServerTime,
 		durationSeconds = math.max(0, math.floor(tonumber(state.durationSeconds) or 0)),
 		rewards = if typeof(state.rewards) == "table" then state.rewards else {},
+		rewardStatus = if state.rewardStatus == "pending"
+			then "pending"
+			elseif state.rewardStatus == "failed" then "failed"
+			else "ready",
 		readyCount = math.max(0, math.floor(tonumber(state.readyCount) or 0)),
 		capacity = math.max(1, math.floor(tonumber(state.capacity) or BossQueueConstants.QueueCapacity)),
 		isReplayReady = state.isReplayReady == true,
@@ -361,7 +424,7 @@ function BossArenaResultsController:_renderRewards(rewards: { BossResultRewardEn
 			continue
 		end
 
-		local rarity = normalizeRarity(reward.displayRarity)
+		local rarity = getRewardTemplateRarity(reward)
 		local template = ui.templatesByRarity[rarity] or ui.templatesByRarity.Basic
 		if template == nil then
 			continue
@@ -373,8 +436,14 @@ function BossArenaResultsController:_renderRewards(rewards: { BossResultRewardEn
 		row.LayoutOrder = index
 		row.Visible = true
 
+		local leftLabel = row:FindFirstChild("Left")
+		if leftLabel and leftLabel:IsA("TextLabel") then
+			leftLabel.Text = if isMaterialReward(reward) then "Crafting Material Acquired" else "Body Part Acquired"
+		end
+
 		local description = row:FindFirstChild("Description")
 		if description and description:IsA("TextLabel") then
+			description.RichText = true
 			description.Text = formatRewardDescription(template, reward)
 		end
 

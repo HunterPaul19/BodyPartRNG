@@ -5,11 +5,13 @@ local Workspace = game:GetService("Workspace")
 
 local GameAssetPaths = require(ReplicatedStorage.Shared.Assets.GameAssetPaths)
 local GameAssetResolver = require(ReplicatedStorage.Shared.Assets.GameAssetResolver)
+local BossFightSfxUtil = require(ReplicatedStorage.Shared.Audio.BossFightSfxUtil)
 
 local FootstepController = {}
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local ACTIVE_BOSS_MODEL_NAME = "ActiveBoss"
+local ACTIVE_ARENA_MODEL_NAME = "ActiveBossArena"
 local GAME_ASSETS_FOLDER_NAME = "GameAssets"
 local AUDIO_FOLDER_NAME = "Audio"
 local FOOTSTEPS_FOLDER_NAME = "Footsteps"
@@ -18,7 +20,7 @@ local FOOTSTEP_EMITTER_NAME = "FootstepAudioEmitter"
 
 local WALK_SPEED_THRESHOLD = 1.25
 local MAX_TRACK_DISTANCE_STUDS = 260
-local MAX_BOSS_TRACK_DISTANCE_STUDS = 420
+local MAX_BOSS_TRACK_DISTANCE_STUDS = 900
 local BASE_STEP_DISTANCE_STUDS = 3.8
 local MIN_STEP_INTERVAL_SECONDS = 0.16
 local MAX_STEP_INTERVAL_SECONDS = 0.8
@@ -241,10 +243,19 @@ end
 
 local function resolveActorScale(state: CharacterState): number
 	if state.isBoss then
-		return math.clamp(fallbackModelScale(state.model), 0.35, 10)
+		return math.clamp(fallbackModelScale(state.model), 0.35, 20)
 	end
 
 	return resolveLegScale(state.model)
+end
+
+local function resolveActiveArenaModel(): Model?
+	local activeArena = Workspace:FindFirstChild(ACTIVE_ARENA_MODEL_NAME)
+	if activeArena and activeArena:IsA("Model") then
+		return activeArena
+	end
+
+	return nil
 end
 
 local function resolveSoundGroupName(material: Enum.Material): string
@@ -359,6 +370,17 @@ local function configureSpatialSound(sound: Sound, scaleMultiplier: number)
 	configureReverb(sound, resolvedScale)
 end
 
+local function configureBossSpatialSound(sound: Sound, bossScale: number)
+	local resolvedBossScale = math.max(0.1, tonumber(bossScale) or 1)
+	BossFightSfxUtil.ApplyArenaBroadcast(sound, {
+		arenaModel = resolveActiveArenaModel(),
+		scaleMultiplier = resolvedBossScale,
+	})
+
+	local volumeScale = math.clamp(resolvedBossScale ^ 0.55, 3, 6)
+	sound.Volume = math.clamp((tonumber(sound.Volume) or 0.5) * volumeScale, 0, 4)
+end
+
 local function cleanupEmitterAfterPlayback(emitter: BasePart, sound: Sound)
 	local cleanedUp = false
 	local function cleanup()
@@ -411,6 +433,9 @@ local function playFootstep(state: CharacterState, material: Enum.Material, scal
 	sound.TimePosition = 0
 	sound.Looped = false
 	configureSpatialSound(sound, scaleMultiplier)
+	if state.isBoss then
+		configureBossSpatialSound(sound, scaleMultiplier)
+	end
 	sound.Parent = emitter
 	sound:Play()
 	cleanupEmitterAfterPlayback(emitter, sound)

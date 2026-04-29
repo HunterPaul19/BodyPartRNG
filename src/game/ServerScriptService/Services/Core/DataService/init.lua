@@ -663,6 +663,14 @@ local function cloneEquippedAccessoriesState(
 		end
 	end
 
+	local legacyArmOwnedId = state.ArmAccessory
+	if equippedState.GearAccessory == nil and typeof(legacyArmOwnedId) == "string" and legacyArmOwnedId ~= "" then
+		local ownedRecord = if typeof(ownedById) == "table" then ownedById[legacyArmOwnedId] else nil
+		if ownedRecord and ownedRecord.slot == "GearAccessory" then
+			equippedState.GearAccessory = legacyArmOwnedId
+		end
+	end
+
 	return equippedState
 end
 
@@ -973,6 +981,8 @@ function DataService:OnStart()
 	end)
 	startTimePlayedLoop()
 	bindSerialShutdownFlush()
+	BodyPartSerialStore:StartExistenceRefreshLoop()
+	AuraSerialStore:StartExistenceRefreshLoop()
 end
 
 function DataService:OnPlayerAdded(player: Player)
@@ -1558,14 +1568,14 @@ end
 
 function DataService:SetAutoSizeEnabled(player: Player, enabled: boolean): (boolean, string?)
 	if not AUTO_SIZE_ENABLED_KEY then
-		return false, "Auto size persistence is not configured."
+		return false, "Regular scale persistence is not configured."
 	end
 	if not getActiveReplica(player) then
 		return false, "Player data is not loaded."
 	end
 
 	self:Set(player, AUTO_SIZE_ENABLED_KEY, enabled == true)
-	return true, "Auto size updated."
+	return true, "Regular scale updated."
 end
 
 function DataService:GetAutoSellRarities(player: Player): { [string]: boolean }
@@ -1777,6 +1787,51 @@ function DataService:GetNextSerialForPiece(pieceId: string): (number?, string?)
 	return BodyPartSerialStore:GetNextSerialForPiece(normalizedPieceId)
 end
 
+function DataService:ReleaseBodyPartSerial(pieceId: string, serialNumber: number): (boolean, string?)
+	local normalizedPieceId = BodyPartLegacyIds.NormalizePieceId(pieceId)
+	if normalizedPieceId == nil then
+		return false, "pieceId is required."
+	end
+
+	return BodyPartSerialStore:ReleaseSerialForPiece(normalizedPieceId, serialNumber)
+end
+
+function DataService:ReleaseBodyPartSerials(serialReservations: { any }): (boolean, string?)
+	if typeof(serialReservations) ~= "table" then
+		return false, "serialReservations must be a table."
+	end
+
+	local serialsByPieceId = {}
+	for _, reservation in ipairs(serialReservations) do
+		if typeof(reservation) ~= "table" then
+			continue
+		end
+
+		local normalizedPieceId = BodyPartLegacyIds.NormalizePieceId(reservation.pieceId)
+		local serialNumber = math.floor(tonumber(reservation.serialNumber) or 0)
+		if normalizedPieceId ~= nil and serialNumber > 0 then
+			local serials = serialsByPieceId[normalizedPieceId]
+			if serials == nil then
+				serials = {}
+				serialsByPieceId[normalizedPieceId] = serials
+			end
+			table.insert(serials, serialNumber)
+		end
+	end
+
+	local didReleaseAll = true
+	local lastError = nil
+	for pieceId, serialNumbers in pairs(serialsByPieceId) do
+		local didRelease, releaseError = BodyPartSerialStore:ReleaseSerialsForPiece(pieceId, serialNumbers)
+		if not didRelease then
+			didReleaseAll = false
+			lastError = releaseError
+		end
+	end
+
+	return didReleaseAll, lastError
+end
+
 function DataService:GetTotalInExistenceForPiece(pieceId: string): (number?, string?)
 	local normalizedPieceId = BodyPartLegacyIds.NormalizePieceId(pieceId)
 	if normalizedPieceId == nil then
@@ -1946,7 +2001,8 @@ function DataService:AddOwnedBodyPart(
 		then replica.Data[BODY_PARTS_KEY]
 		else OwnedBodyParts.CreateEmptyState()
 	local currentOwnedCount = OwnedBodyParts.CountOwned(currentBodyPartsState)
-	if currentOwnedCount >= OwnedBodyParts.MAX_OWNED_COUNT then
+	local ignoreInventoryLimit = typeof(reservation) == "table" and reservation.ignoreInventoryLimit == true
+	if currentOwnedCount >= OwnedBodyParts.MAX_OWNED_COUNT and not ignoreInventoryLimit then
 		return nil, string.format(
 			"Inventory is full (%d/%d). Sell body parts to make room.",
 			currentOwnedCount,

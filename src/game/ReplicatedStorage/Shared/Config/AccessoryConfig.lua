@@ -1,20 +1,22 @@
 local HeadAccessoryConfig = require(script.Parent.HeadAccessoryConfig)
-local ArmAccessoryConfig = require(script.Parent.ArmAccessoryConfig)
+local GearAccessoryConfig = require(script.Parent.GearAccessoryConfig)
 
 local AccessoryConfig = {}
 
 AccessoryConfig.Slots = table.freeze({
 	HeadAccessory = true,
-	ArmAccessory = true,
+	GearAccessory = true,
 })
 
 AccessoryConfig.SlotOrder = table.freeze({
 	"HeadAccessory",
-	"ArmAccessory",
+	"GearAccessory",
 })
 
-export type AccessorySlot = "HeadAccessory" | "ArmAccessory"
-export type AccessoryConfigEntry = HeadAccessoryConfig.HeadAccessoryConfigEntry | ArmAccessoryConfig.ArmAccessoryConfigEntry
+export type AccessorySlot = "HeadAccessory" | "GearAccessory"
+export type AccessoryConfigEntry =
+	HeadAccessoryConfig.HeadAccessoryConfigEntry
+	| GearAccessoryConfig.GearAccessoryConfigEntry
 
 local entriesById: { [string]: AccessoryConfigEntry } = {}
 local orderedEntries: { AccessoryConfigEntry } = {}
@@ -27,7 +29,7 @@ local function addEntries(entries: { AccessoryConfigEntry })
 end
 
 addEntries(HeadAccessoryConfig.GetAll())
-addEntries(ArmAccessoryConfig.GetAll())
+addEntries(GearAccessoryConfig.GetAll())
 
 table.sort(orderedEntries, function(left, right)
 	if left.slot ~= right.slot then
@@ -56,6 +58,10 @@ end
 function AccessoryConfig.NormalizeId(accessoryId: any): string?
 	local lowered = trimAndLower(accessoryId)
 	local entry = if lowered then entriesById[lowered] else nil
+	if not entry and lowered then
+		local normalizedId = HeadAccessoryConfig.NormalizeId(lowered) or GearAccessoryConfig.NormalizeId(lowered)
+		entry = if normalizedId then entriesById[string.lower(normalizedId)] else nil
+	end
 	return if entry then entry.id else nil
 end
 
@@ -77,7 +83,7 @@ function AccessoryConfig.NormalizeSlot(slot: any): AccessorySlot?
 		return nil
 	end
 
-	if slot == "HeadAccessory" or slot == "ArmAccessory" then
+	if slot == "HeadAccessory" or slot == "GearAccessory" then
 		return slot
 	end
 

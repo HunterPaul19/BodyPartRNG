@@ -103,14 +103,14 @@ local Marketplace = {
 			},
 		},
 
-		time_shards_500 = {
-			offerKey = "time_shards_500",
-			displayName = "500 Time Shards",
+		time_shards_250 = {
+			offerKey = "time_shards_250",
+			displayName = "250 Time Shards",
 			kind = "product",
 			handlerKey = "time_shards",
 			grantMode = "repeatable",
 			giftable = true,
-			amount = 500,
+			amount = 250,
 			selfPurchase = {
 				saleKind = "product",
 				robloxId = 3580883663,
@@ -136,6 +136,253 @@ local Marketplace = {
 			giftPurchase = {
 				saleKind = "product",
 				robloxId = 3580883944,
+			},
+		},
+
+		speed_potion_3 = {
+			offerKey = "speed_potion_3",
+			displayName = "Speed Potion 3",
+			kind = "product",
+			handlerKey = "potion",
+			grantMode = "repeatable",
+			giftable = true,
+			amount = 1,
+			potionId = "rollSpeed3",
+			selfPurchase = {
+				saleKind = "product",
+				robloxId = 3582970759,
+			},
+			giftPurchase = {
+				saleKind = "product",
+				robloxId = 3582971577,
+			},
+		},
+
+		money_potion_3 = {
+			offerKey = "money_potion_3",
+			displayName = "Money Potion 3",
+			kind = "product",
+			handlerKey = "potion",
+			grantMode = "repeatable",
+			giftable = true,
+			amount = 1,
+			potionId = "money3",
+			selfPurchase = {
+				saleKind = "product",
+				robloxId = 3582970814,
+			},
+			giftPurchase = {
+				saleKind = "product",
+				robloxId = 3582971804,
+			},
+		},
+
+		size_potion_3 = {
+			offerKey = "size_potion_3",
+			displayName = "Size Potion 3",
+			kind = "product",
+			handlerKey = "potion",
+			grantMode = "repeatable",
+			giftable = true,
+			amount = 1,
+			potionId = "size3",
+			selfPurchase = {
+				saleKind = "product",
+				robloxId = 3582970869,
+			},
+			giftPurchase = {
+				saleKind = "product",
+				robloxId = 3582971849,
+			},
+		},
+
+		luck_potion_3 = {
+			offerKey = "luck_potion_3",
+			displayName = "Luck Potion 3",
+			kind = "product",
+			handlerKey = "potion",
+			grantMode = "repeatable",
+			giftable = true,
+			amount = 1,
+			potionId = "luck3",
+			selfPurchase = {
+				saleKind = "product",
+				robloxId = 3582970680,
+			},
+			giftPurchase = {
+				saleKind = "product",
+				robloxId = 3582971517,
+			},
+		},
+
+		speed_potion_4 = {
+			offerKey = "speed_potion_4",
+			displayName = "Speed Potion 4",
+			kind = "product",
+			handlerKey = "potion",
+			grantMode = "repeatable",
+			giftable = true,
+			amount = 1,
+			potionId = "rollSpeed4",
+			selfPurchase = {
+				saleKind = "product",
+				robloxId = 3582971061,
+			},
+			giftPurchase = {
+				saleKind = "product",
+				robloxId = 3582971943,
+			},
+		},
+
+		money_potion_4 = {
+			offerKey = "money_potion_4",
+			displayName = "Money Potion 4",
+			kind = "product",
+			handlerKey = "potion",
+			grantMode = "repeatable",
+			giftable = true,
+			amount = 1,
+			potionId = "money4",
+			selfPurchase = {
+				saleKind = "product",
+				robloxId = 3582971129,
+			},
+			giftPurchase = {
+				saleKind = "product",
+				robloxId = 3582971983,
+			},
+		},
+
+		size_potion_4 = {
+			offerKey = "size_potion_4",
+			displayName = "Size Potion 4",
+			kind = "product",
+			handlerKey = "potion",
+			grantMode = "repeatable",
+			giftable = true,
+			amount = 1,
+			potionId = "size4",
+			selfPurchase = {
+				saleKind = "product",
+				robloxId = 3582971187,
+			},
+			giftPurchase = {
+				saleKind = "product",
+				robloxId = 3582972065,
+			},
+		},
+
+		luck_potion_4 = {
+			offerKey = "luck_potion_4",
+			displayName = "Luck Potion 4",
+			kind = "product",
+			handlerKey = "potion",
+			grantMode = "repeatable",
+			giftable = true,
+			amount = 1,
+			potionId = "luck4",
+			selfPurchase = {
+				saleKind = "product",
+				robloxId = 3582970947,
+			},
+			giftPurchase = {
+				saleKind = "product",
+				robloxId = 3582971901,
+			},
+		},
+
+		speed_potion_5 = {
+			offerKey = "speed_potion_5",
+			displayName = "Speed Potion 5",
+			kind = "product",
+			handlerKey = "potion",
+			grantMode = "repeatable",
+			giftable = true,
+			amount = 1,
+			potionId = "rollSpeed5",
+			selfPurchase = {
+				saleKind = "product",
+				robloxId = 3582971311,
+			},
+			giftPurchase = {
+				saleKind = "product",
+				robloxId = 3582972219,
+			},
+		},
+
+		money_potion_5 = {
+			offerKey = "money_potion_5",
+			displayName = "Money Potion 5",
+			kind = "product",
+			handlerKey = "potion",
+			grantMode = "repeatable",
+			giftable = true,
+			amount = 1,
+			potionId = "money5",
+			selfPurchase = {
+				saleKind = "product",
+				robloxId = 3582971361,
+			},
+			giftPurchase = {
+				saleKind = "product",
+				robloxId = 3582972276,
+			},
+		},
+
+		size_potion_5 = {
+			offerKey = "size_potion_5",
+			displayName = "Size Potion 5",
+			kind = "product",
+			handlerKey = "potion",
+			grantMode = "repeatable",
+			giftable = true,
+			amount = 1,
+			potionId = "size5",
+			selfPurchase = {
+				saleKind = "product",
+				robloxId = 3582971416,
+			},
+			giftPurchase = {
+				saleKind = "product",
+				robloxId = 3582972359,
+			},
+		},
+
+		luck_potion_5 = {
+			offerKey = "luck_potion_5",
+			displayName = "Luck Potion 5",
+			kind = "product",
+			handlerKey = "potion",
+			grantMode = "repeatable",
+			giftable = true,
+			amount = 1,
+			potionId = "luck5",
+			selfPurchase = {
+				saleKind = "product",
+				robloxId = 3582971264,
+			},
+			giftPurchase = {
+				saleKind = "product",
+				robloxId = 3582972172,
+			},
+		},
+
+		titanic_potion = {
+			offerKey = "titanic_potion",
+			displayName = "Titanic Potion",
+			kind = "product",
+			handlerKey = "potion",
+			grantMode = "repeatable",
+			giftable = true,
+			amount = 1,
+			potionId = "titanic",
+			selfPurchase = {
+				saleKind = "product",
+				robloxId = 3582971453,
+			},
+			giftPurchase = {
+				saleKind = "product",
+				robloxId = 3582972418,
 			},
 		},
 	},

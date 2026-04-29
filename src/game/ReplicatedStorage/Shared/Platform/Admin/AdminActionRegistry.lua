@@ -311,12 +311,36 @@ AdminActionRegistry.Tabs = {
 		sections = {
 			{
 				title = "Collection Tools",
-				description = "Targeted helpers for verifying body-part acquisition and inventory state.",
+				description = "Targeted helpers for verifying body-part, accessory, and inventory state.",
 				actions = {
 					{
 						id = "grant_body_part",
 						title = "Grant Body Part",
 						description = "Give a chosen body part directly to yourself.",
+						risk = AdminActionRegistry.Risk.Mutating,
+					},
+					{
+						id = "grant_head_accessory",
+						title = "Grant Head Accessory",
+						description = "Give a chosen head accessory directly to yourself.",
+						risk = AdminActionRegistry.Risk.Mutating,
+					},
+					{
+						id = "grant_gear_accessory",
+						title = "Grant Gear Accessory",
+						description = "Give a chosen gear accessory directly to yourself.",
+						risk = AdminActionRegistry.Risk.Mutating,
+					},
+					{
+						id = "grant_crafting_material",
+						title = "Grant Crafting Material",
+						description = "Give a chosen crafting material directly to yourself.",
+						risk = AdminActionRegistry.Risk.Mutating,
+					},
+					{
+						id = "grant_all_crafting_materials",
+						title = "Grant All Crafting Materials",
+						description = "Give every configured crafting material directly to yourself.",
 						risk = AdminActionRegistry.Risk.Mutating,
 					},
 					{

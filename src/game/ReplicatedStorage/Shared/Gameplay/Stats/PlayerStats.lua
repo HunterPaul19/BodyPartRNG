@@ -17,6 +17,7 @@ PlayerStats.EARNED_MONEY_SOURCES = {
 PlayerStats.SPENT_MONEY_SOURCES = {
 	roll_cost = true,
 	appraisal_cost = true,
+	crafting_cost = true,
 	admin = true,
 	other = true,
 }

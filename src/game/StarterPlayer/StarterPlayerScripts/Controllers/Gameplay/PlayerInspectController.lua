@@ -8,14 +8,14 @@ local UserInputService = game:GetService("UserInputService")
 local OwnedAccessories = require(ReplicatedStorage.Shared.Character.OwnedAccessories)
 local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
-local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
+local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local AccessoryPresentation = require(ReplicatedStorage.Shared.UI.AccessoryPresentation)
 local AuraPresentation = require(ReplicatedStorage.Shared.UI.AuraPresentation)
+local AvatarViewportPreview = require(ReplicatedStorage.Shared.UI.AvatarViewportPreview)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
-local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 local FrameController = require(script.Parent.FrameController)
 local SlotCardRenderer = require(script.Parent.SlotCardRenderer)
 local UIController = require(script.Parent.UIController)
@@ -227,36 +227,6 @@ local function syncSlotPlaceholder(button: ImageButton?, defaults: any, isFilled
 	end
 end
 
-local function createCharacterPreviewModelFromDescription(description: HumanoidDescription?): Model?
-	if not description then
-		return nil
-	end
-
-	local baseRigModel = BodyPartsCatalog.GetDefaultBaseRig()
-	if not (baseRigModel and baseRigModel:IsA("Model")) then
-		return nil
-	end
-
-	local previewModel = baseRigModel:Clone()
-	previewModel.Name = "PlayerInspectPreview"
-
-	local humanoid = previewModel:FindFirstChildOfClass("Humanoid")
-	if not humanoid then
-		previewModel:Destroy()
-		return nil
-	end
-
-	local ok = pcall(function()
-		humanoid:ApplyDescriptionReset(description)
-	end)
-	if not ok then
-		previewModel:Destroy()
-		return nil
-	end
-
-	return previewModel
-end
-
 function PlayerInspectController:_ensureState()
 	if self._started then
 		return
@@ -279,10 +249,13 @@ function PlayerInspectController:_ensureState()
 	self._existingRequestToken = 0
 	self._existingCounts = {}
 	self._pendingExistingCounts = {}
-	self._characterRenderToken = 0
 	self._partInfoTween = nil :: Tween?
 	self._remotes = {}
 	self._slotCardRenderer = nil
+	self._characterPreviewPresenter = nil
+	self._inspectedCharacterAddedConnection = nil :: RBXScriptConnection?
+	self._inspectedCharacterRemovingConnection = nil :: RBXScriptConnection?
+	self._boundInspectedCharacterUserId = nil :: number?
 	self._mountedRegionButtons = {}
 	self._mountedAccessoryButtons = {}
 	self._slotPlaceholderDefaults = {}
@@ -915,7 +888,7 @@ function PlayerInspectController:_syncPartInfo()
 	local cachedExistingCount = if typeof(existingLookupKey) == "string" then self._existingCounts[existingLookupKey] else nil
 	if typeof(cachedExistingCount) == "number" then
 		self:_setExistingText(TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Existing, {
-			Count = BodyPartPresentation.FormatNumberish(cachedExistingCount),
+			Count = NumberFormatter.FormatExistenceCount(cachedExistingCount),
 		}))
 	elseif typeof(existingLookupKey) == "string" and self._pendingExistingCounts[existingLookupKey] == true then
 		self:_setExistingText(TranslationHelper.formatByKey(LocalizationKeys.BodyPart.Preview.Existing, {
@@ -980,7 +953,6 @@ end
 function PlayerInspectController:_clearState()
 	self._requestToken += 1
 	self._existingRequestToken += 1
-	self._characterRenderToken += 1
 	self._summary = nil
 	self._existingCounts = {}
 	self._pendingExistingCounts = {}
@@ -992,6 +964,10 @@ function PlayerInspectController:_clearState()
 	self._selectedAccessorySlot = nil
 	self._inspectedPlayer = nil
 	self._inspectedUserId = nil
+	self:_disconnectInspectedPlayerCharacterConnections()
+	if self._characterPreviewPresenter then
+		self._characterPreviewPresenter:Clear()
+	end
 	if self._ui then
 		self:_syncHeader()
 		self:_syncSummaryLabels()
@@ -1029,35 +1005,66 @@ function PlayerInspectController:_setSelectedAccessorySlot(slot: AccessoryConfig
 	self:_syncModalContents()
 end
 
-function PlayerInspectController:_renderFallbackCharacter(userId: number, requestToken: number)
-	local baseRig = BodyPartsCatalog.GetDefaultBaseRig()
-	if baseRig then
-		ViewportModelRenderer.RenderBaseRig(self._ui.characterViewport, baseRig)
+function PlayerInspectController:_disconnectInspectedPlayerCharacterConnections()
+	local characterAddedConnection = self._inspectedCharacterAddedConnection
+	if characterAddedConnection then
+		characterAddedConnection:Disconnect()
+		self._inspectedCharacterAddedConnection = nil
 	end
 
-	task.spawn(function()
-		local ok, description = pcall(function()
-			return Players:GetHumanoidDescriptionFromUserId(userId)
-		end)
-		if requestToken ~= self._characterRenderToken or not self._ui then
-			return
-		end
-		if not ok or not description or not description:IsA("HumanoidDescription") then
-			return
-		end
+	local characterRemovingConnection = self._inspectedCharacterRemovingConnection
+	if characterRemovingConnection then
+		characterRemovingConnection:Disconnect()
+		self._inspectedCharacterRemovingConnection = nil
+	end
+	self._boundInspectedCharacterUserId = nil
+end
 
-		local previewModel = createCharacterPreviewModelFromDescription(description)
-		if not previewModel then
+function PlayerInspectController:_bindInspectedPlayerCharacterConnections(player: Player?)
+	if player and self._boundInspectedCharacterUserId == player.UserId then
+		return
+	end
+
+	self:_disconnectInspectedPlayerCharacterConnections()
+	if not player then
+		return
+	end
+
+	self._boundInspectedCharacterUserId = player.UserId
+	self._inspectedCharacterAddedConnection = player.CharacterAdded:Connect(function()
+		if self._inspectedUserId ~= player.UserId then
 			return
 		end
+		if self._characterPreviewPresenter then
+			self._characterPreviewPresenter:Clear()
+		end
+		if FrameController:IsOpen(WINDOW_NAME) then
+			task.defer(function()
+				self:_syncCharacterViewport()
+			end)
+		end
+	end)
 
-		ViewportModelRenderer.RenderCharacterModel(self._ui.characterViewport, previewModel, nil)
-		previewModel:Destroy()
+	self._inspectedCharacterRemovingConnection = player.CharacterRemoving:Connect(function()
+		if self._inspectedUserId == player.UserId and self._characterPreviewPresenter then
+			self._characterPreviewPresenter:Clear()
+		end
 	end)
 end
 
 function PlayerInspectController:_syncCharacterViewport()
-	return
+	local presenter = self._characterPreviewPresenter
+	if not presenter then
+		return
+	end
+
+	local userId = self._inspectedUserId
+	if typeof(userId) ~= "number" then
+		presenter:Clear()
+		return
+	end
+
+	presenter:RenderUser(userId, self._inspectedPlayer)
 end
 
 function PlayerInspectController:_applySummary(player: Player, summary: InspectSummary, preserveViewState: boolean?)
@@ -1065,9 +1072,11 @@ function PlayerInspectController:_applySummary(player: Player, summary: InspectS
 		return
 	end
 
+	local previousUserId = self._inspectedUserId
 	self._inspectedPlayer = player
 	self._inspectedUserId = summary.userId
 	self._summary = summary
+	self:_bindInspectedPlayerCharacterConnections(player)
 	if preserveViewState ~= true then
 		self._existingCounts = {}
 		self._pendingExistingCounts = {}
@@ -1078,7 +1087,9 @@ function PlayerInspectController:_applySummary(player: Player, summary: InspectS
 	end
 	self:_prefetchExistingCounts()
 	self:_syncModalContents()
-	self:_syncCharacterViewport()
+	if preserveViewState ~= true or previousUserId ~= summary.userId then
+		self:_syncCharacterViewport()
+	end
 end
 
 function PlayerInspectController:_openForPlayer(player: Player)
@@ -1091,6 +1102,7 @@ function PlayerInspectController:_openForPlayer(player: Player)
 	self._inspectedPlayer = player
 	self._inspectedUserId = player.UserId
 	self._summary = nil
+	self:_bindInspectedPlayerCharacterConnections(player)
 	self._selectedRegion = nil
 	self._selectedAura = false
 	self._selectedAccessorySlot = nil
@@ -1224,6 +1236,7 @@ function PlayerInspectController:_cacheUi(playerGui: PlayerGui)
 	local topbar = playerInfoRoot:WaitForChild("Topbar", 30)
 	local characterRoot = playerInfoRoot:WaitForChild("Character", 30)
 	local characterViewport = characterRoot:WaitForChild("Character", 30)
+	local applyRig = characterViewport:FindFirstChild("ApplyRig")
 	local partInfo = playerInfoRoot:WaitForChild("PartInfo", 30)
 	local partInfoFrame = partInfo:WaitForChild("Frame", 30)
 	local headerLabel = topbar:WaitForChild("Header", 30)
@@ -1272,12 +1285,21 @@ function PlayerInspectController:_cacheUi(playerGui: PlayerGui)
 
 	local accessoryFrames = {}
 	local accessoryButtons = {}
-	local uiSlotNameBySlot = {
-		HeadAccessory = "HeadAccesory",
-		ArmAccessory = "ArmAccesory",
+	local uiSlotNamesBySlot = {
+		HeadAccessory = { "HeadAccessory", "HeadAccesory", "Accessory" },
+		GearAccessory = { "Gear", "GearAccessory", "GearAccesory" },
 	}
 	for _, slot in ipairs(OwnedAccessories.SlotOrder) do
-		local slotFrame = characterViewport:FindFirstChild(uiSlotNameBySlot[slot])
+		local slotFrame = nil
+		local slotNames = uiSlotNamesBySlot[slot]
+		if slotNames then
+			for _, slotName in ipairs(slotNames) do
+				slotFrame = characterViewport:FindFirstChild(slotName)
+				if slotFrame then
+					break
+				end
+			end
+		end
 		if slotFrame and slotFrame:IsA("Frame") then
 			accessoryFrames[slot] = slotFrame
 			local button = slotFrame:FindFirstChild("Temp")
@@ -1319,6 +1341,17 @@ function PlayerInspectController:_cacheUi(playerGui: PlayerGui)
 		totalOddsAddedLabel = totalOddsAddedLabel,
 	}
 	self._slotCardRenderer = SlotCardRenderer.new(playerGui)
+	if self._characterPreviewPresenter then
+		self._characterPreviewPresenter:Destroy()
+	end
+	self._characterPreviewPresenter = AvatarViewportPreview.new({
+		viewportFrame = characterViewport,
+		applyRig = if applyRig and applyRig:IsA("Model") then applyRig else nil,
+		logPrefix = "[PlayerInspectController]",
+		isActive = function()
+			return FrameController:IsOpen(WINDOW_NAME) and self._inspectedUserId ~= nil
+		end,
+	})
 
 	for _, label in pairs(self._ui.partInfoLabels) do
 		label.RichText = true

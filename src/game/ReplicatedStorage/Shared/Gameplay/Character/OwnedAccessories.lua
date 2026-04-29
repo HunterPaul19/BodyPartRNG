@@ -4,15 +4,15 @@ OwnedAccessories.MAX_OWNED_COUNT = 100
 
 OwnedAccessories.Slots = table.freeze({
 	HeadAccessory = true,
-	ArmAccessory = true,
+	GearAccessory = true,
 })
 
 OwnedAccessories.SlotOrder = table.freeze({
 	"HeadAccessory",
-	"ArmAccessory",
+	"GearAccessory",
 })
 
-export type AccessorySlot = "HeadAccessory" | "ArmAccessory"
+export type AccessorySlot = "HeadAccessory" | "GearAccessory"
 
 export type OwnedAccessoryRecord = {
 	ownedId: string,
@@ -44,7 +44,7 @@ end
 function OwnedAccessories.CreateEmptyEquippedState(): EquippedAccessoriesState
 	return {
 		HeadAccessory = nil,
-		ArmAccessory = nil,
+		GearAccessory = nil,
 	}
 end
 
@@ -53,7 +53,7 @@ function OwnedAccessories.CreateOwnedId(nextOwnedId: number): string
 end
 
 function OwnedAccessories.NormalizeSlot(slot: any): AccessorySlot?
-	if slot == "HeadAccessory" or slot == "ArmAccessory" then
+	if slot == "HeadAccessory" or slot == "GearAccessory" then
 		return slot
 	end
 

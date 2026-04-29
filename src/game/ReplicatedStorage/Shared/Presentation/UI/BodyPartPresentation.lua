@@ -5,6 +5,7 @@ local GameAssetResolver = require(ReplicatedStorage.Shared.Assets.GameAssetResol
 
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local PreviewAppearanceRegistry = require(ReplicatedStorage.Shared.Character.PreviewAppearanceRegistry)
+local CombatPower = require(ReplicatedStorage.Shared.Combat.CombatPower)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local MutationCovers = require(ReplicatedStorage.Shared.Config.MutationCovers)
@@ -404,6 +405,15 @@ local function formatPreviewStatText(templateText: any, value: any): string
 		return labelPrefix .. formattedValue
 	end
 
+	local replacedCount = 0
+	local replacedText = string.gsub(normalizedTemplate, "[%+%-]?%d[%d%.,]*", function()
+		replacedCount += 1
+		return formattedValue
+	end, 1)
+	if replacedCount > 0 then
+		return replacedText
+	end
+
 	return BodyPartPresentation.FormatTemplatedLabelText(normalizedTemplate, formattedValue)
 end
 
@@ -441,13 +451,14 @@ end
 
 function BodyPartPresentation.BuildBodyPartContributionStatTexts(
 	piece: any,
+	record: any,
 	templates: { [string]: string }?
-): { Strength: string, Speed: string, Health: string }
-	local safePiece = if typeof(piece) == "table" then piece else {}
+): { Strength: string, Speed: string, Health: string, TotalPower: string? }
+	local combatStats = CombatPower.GetBodyPartContributionStats(piece, record)
 	local statValues = {
-		Strength = tonumber(safePiece.damageBonus) or 0,
-		Speed = tonumber(safePiece.speedBonus) or 0,
-		Health = tonumber(safePiece.healthBonus) or 0,
+		Strength = tonumber(combatStats.damage) or 0,
+		Speed = tonumber(combatStats.speed) or 0,
+		Health = tonumber(combatStats.health) or 0,
 	}
 	local defaultEntries = {
 		Strength = LocalizationKeys.BodyPart.Stats.Strength,
@@ -466,6 +477,10 @@ function BodyPartPresentation.BuildBodyPartContributionStatTexts(
 				Value = formattedValue,
 			})
 		end
+	end
+	local totalPower = math.max(0, math.floor(CombatPower.Calculate(combatStats) + 0.5))
+	if typeof(templates) == "table" and typeof(templates.TotalPower) == "string" then
+		texts.TotalPower = formatPreviewStatText(templates.TotalPower, NumberFormatter.Format(totalPower))
 	end
 
 	return texts
@@ -763,6 +778,7 @@ function BodyPartPresentation.BuildBundleCardPayload(previewPresentation: any, o
 		mutationCoverTexture = previewPresentation.mutationCoverTexture,
 		sizeTagStyle = previewPresentation.sizeTagStyle,
 		iconTexture = previewPresentation.iconTexture,
+		cardBackgroundTexture = previewPresentation.cardBackgroundTexture,
 		preferIconOverViewport = previewPresentation.preferIconOverViewport,
 	}
 
@@ -958,14 +974,25 @@ function BodyPartPresentation.PopulateBundleCard(cardRoot: Instance, payload: an
 
 	local usageLabel = findFirstGuiChildInCard(cardRoot, { "ItemCount", "Usage" })
 	if usageLabel and usageLabel:IsA("TextLabel") then
-		usageLabel.Text = if typeof(source.usageText) == "string"
-			then source.usageText
-			else formatMoneyPerSecond(source.passiveIncomePerSecond)
+		usageLabel.Visible = source.hideUsageText ~= true
+		if source.hideUsageText ~= true then
+			usageLabel.Text = if typeof(source.usageText) == "string"
+				then source.usageText
+				else formatMoneyPerSecond(source.passiveIncomePerSecond)
+		end
 	end
 
 	local viewport = findFirstGuiChildInCard(cardRoot, { "ItemViewport", "Viewport" })
 	local icon = findFirstGuiChildInCard(cardRoot, { "ItemIcon", "Icon" })
 	local iconTexture = if typeof(source.iconTexture) == "string" and source.iconTexture ~= "" then source.iconTexture else nil
+	local cardBackground = findFirstGuiChildInCard(cardRoot, { "ItemBackground" })
+	if cardBackground and cardBackground:IsA("ImageLabel") then
+		local cardBackgroundTexture = if typeof(source.cardBackgroundTexture) == "string" and source.cardBackgroundTexture ~= ""
+			then source.cardBackgroundTexture
+			else nil
+		cardBackground.Visible = cardBackgroundTexture ~= nil
+		cardBackground.Image = cardBackgroundTexture or ""
+	end
 	local shouldUseIcon = source.preferIconOverViewport == true and iconTexture ~= nil
 
 	if viewport and viewport:IsA("ViewportFrame") then

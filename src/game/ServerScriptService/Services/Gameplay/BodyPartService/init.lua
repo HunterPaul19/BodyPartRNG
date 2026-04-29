@@ -10,11 +10,14 @@ local BodyPartEconomy = require(ReplicatedStorage.Shared.Character.BodyPartEcono
 local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
 local BodyPartVisuals = require(ReplicatedStorage.Shared.Character.BodyPartVisuals)
+local GearVisuals = require(ReplicatedStorage.Shared.Character.GearVisuals)
+local HeadAccessoryVisuals = require(ReplicatedStorage.Shared.Character.HeadAccessoryVisuals)
 local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
 local AuraConfig = require(ReplicatedStorage.Shared.Config.AuraConfig)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local BodyPartRuntimeConfig = require(ReplicatedStorage.Shared.Config.BodyParts.Runtime)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local CombatPower = require(ReplicatedStorage.Shared.Combat.CombatPower)
 local PotionRuntimeBonuses = require(ReplicatedStorage.Shared.Character.PotionRuntimeBonuses)
 local PerfStats = require(ReplicatedStorage.Shared.Diagnostics.PerfStats)
 local DataService = require(script.Parent.DataService)
@@ -44,6 +47,7 @@ local AURA_REAPPLY_DEBOUNCE_SECONDS = 0.15
 local AURA_VISUAL_VERIFY_RETRY_SECONDS = 0.35
 local AURA_VISUAL_VERIFY_RETRY_LIMIT = 5
 local APPEARANCE_TRANSFER_MANAGED_ATTRIBUTE = "AppearanceTransferApplied"
+local VISUAL_ONLY_HEAD_ACCESSORY_ATTRIBUTE = "VisualOnlyHeadAccessory"
 local APPEARANCE_REFRESH_DEBOUNCE_SECONDS = 0.15
 local CHARACTER_ACTIVATION_RETRY_SECONDS = 0.5
 local CHARACTER_ACTIVATION_RETRY_LIMIT = 4
@@ -147,9 +151,10 @@ local function buildRateLimitResponse(message: string, state: any?)
 	return response(false, message, state)
 end
 
-local rebuildCurrentVisualStateNow: ((Player, string?) -> (boolean, string?))
+local rebuildCurrentVisualStateNow: ((Player, string?, boolean?) -> (boolean, string?))
 local refreshCurrentAuraNow: ((Player, string?) -> (boolean, string?))
 local refreshCurrentAppearanceNow: ((Player, string?) -> (boolean, string?))
+local computeLoadoutBonuses
 
 local function markDeltaState(state: { [string]: any })
 	state._isDelta = true
@@ -345,6 +350,10 @@ local function shouldProcessCharacterAccessoryMutation(player: Player, character
 	end
 
 	if instance:GetAttribute(APPEARANCE_TRANSFER_MANAGED_ATTRIBUTE) == true then
+		return false
+	end
+
+	if instance:GetAttribute(VISUAL_ONLY_HEAD_ACCESSORY_ATTRIBUTE) == true then
 		return false
 	end
 
@@ -860,6 +869,8 @@ local function buildVisualApplyRequest(
 		return nil, auraError
 	end
 	local hasAnyEquippedRegions = BodyPartLoadout.HasAnyEquipped(equippedState)
+	local visualScaleOverride = tonumber(bodyPartScaleOverride)
+	local hasVisualScaleOverride = visualScaleOverride ~= nil and visualScaleOverride > 0
 
 	for _, region in ipairs(BodyPartRegions.Order) do
 		local entry = equippedState[region]
@@ -878,16 +889,16 @@ local function buildVisualApplyRequest(
 
 			regions[region] = {
 				bundle = bundleModel,
-				scale = tonumber(bodyPartScaleOverride) or entry.scale,
+				scale = visualScaleOverride or entry.scale,
 				attachRules = BodyPartsCatalog.ResolveAttachRules(entry.pieceId),
 				mutation = mutationRequest,
 				applyPlayerClothing = setConfig == nil or setConfig.applyPlayerClothing ~= false,
 				applyPlayerBodyColors = setConfig == nil or setConfig.applyPlayerBodyColors ~= false,
 			}
-		elseif hasAnyEquippedRegions then
+		elseif hasAnyEquippedRegions or hasVisualScaleOverride then
 			regions[region] = {
 				bundle = nil,
-				scale = 1,
+				scale = visualScaleOverride or 1,
 				attachRules = nil,
 				mutation = nil,
 				isNativeFallback = true,
@@ -902,7 +913,14 @@ local function buildVisualApplyRequest(
 	}, nil
 end
 
-local function getBodyPartScaleOverride(player: Player): number?
+local function getBodyPartScaleOverride(player: Player, overrideAutoSizeEnabled: boolean?): number?
+	local regularScaleEnabled = if overrideAutoSizeEnabled ~= nil
+		then overrideAutoSizeEnabled == true
+		else DataService:GetAutoSizeEnabled(player)
+	if regularScaleEnabled then
+		return nil
+	end
+
 	local bonuses = PotionService:GetRuntimeBonuses(player)
 	if typeof(bonuses) ~= "table" then
 		return nil
@@ -963,9 +981,9 @@ local function resolveEffectiveScale(
 	requestedScale: number?,
 	overrideAutoSizeEnabled: boolean?
 ): number
-	local autoSizeEnabled = resolveAutoSizeEnabled(player, overrideAutoSizeEnabled)
+	local regularScaleEnabled = resolveAutoSizeEnabled(player, overrideAutoSizeEnabled)
 	local fallbackScale = tonumber(ownedRecord.sizeMultiplier) or 1
-	local targetScale = if autoSizeEnabled then tonumber(requestedScale) or fallbackScale else 1
+	local targetScale = if regularScaleEnabled then 1 else tonumber(requestedScale) or fallbackScale
 	return BodyPartRuntimeConfig.ClampScale(pieceId, targetScale)
 end
 
@@ -1040,6 +1058,7 @@ local function buildOwnedBodyPartCandidate(ownedId: string, ownedRecord: OwnedBo
 	if not piece then
 		return nil
 	end
+	local combatStats = CombatPower.GetBodyPartContributionStats(piece, ownedRecord)
 
 	return {
 		ownedId = ownedId,
@@ -1049,9 +1068,9 @@ local function buildOwnedBodyPartCandidate(ownedId: string, ownedRecord: OwnedBo
 		passiveIncomePerSecond = tonumber(ownedRecord.finalPassiveIncomePerSecond) or piece.passiveIncomePerSecond,
 		luckBonus = tonumber(piece.luckBonus) or 0,
 		rollSpeedBonus = tonumber(piece.rollSpeedBonus) or 0,
-		speedBonus = tonumber(piece.speedBonus) or 0,
-		damageBonus = tonumber(piece.damageBonus) or 0,
-		healthBonus = tonumber(piece.healthBonus) or 0,
+		speedBonus = tonumber(combatStats.speed) or 0,
+		damageBonus = tonumber(combatStats.damage) or 0,
+		healthBonus = tonumber(combatStats.health) or 0,
 	}
 end
 
@@ -1064,6 +1083,7 @@ local function buildGrantPayloadBodyPartCandidate(grantPayload: any)
 	if not piece then
 		return nil
 	end
+	local combatStats = CombatPower.GetBodyPartContributionStats(piece, grantPayload)
 
 	return {
 		ownedId = "",
@@ -1073,9 +1093,9 @@ local function buildGrantPayloadBodyPartCandidate(grantPayload: any)
 		passiveIncomePerSecond = tonumber(grantPayload.finalPassiveIncomePerSecond) or piece.passiveIncomePerSecond,
 		luckBonus = tonumber(piece.luckBonus) or 0,
 		rollSpeedBonus = tonumber(piece.rollSpeedBonus) or 0,
-		speedBonus = tonumber(piece.speedBonus) or 0,
-		damageBonus = tonumber(piece.damageBonus) or 0,
-		healthBonus = tonumber(piece.healthBonus) or 0,
+		speedBonus = tonumber(combatStats.speed) or 0,
+		damageBonus = tonumber(combatStats.damage) or 0,
+		healthBonus = tonumber(combatStats.health) or 0,
 	}
 end
 
@@ -1257,55 +1277,11 @@ local function buildLoadoutCandidate(selectedCandidatesByRegion, setBonus: BodyP
 	}
 end
 
-local function compareLoadoutCandidates(leftCandidate, rightCandidate): number
-	if leftCandidate == rightCandidate then
-		return 0
-	end
-	if leftCandidate == nil then
-		return -1
-	end
-	if rightCandidate == nil then
-		return 1
-	end
-
-	if leftCandidate.passiveIncomePerSecond ~= rightCandidate.passiveIncomePerSecond then
-		return if leftCandidate.passiveIncomePerSecond > rightCandidate.passiveIncomePerSecond then 1 else -1
-	end
-	if leftCandidate.luckBonus ~= rightCandidate.luckBonus then
-		return if leftCandidate.luckBonus > rightCandidate.luckBonus then 1 else -1
-	end
-	if leftCandidate.rollSpeedBonus ~= rightCandidate.rollSpeedBonus then
-		return if leftCandidate.rollSpeedBonus > rightCandidate.rollSpeedBonus then 1 else -1
-	end
-	if leftCandidate.damageBonus ~= rightCandidate.damageBonus then
-		return if leftCandidate.damageBonus > rightCandidate.damageBonus then 1 else -1
-	end
-	if leftCandidate.healthBonus ~= rightCandidate.healthBonus then
-		return if leftCandidate.healthBonus > rightCandidate.healthBonus then 1 else -1
-	end
-	if leftCandidate.speedBonus ~= rightCandidate.speedBonus then
-		return if leftCandidate.speedBonus > rightCandidate.speedBonus then 1 else -1
-	end
-
-	for _, region in ipairs(BodyPartRegions.Order) do
-		local leftEntry = leftCandidate.equippedState[region]
-		local rightEntry = rightCandidate.equippedState[region]
-		local leftOwnedId = if leftEntry ~= nil then leftEntry.ownedId else ""
-		local rightOwnedId = if rightEntry ~= nil then rightEntry.ownedId else ""
-
-		if leftOwnedId ~= rightOwnedId then
-			return if leftOwnedId < rightOwnedId then 1 else -1
-		end
-	end
-
-	return 0
-end
-
-local function getBestLoadoutCandidate(player: Player)
+local function buildBodyLoadoutCandidates(player: Player)
 	local currentEquippedState = SessionStore.GetEquipped(player)
 	local ownedBodyParts = DataService:GetOwnedBodyParts(player)
 	local candidatesByRegion, candidatesByPieceId = buildOwnedBodyPartCandidateIndexes(ownedBodyParts)
-	local bestLoadoutCandidate = nil
+	local loadoutCandidates = {}
 
 	local independentCandidatesByRegion = {}
 	for _, region in ipairs(BodyPartRegions.Order) do
@@ -1317,7 +1293,7 @@ local function getBestLoadoutCandidate(player: Player)
 		end
 	end
 
-	bestLoadoutCandidate = buildLoadoutCandidate(independentCandidatesByRegion, nil)
+	table.insert(loadoutCandidates, buildLoadoutCandidate(independentCandidatesByRegion, nil))
 
 	for _, setConfig in ipairs(BodyPartsCatalog.GetAllSets()) do
 		local setCandidatesByRegion = {}
@@ -1344,13 +1320,298 @@ local function getBestLoadoutCandidate(player: Player)
 
 		if canAssembleFullSet then
 			local setLoadoutCandidate = buildLoadoutCandidate(setCandidatesByRegion, setConfig.fullSetBonus)
-			if compareLoadoutCandidates(setLoadoutCandidate, bestLoadoutCandidate) > 0 then
-				bestLoadoutCandidate = setLoadoutCandidate
+			table.insert(loadoutCandidates, setLoadoutCandidate)
+		end
+	end
+
+	return loadoutCandidates
+end
+
+local function getOwnedAuraCandidates(ownedAuras: { [string]: any }, currentEquippedAuraId: string?)
+	local auraCandidates = {}
+
+	for ownedId, ownedRecord in pairs(ownedAuras) do
+		local auraConfig = typeof(ownedRecord) == "table" and AuraConfig.Get(ownedRecord.auraId) or nil
+		if auraConfig then
+			table.insert(auraCandidates, {
+				ownedId = ownedId,
+				auraId = auraConfig.id,
+				preferred = currentEquippedAuraId == auraConfig.id,
+			})
+		end
+	end
+
+	if #auraCandidates == 0 then
+		table.insert(auraCandidates, {
+			ownedId = "",
+			auraId = nil,
+			preferred = currentEquippedAuraId == nil,
+		})
+	end
+
+	return auraCandidates
+end
+
+local function getOwnedAccessoryCandidatesBySlot(
+	ownedAccessories: { [string]: any },
+	currentEquippedAccessories: { [string]: string? }
+)
+	local candidatesBySlot = {}
+	for _, slot in ipairs(AccessoryConfig.SlotOrder) do
+		candidatesBySlot[slot] = {}
+	end
+
+	for ownedId, ownedRecord in pairs(ownedAccessories) do
+		if typeof(ownedRecord) ~= "table" then
+			continue
+		end
+
+		local accessoryConfig = AccessoryConfig.Get(ownedRecord.accessoryId)
+		if not accessoryConfig or accessoryConfig.slot ~= ownedRecord.slot then
+			continue
+		end
+
+		local slotCandidates = candidatesBySlot[accessoryConfig.slot]
+		if slotCandidates then
+			table.insert(slotCandidates, {
+				ownedId = ownedId,
+				accessoryId = accessoryConfig.id,
+				slot = accessoryConfig.slot,
+				preferred = currentEquippedAccessories[accessoryConfig.slot] == ownedId,
+			})
+		end
+	end
+
+	for _, slot in ipairs(AccessoryConfig.SlotOrder) do
+		if #candidatesBySlot[slot] == 0 then
+			table.insert(candidatesBySlot[slot], {
+				ownedId = "",
+				accessoryId = nil,
+				slot = slot,
+				preferred = currentEquippedAccessories[slot] == nil,
+			})
+		end
+	end
+
+	return candidatesBySlot
+end
+
+local function buildAccessoryStateForCandidates(headCandidate, gearCandidate, ownedAccessories)
+	local equippedAccessories = {
+		HeadAccessory = nil,
+		GearAccessory = nil,
+		_ownedAccessories = ownedAccessories,
+	}
+
+	if headCandidate and typeof(headCandidate.ownedId) == "string" and headCandidate.ownedId ~= "" then
+		equippedAccessories.HeadAccessory = headCandidate.ownedId
+	end
+	if gearCandidate and typeof(gearCandidate.ownedId) == "string" and gearCandidate.ownedId ~= "" then
+		equippedAccessories.GearAccessory = gearCandidate.ownedId
+	end
+
+	return equippedAccessories
+end
+
+local function buildPersistedAccessoryState(equippedAccessories)
+	local persistedState = {
+		HeadAccessory = nil,
+		GearAccessory = nil,
+	}
+
+	for _, slot in ipairs(AccessoryConfig.SlotOrder) do
+		local ownedId = equippedAccessories and equippedAccessories[slot] or nil
+		if typeof(ownedId) == "string" and ownedId ~= "" then
+			persistedState[slot] = ownedId
+		end
+	end
+
+	return persistedState
+end
+
+local function buildSetupScore(equippedState, ownedBodyParts, equippedAuraId, equippedAccessories)
+	local bonuses = computeLoadoutBonuses(equippedState, ownedBodyParts, equippedAuraId, equippedAccessories)
+	local passiveIncomePerSecond = math.max(0, tonumber(bonuses.passiveIncomePerSecond) or 0)
+		* math.max(1, tonumber(bonuses.passiveIncomeMultiplier) or 1)
+	local luckBonus = ((1 + math.max(0, tonumber(bonuses.luckBonus) or 0))
+		* math.max(1, tonumber(bonuses.luckMultiplier) or 1))
+		- 1
+
+	return {
+		passiveIncomePerSecond = passiveIncomePerSecond,
+		luckBonus = luckBonus,
+		rollSpeedBonus = math.max(0, tonumber(bonuses.rollSpeedBonus) or 0),
+		damage = math.max(0, tonumber(bonuses.damage) or 0),
+		health = math.max(0, tonumber(bonuses.health) or 0),
+		speed = math.max(0, tonumber(bonuses.speed) or 0),
+	}
+end
+
+local function compareSetupScores(leftScore, rightScore): number
+	if leftScore == rightScore then
+		return 0
+	end
+	if leftScore == nil then
+		return -1
+	end
+	if rightScore == nil then
+		return 1
+	end
+
+	for _, key in ipairs({ "passiveIncomePerSecond", "luckBonus", "rollSpeedBonus", "damage", "health", "speed" }) do
+		if leftScore[key] ~= rightScore[key] then
+			return if leftScore[key] > rightScore[key] then 1 else -1
+		end
+	end
+
+	return 0
+end
+
+local function countPreferredMatches(candidate): number
+	local total = 0
+
+	if candidate.bodyLoadoutCandidate and candidate.bodyLoadoutCandidate.preferredMatchCount then
+		total += candidate.bodyLoadoutCandidate.preferredMatchCount
+	end
+	if candidate.auraCandidate and candidate.auraCandidate.preferred == true then
+		total += 1
+	end
+	if candidate.headCandidate and candidate.headCandidate.preferred == true then
+		total += 1
+	end
+	if candidate.gearCandidate and candidate.gearCandidate.preferred == true then
+		total += 1
+	end
+
+	return total
+end
+
+local function compareOptionalIds(leftId: string?, rightId: string?): number
+	local left = if typeof(leftId) == "string" then leftId else ""
+	local right = if typeof(rightId) == "string" then rightId else ""
+	if left == right then
+		return 0
+	end
+	return if left < right then 1 else -1
+end
+
+local function compareFullSetupCandidates(leftCandidate, rightCandidate): number
+	if leftCandidate == rightCandidate then
+		return 0
+	end
+	if leftCandidate == nil then
+		return -1
+	end
+	if rightCandidate == nil then
+		return 1
+	end
+
+	local scoreComparison = compareSetupScores(leftCandidate.score, rightCandidate.score)
+	if scoreComparison ~= 0 then
+		return scoreComparison
+	end
+
+	local leftPreferredMatches = countPreferredMatches(leftCandidate)
+	local rightPreferredMatches = countPreferredMatches(rightCandidate)
+	if leftPreferredMatches ~= rightPreferredMatches then
+		return if leftPreferredMatches > rightPreferredMatches then 1 else -1
+	end
+
+	for _, region in ipairs(BodyPartRegions.Order) do
+		local leftEntry = leftCandidate.equippedState[region]
+		local rightEntry = rightCandidate.equippedState[region]
+		local idComparison = compareOptionalIds(
+			if leftEntry ~= nil then leftEntry.ownedId else nil,
+			if rightEntry ~= nil then rightEntry.ownedId else nil
+		)
+		if idComparison ~= 0 then
+			return idComparison
+		end
+	end
+
+	local auraComparison = compareOptionalIds(leftCandidate.equippedAuraId, rightCandidate.equippedAuraId)
+	if auraComparison ~= 0 then
+		return auraComparison
+	end
+
+	for _, slot in ipairs(AccessoryConfig.SlotOrder) do
+		local accessoryComparison = compareOptionalIds(
+			leftCandidate.equippedAccessories[slot],
+			rightCandidate.equippedAccessories[slot]
+		)
+		if accessoryComparison ~= 0 then
+			return accessoryComparison
+		end
+	end
+
+	return 0
+end
+
+local function getBodyLoadoutPreferredMatchCount(bodyLoadoutCandidate, currentEquippedState)
+	local total = 0
+
+	for _, region in ipairs(BodyPartRegions.Order) do
+		local candidateEntry = bodyLoadoutCandidate.equippedState[region]
+		local currentEntry = currentEquippedState[region]
+		if candidateEntry == nil and currentEntry == nil then
+			total += 1
+		elseif candidateEntry ~= nil and currentEntry ~= nil and candidateEntry.ownedId == currentEntry.ownedId then
+			total += 1
+		end
+	end
+
+	return total
+end
+
+local function getBestLoadoutCandidate(player: Player)
+	local currentEquippedState = SessionStore.GetEquipped(player)
+	local currentEquippedAuraId = DataService:GetEquippedAuraId(player)
+	local currentEquippedAccessories = DataService:GetEquippedAccessories(player)
+	local ownedBodyParts = DataService:GetOwnedBodyParts(player)
+	local ownedAuras = DataService:GetOwnedAuras(player)
+	local ownedAccessories = DataService:GetOwnedAccessories(player)
+	local bodyLoadoutCandidates = buildBodyLoadoutCandidates(player)
+	local auraCandidates = getOwnedAuraCandidates(ownedAuras, currentEquippedAuraId)
+	local accessoryCandidatesBySlot = getOwnedAccessoryCandidatesBySlot(ownedAccessories, currentEquippedAccessories)
+	local bestSetupCandidate = nil
+
+	for _, bodyLoadoutCandidate in ipairs(bodyLoadoutCandidates) do
+		bodyLoadoutCandidate.preferredMatchCount =
+			getBodyLoadoutPreferredMatchCount(bodyLoadoutCandidate, currentEquippedState)
+
+		for _, auraCandidate in ipairs(auraCandidates) do
+			for _, headCandidate in ipairs(accessoryCandidatesBySlot.HeadAccessory) do
+				for _, gearCandidate in ipairs(accessoryCandidatesBySlot.GearAccessory) do
+					local equippedAccessories = buildAccessoryStateForCandidates(
+						headCandidate,
+						gearCandidate,
+						ownedAccessories
+					)
+					local setupCandidate = {
+						bodyLoadoutCandidate = bodyLoadoutCandidate,
+						auraCandidate = auraCandidate,
+						headCandidate = headCandidate,
+						gearCandidate = gearCandidate,
+						equippedState = bodyLoadoutCandidate.equippedState,
+						equippedAuraId = auraCandidate.auraId,
+						equippedAccessories = buildPersistedAccessoryState(equippedAccessories),
+						score = buildSetupScore(
+							bodyLoadoutCandidate.equippedState,
+							ownedBodyParts,
+							auraCandidate.auraId,
+							equippedAccessories
+						),
+					}
+
+					if compareFullSetupCandidates(setupCandidate, bestSetupCandidate) > 0 then
+						bestSetupCandidate = setupCandidate
+					end
+				end
 			end
 		end
 	end
 
-	return bestLoadoutCandidate
+	return bestSetupCandidate
 end
 
 local function serializeInspectEntry(entry: BodyPartLoadout.LoadoutEntry, ownedRecord: OwnedBodyParts.OwnedBodyPartRecord?)
@@ -1414,7 +1675,7 @@ local function countOwnedRecords(recordsById: { [string]: any }): number
 	return total
 end
 
-local function computeLoadoutBonuses(
+computeLoadoutBonuses = function(
 	equippedState: BodyPartLoadout.EquippedState,
 	ownedBodyParts: { [string]: OwnedBodyParts.OwnedBodyPartRecord }?,
 	equippedAuraId: string?,
@@ -1431,6 +1692,9 @@ local function computeLoadoutBonuses(
 		healthBonus = 0,
 		luckMultiplier = 1,
 		passiveIncomeMultiplier = 1,
+		speedMultiplier = 1,
+		damageMultiplier = 1,
+		healthMultiplier = 1,
 		speed = tonumber(basePlayerStats.speed) or 16,
 		damage = tonumber(basePlayerStats.damage) or 20,
 		health = tonumber(basePlayerStats.health) or 100,
@@ -1443,14 +1707,15 @@ local function computeLoadoutBonuses(
 			local piece = BodyPartsCatalog.GetPiece(entry.pieceId)
 			if piece then
 				local ownedRecord = if ownedBodyParts then ownedBodyParts[entry.ownedId] else nil
+				local combatStats = CombatPower.GetBodyPartContributionStats(piece, ownedRecord)
 				bonuses.passiveIncomePerSecond += tonumber(ownedRecord and ownedRecord.finalPassiveIncomePerSecond)
 					or tonumber(piece.passiveIncomePerSecond)
 					or 0
 				bonuses.luckBonus += tonumber(piece.luckBonus) or 0
 				bonuses.rollSpeedBonus += tonumber(piece.rollSpeedBonus) or 0
-				bonuses.speedBonus += tonumber(piece.speedBonus) or 0
-				bonuses.damageBonus += tonumber(piece.damageBonus) or 0
-				bonuses.healthBonus += tonumber(piece.healthBonus) or 0
+				bonuses.speedBonus += tonumber(combatStats.speed) or 0
+				bonuses.damageBonus += tonumber(combatStats.damage) or 0
+				bonuses.healthBonus += tonumber(combatStats.health) or 0
 			end
 		end
 	end
@@ -1475,6 +1740,7 @@ local function computeLoadoutBonuses(
 		bonuses.passiveIncomePerSecond += tonumber(auraConfig.bonuses.passiveIncomePerSecondBonus) or 0
 		bonuses.luckBonus += tonumber(auraConfig.bonuses.luckBonus) or 0
 		bonuses.rollSpeedBonus += tonumber(auraConfig.bonuses.rollSpeedBonus) or 0
+		bonuses.passiveIncomeMultiplier *= math.max(1, tonumber(auraConfig.bonuses.moneyMultiplier) or 1)
 	end
 
 	if typeof(equippedAccessories) == "table" then
@@ -1501,13 +1767,16 @@ local function computeLoadoutBonuses(
 				bonuses.healthBonus += tonumber(accessoryBonuses.healthBonus) or 0
 				bonuses.luckMultiplier *= math.max(1, tonumber(accessoryBonuses.luckMultiplier) or 1)
 				bonuses.passiveIncomeMultiplier *= math.max(1, tonumber(accessoryBonuses.passiveIncomeMultiplier) or 1)
+				bonuses.speedMultiplier *= math.max(1, tonumber(accessoryBonuses.speedMultiplier) or 1)
+				bonuses.damageMultiplier *= math.max(1, tonumber(accessoryBonuses.damageMultiplier) or 1)
+				bonuses.healthMultiplier *= math.max(1, tonumber(accessoryBonuses.healthMultiplier) or 1)
 			end
 		end
 	end
 
-	bonuses.speed += bonuses.speedBonus
-	bonuses.damage += bonuses.damageBonus
-	bonuses.health += bonuses.healthBonus
+	bonuses.speed = (bonuses.speed + bonuses.speedBonus) * bonuses.speedMultiplier
+	bonuses.damage = (bonuses.damage + bonuses.damageBonus) * bonuses.damageMultiplier
+	bonuses.health = (bonuses.health + bonuses.healthBonus) * bonuses.healthMultiplier
 
 	return bonuses
 end
@@ -1694,6 +1963,54 @@ function BodyPartService:BuildCurrentVisualApplyRequest(player: Player, equipped
 	)
 end
 
+local function resolveEquippedGearConfig(player: Player): AccessoryConfig.AccessoryConfigEntry?
+	local equippedAccessories = DataService:GetEquippedAccessories(player)
+	local equippedOwnedId = equippedAccessories.GearAccessory
+	if typeof(equippedOwnedId) ~= "string" or equippedOwnedId == "" then
+		return nil
+	end
+
+	local ownedRecord = DataService:GetOwnedAccessories(player)[equippedOwnedId]
+	if not ownedRecord then
+		return nil
+	end
+
+	local config = AccessoryConfig.Get(ownedRecord.accessoryId)
+	if not config or config.slot ~= "GearAccessory" then
+		return nil
+	end
+
+	return config
+end
+
+local function resolveEquippedHeadAccessoryConfig(player: Player): AccessoryConfig.AccessoryConfigEntry?
+	local equippedAccessories = DataService:GetEquippedAccessories(player)
+	local equippedOwnedId = equippedAccessories.HeadAccessory
+	if typeof(equippedOwnedId) ~= "string" or equippedOwnedId == "" then
+		return nil
+	end
+
+	local ownedRecord = DataService:GetOwnedAccessories(player)[equippedOwnedId]
+	if not ownedRecord then
+		return nil
+	end
+
+	local config = AccessoryConfig.Get(ownedRecord.accessoryId)
+	if not config or config.slot ~= "HeadAccessory" then
+		return nil
+	end
+
+	return config
+end
+
+local function applyCurrentGearVisual(player: Player, character: Model): (boolean, string?)
+	return GearVisuals.Apply(character, resolveEquippedGearConfig(player))
+end
+
+local function applyCurrentHeadAccessoryVisual(player: Player, character: Model): (boolean, string?)
+	return HeadAccessoryVisuals.Apply(character, resolveEquippedHeadAccessoryConfig(player))
+end
+
 function BodyPartService:CanApplyCurrentVisualState(player: Player, equippedAuraIdOverride: string?): (boolean, string?)
 	local character = getCharacter(player)
 	if not character then
@@ -1728,7 +2045,7 @@ function BodyPartService:CanApplyCurrentVisualState(player: Player, equippedAura
 	return BodyPartVisuals.CanApplyAura(character, auraRequest)
 end
 
-function BodyPartService:ApplySessionLoadout(player: Player): (boolean, string?)
+function BodyPartService:ApplySessionLoadout(player: Player, overrideAutoSizeEnabled: boolean?): (boolean, string?)
 	local startedAt = PerfStats.Begin()
 	local character = getCharacter(player)
 	if not character then
@@ -1754,8 +2071,9 @@ function BodyPartService:ApplySessionLoadout(player: Player): (boolean, string?)
 	local callSucceeded, applySuccessOrTrace, applyMessage = xpcall(function()
 		local equippedState = SessionStore.GetEquipped(player)
 		local equippedAuraId = DataService:GetEquippedAuraId(player)
+		local bodyPartScaleOverride = getBodyPartScaleOverride(player, overrideAutoSizeEnabled)
 
-		if not BodyPartLoadout.HasAnyEquipped(equippedState) and equippedAuraId == nil then
+		if not BodyPartLoadout.HasAnyEquipped(equippedState) and equippedAuraId == nil and bodyPartScaleOverride == nil then
 			local resetResult = BodyPartVisuals.Reset(character, getBaseRig())
 			if not resetResult.success then
 				return false, table.concat(resetResult.errors, " | ")
@@ -1765,7 +2083,7 @@ function BodyPartService:ApplySessionLoadout(player: Player): (boolean, string?)
 				equippedState,
 				equippedAuraId,
 				DataService:GetOwnedBodyParts(player),
-				getBodyPartScaleOverride(player)
+				bodyPartScaleOverride
 			)
 			if not request then
 				return false, requestError or "Failed to build body part apply request."
@@ -1775,6 +2093,16 @@ function BodyPartService:ApplySessionLoadout(player: Player): (boolean, string?)
 			if not applyResult.success then
 				return false, table.concat(applyResult.errors, " | ")
 			end
+		end
+
+		local headAccessorySuccess, headAccessoryMessage = applyCurrentHeadAccessoryVisual(player, character)
+		if not headAccessorySuccess then
+			return false, headAccessoryMessage or "Failed to apply the equipped head accessory visual."
+		end
+
+		local gearSuccess, gearMessage = applyCurrentGearVisual(player, character)
+		if not gearSuccess then
+			return false, gearMessage or "Failed to apply the equipped gear visual."
 		end
 
 		return true, nil
@@ -1809,8 +2137,8 @@ end
 -- how effective scale is resolved, must trigger a full visual rebuild before success
 -- is returned. Persistence-only writes that do not change the active equipped scale
 -- do not need to call this helper.
-rebuildCurrentVisualStateNow = function(player: Player, reason: string?): (boolean, string?)
-	local success, applyMessage = BodyPartService:ApplySessionLoadout(player)
+rebuildCurrentVisualStateNow = function(player: Player, reason: string?, overrideAutoSizeEnabled: boolean?): (boolean, string?)
+	local success, applyMessage = BodyPartService:ApplySessionLoadout(player, overrideAutoSizeEnabled)
 	if success then
 		return true, nil
 	end
@@ -1896,7 +2224,12 @@ refreshCurrentAppearanceNow = function(player: Player, reason: string?): (boolea
 	setCharacterBuildLock(character, true)
 
 	local callSucceeded, refreshSuccessOrTrace, refreshMessage = xpcall(function()
-		return BodyPartVisuals.RefreshAppearance(character, request)
+		local appearanceSuccess, appearanceMessage = BodyPartVisuals.RefreshAppearance(character, request)
+		if not appearanceSuccess then
+			return false, appearanceMessage
+		end
+
+		return applyCurrentGearVisual(player, character)
 	end, debug.traceback)
 
 	setCharacterBuildLock(character, false)
@@ -2481,9 +2814,11 @@ end
 
 function BodyPartService:EquipBestLoadout(player: Player): (boolean, string)
 	local previousState = SessionStore.GetEquipped(player)
+	local previousAuraId = DataService:GetEquippedAuraId(player)
+	local previousAccessories = DataService:GetEquippedAccessories(player)
 	local bestLoadoutCandidate = getBestLoadoutCandidate(player)
 	if bestLoadoutCandidate == nil then
-		local message = "No owned body parts are available to equip."
+		local message = "No owned body parts, auras, or accessories are available to equip."
 		self:NotifyClient(player, message)
 		return true, message
 	end
@@ -2493,31 +2828,88 @@ function BodyPartService:EquipBestLoadout(player: Player): (boolean, string)
 		return false, resolveError or "Failed to resolve the best loadout scales."
 	end
 
-	if BodyPartLoadout.AreEquippedStatesEqual(previousState, resolvedBestEquippedState) then
-		local message = if BodyPartLoadout.HasAnyEquipped(resolvedBestEquippedState)
+	local bestEquippedAccessories = buildPersistedAccessoryState(bestLoadoutCandidate.equippedAccessories)
+	local function areAccessoriesEqual(left, right): boolean
+		for _, slot in ipairs(AccessoryConfig.SlotOrder) do
+			if left[slot] ~= right[slot] then
+				return false
+			end
+		end
+		return true
+	end
+
+	local hasAnyEquipped = BodyPartLoadout.HasAnyEquipped(resolvedBestEquippedState)
+		or bestLoadoutCandidate.equippedAuraId ~= nil
+		or bestEquippedAccessories.HeadAccessory ~= nil
+		or bestEquippedAccessories.GearAccessory ~= nil
+	local isAlreadyEquipped = BodyPartLoadout.AreEquippedStatesEqual(previousState, resolvedBestEquippedState)
+		and previousAuraId == bestLoadoutCandidate.equippedAuraId
+		and areAccessoriesEqual(previousAccessories, bestEquippedAccessories)
+
+	if isAlreadyEquipped then
+		local message = if hasAnyEquipped
 			then "Best loadout is already equipped."
-			else "No owned body parts are available to equip."
+			else "No owned body parts, auras, or accessories are available to equip."
 		self:NotifyClient(player, message)
 		return true, message
 	end
 
+	local function restorePreviousEquipment()
+		SessionStore.Restore(player, previousState)
+
+		local auraRestored, auraRestoreMessage = DataService:SetEquippedAuraId(player, previousAuraId)
+		if not auraRestored then
+			Logger.Warn(string.format(
+				"[BodyPartService] Failed to restore previous aura for %s after Equip Best rollback: %s",
+				player.Name,
+				tostring(auraRestoreMessage)
+			))
+		end
+
+		local accessoriesRestored, accessoriesRestoreMessage =
+			DataService:SetEquippedAccessories(player, previousAccessories)
+		if not accessoriesRestored then
+			Logger.Warn(string.format(
+				"[BodyPartService] Failed to restore previous accessories for %s after Equip Best rollback: %s",
+				player.Name,
+				tostring(accessoriesRestoreMessage)
+			))
+		end
+
+		rollbackVisualState(player, previousState)
+		self:ApplySessionLoadout(player)
+	end
+
 	SessionStore.Restore(player, resolvedBestEquippedState)
+
+	local auraPersisted, auraPersistMessage = DataService:SetEquippedAuraId(player, bestLoadoutCandidate.equippedAuraId)
+	if not auraPersisted then
+		restorePreviousEquipment()
+		return false, auraPersistMessage or "Failed to save the equipped aura."
+	end
+
+	local accessoriesPersisted, accessoriesPersistMessage =
+		DataService:SetEquippedAccessories(player, bestEquippedAccessories)
+	if not accessoriesPersisted then
+		restorePreviousEquipment()
+		return false, accessoriesPersistMessage or "Failed to save the equipped accessories."
+	end
 
 	local success, applyMessage = self:ApplySessionLoadout(player)
 	if not success then
-		rollbackVisualState(player, previousState)
+		restorePreviousEquipment()
 		return false, applyMessage or "Failed to equip the best loadout."
 	end
 
 	local persisted, persistMessage = persistSessionLoadout(player, previousState, true)
 	if not persisted then
+		restorePreviousEquipment()
 		return false, persistMessage or "Failed to save the equipped body part loadout."
 	end
 
-	local hasAnyEquipped = BodyPartLoadout.HasAnyEquipped(resolvedBestEquippedState)
 	local successMessage = if hasAnyEquipped
 		then "Equipped best loadout."
-		else "No owned body parts are available to equip."
+		else "No owned body parts, auras, or accessories are available to equip."
 	if hasAnyEquipped then
 		StatsService:RecordLoadoutAction(player, "equip")
 	end
@@ -2764,7 +3156,7 @@ end
 
 local function handleSetAutoSizeEnabled(player: Player, payload: any)
 	if typeof(payload) ~= "table" then
-		return response(false, "Auto scale payload must be a table.", BodyPartService:GetClientState(player))
+		return response(false, "Regular scale payload must be a table.", BodyPartService:GetClientState(player))
 	end
 
 	local nextAutoSizeEnabled = payload.enabled == true
@@ -2779,25 +3171,25 @@ local function handleSetAutoSizeEnabled(player: Player, payload: any)
 
 		local visualState, visualStateError = resolveEquippedStateScales(player, canonicalState, nextAutoSizeEnabled)
 		if not visualState then
-			return response(false, visualStateError or "Failed to resolve auto scale visuals.", BodyPartService:GetClientState(player))
+			return response(false, visualStateError or "Failed to resolve regular scale visuals.", BodyPartService:GetClientState(player))
 		end
 		SessionStore.Restore(player, visualState)
 
-		local success, applyMessage = rebuildCurrentVisualStateNow(player, "set_auto_size_enabled")
+		local success, applyMessage = rebuildCurrentVisualStateNow(player, "set_auto_size_enabled", nextAutoSizeEnabled)
 		if not success then
 			rollbackVisualState(player, previousState)
-			return response(false, applyMessage or "Failed to apply auto scale.", BodyPartService:GetClientState(player))
+			return response(false, applyMessage or "Failed to apply regular scale.", BodyPartService:GetClientState(player))
 		end
 	end
 
 	local ok, message = DataService:SetAutoSizeEnabled(player, nextAutoSizeEnabled)
 	if not ok then
 		rollbackVisualState(player, previousState)
-		return response(false, message or "Failed to update auto scale.", BodyPartService:GetClientState(player))
+		return response(false, message or "Failed to update regular scale.", BodyPartService:GetClientState(player))
 	end
 
 	notifyLoadoutChanged(player)
-	return response(true, message or "Auto scale updated.", BodyPartService:GetClientDeltaState(player, message))
+	return response(true, message or "Regular scale updated.", BodyPartService:GetClientDeltaState(player, message))
 end
 
 local function handleToggleFavorite(player: Player, payload: any)
@@ -2894,7 +3286,7 @@ function BodyPartService:OnStart()
 	setAutoSizeEnabledRemote.OnServerInvoke = function(player: Player, payload: any)
 		local allowed = RequestLimiter:Allow(player, "remote.body_parts.auto_size")
 		if not allowed then
-			return buildRateLimitResponse("You're toggling auto scale too quickly.", BodyPartService:GetClientState(player))
+			return buildRateLimitResponse("You're toggling regular scale too quickly.", BodyPartService:GetClientState(player))
 		end
 
 		return handleSetAutoSizeEnabled(player, payload)
@@ -2937,8 +3329,8 @@ function BodyPartService:OnStart()
 		notifyLoadoutChanged(player)
 		requestAuraReapply(player, "equipped_aura_changed")
 	end)
-	PotionService.StateChanged:Connect(function(player: Player, bonuses: PotionRuntimeBonuses.RuntimeBonuses?)
-		local nextScaleOverride = if typeof(bonuses) == "table" then tonumber(bonuses.bodyPartScaleOverride) else nil
+	PotionService.StateChanged:Connect(function(player: Player, _bonuses: PotionRuntimeBonuses.RuntimeBonuses?)
+		local nextScaleOverride = getBodyPartScaleOverride(player)
 		local previousScaleOverride = lastBodyPartScaleOverrideByPlayer[player]
 		lastBodyPartScaleOverrideByPlayer[player] = nextScaleOverride
 

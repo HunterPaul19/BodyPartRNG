@@ -113,6 +113,13 @@ local function facePreviewModel(previewModel: Model)
 	previewModel:PivotTo(rotatedPivot)
 end
 
+local function centerPreviewModel(previewModel: Model)
+	local boundingBoxCFrame = previewModel:GetBoundingBox()
+	local center = boundingBoxCFrame.Position
+	local currentPivot = previewModel:GetPivot()
+	previewModel:PivotTo(CFrame.new(-center) * currentPivot)
+end
+
 local function createPreviewClone(sourceModel: Model, name: string, shouldFaceViewport: boolean?): Model?
 	local ok, previewModel = pcall(function()
 		return sourceModel:Clone()
@@ -388,7 +395,39 @@ local function deactivateActiveRollPreview(sessionState)
 	sessionState.activeCacheKey = nil
 end
 
-local function renderModel(viewportFrame: ViewportFrame, sourceModel: Model?, framingModel: Model?): boolean
+local function getActivePreviewModel(viewportFrame: ViewportFrame): Model?
+	local previewWorld = viewportFrame:FindFirstChild("PreviewWorld")
+	if previewWorld and previewWorld:IsA("WorldModel") then
+		for _, child in ipairs(previewWorld:GetChildren()) do
+			if child:IsA("Model") then
+				return child
+			end
+		end
+	end
+
+	for _, child in ipairs(viewportFrame:GetChildren()) do
+		if child:IsA("Model") then
+			return child
+		end
+	end
+
+	return nil
+end
+
+local function rotateModelAroundCenter(previewModel: Model, deltaRadians: number): boolean
+	if math.abs(deltaRadians) <= 0.00001 then
+		return true
+	end
+
+	local boundingBoxCFrame = previewModel:GetBoundingBox()
+	local center = boundingBoxCFrame.Position
+	local currentPivot = previewModel:GetPivot()
+	previewModel:PivotTo(CFrame.new(center) * CFrame.Angles(0, deltaRadians, 0) * CFrame.new(-center) * currentPivot)
+
+	return true
+end
+
+local function renderModel(viewportFrame: ViewportFrame, sourceModel: Model?, framingModel: Model?, shouldCenterModel: boolean?): boolean
 	if not (viewportFrame and viewportFrame:IsA("ViewportFrame")) then
 		return false
 	end
@@ -401,6 +440,7 @@ local function renderModel(viewportFrame: ViewportFrame, sourceModel: Model?, fr
 		"model",
 		getModelCacheToken(sourceModel),
 		getModelCacheToken(framingModel),
+		if shouldCenterModel == true then "centered" else "source",
 	}, "|")
 	if viewportFrame:GetAttribute(CACHE_KEY_ATTRIBUTE) == cacheKey
 		and viewportFrame.CurrentCamera ~= nil
@@ -430,6 +470,9 @@ local function renderModel(viewportFrame: ViewportFrame, sourceModel: Model?, fr
 
 	if framingPreviewModel then
 		previewModel:PivotTo(framingPreviewModel:GetPivot())
+	end
+	if shouldCenterModel == true then
+		centerPreviewModel(previewModel)
 	end
 
 	local boundingBoxCFrame, boundingBoxSize
@@ -504,7 +547,69 @@ local function renderModelAtFramingPivot(viewportFrame: ViewportFrame, sourceMod
 	camera.Name = "PreviewCamera"
 	camera.FieldOfView = DEFAULT_FIELD_OF_VIEW
 	camera.Parent = viewportFrame
-	camera.CFrame = getBundleCameraCFrame(previewModel, nil)
+	camera.CFrame = getBundleCameraCFrame(previewModel, framingPreviewModel)
+
+	if framingPreviewModel then
+		framingPreviewModel:Destroy()
+	end
+
+	applyViewportLighting(viewportFrame, camera)
+	viewportFrame:SetAttribute(CACHE_KEY_ATTRIBUTE, cacheKey)
+
+	return true
+end
+
+local function renderModelAtFramingBounds(viewportFrame: ViewportFrame, sourceModel: Model?, framingModel: Model?): boolean
+	if not (viewportFrame and viewportFrame:IsA("ViewportFrame")) then
+		return false
+	end
+	if not (sourceModel and sourceModel:IsA("Model")) then
+		clearViewport(viewportFrame)
+		return false
+	end
+
+	local cacheKey = table.concat({
+		"modelAtFramingBounds",
+		getModelCacheToken(sourceModel),
+		getModelCacheToken(framingModel),
+	}, "|")
+	if viewportFrame:GetAttribute(CACHE_KEY_ATTRIBUTE) == cacheKey
+		and viewportFrame.CurrentCamera ~= nil
+		and viewportFrame:FindFirstChild("PreviewWorld") ~= nil
+	then
+		return true
+	end
+
+	clearViewport(viewportFrame)
+
+	local worldModel = Instance.new("WorldModel")
+	worldModel.Name = "PreviewWorld"
+	worldModel.Parent = viewportFrame
+
+	local previewModel = createPreviewClone(sourceModel, "PreviewModel", false)
+	if not previewModel then
+		worldModel:Destroy()
+		return false
+	end
+
+	local framingPreviewModel = nil
+	if framingModel and framingModel:IsA("Model") then
+		framingPreviewModel = createPreviewClone(framingModel, "FramingModel", false)
+	end
+
+	if framingPreviewModel then
+		local sourceBoundingBox = previewModel:GetBoundingBox()
+		local targetBoundingBox = framingPreviewModel:GetBoundingBox()
+		local offset = targetBoundingBox.Position - sourceBoundingBox.Position
+		previewModel:PivotTo(CFrame.new(offset) * previewModel:GetPivot())
+	end
+	previewModel.Parent = worldModel
+
+	local camera = Instance.new("Camera")
+	camera.Name = "PreviewCamera"
+	camera.FieldOfView = DEFAULT_FIELD_OF_VIEW
+	camera.Parent = viewportFrame
+	camera.CFrame = getBundleCameraCFrame(previewModel, framingPreviewModel)
 
 	if framingPreviewModel then
 		framingPreviewModel:Destroy()
@@ -678,6 +783,19 @@ function ViewportModelRenderer.ClearRollPreview(viewportFrame: ViewportFrame)
 	clearViewport(viewportFrame)
 end
 
+function ViewportModelRenderer.RotatePreview(viewportFrame: ViewportFrame, deltaRadians: number): boolean
+	if not (viewportFrame and viewportFrame:IsA("ViewportFrame")) then
+		return false
+	end
+
+	local previewModel = getActivePreviewModel(viewportFrame)
+	if not previewModel then
+		return false
+	end
+
+	return rotateModelAroundCenter(previewModel, tonumber(deltaRadians) or 0)
+end
+
 function ViewportModelRenderer.RenderRollPreview(viewportFrame: ViewportFrame, sourceModel: Model?, sessionToken: any): boolean
 	if not (viewportFrame and viewportFrame:IsA("ViewportFrame")) then
 		return false
@@ -781,6 +899,10 @@ function ViewportModelRenderer.RenderBundle(viewportFrame: ViewportFrame, bundle
 	return renderModel(viewportFrame, bundleModel, nil)
 end
 
+function ViewportModelRenderer.RenderCenteredBundle(viewportFrame: ViewportFrame, bundleModel: Model?): boolean
+	return renderModel(viewportFrame, bundleModel, nil, true)
+end
+
 function ViewportModelRenderer.RenderPotion(viewportFrame: ViewportFrame, potionModel: Model?): boolean
 	return renderPotion(viewportFrame, potionModel)
 end
@@ -795,6 +917,14 @@ function ViewportModelRenderer.RenderCharacterModelAtFramingPivot(
 	framingModel: Model?
 ): boolean
 	return renderModelAtFramingPivot(viewportFrame, characterModel, framingModel)
+end
+
+function ViewportModelRenderer.RenderCharacterModelAtFramingBounds(
+	viewportFrame: ViewportFrame,
+	characterModel: Model?,
+	framingModel: Model?
+): boolean
+	return renderModelAtFramingBounds(viewportFrame, characterModel, framingModel)
 end
 
 function ViewportModelRenderer.RenderBaseRig(viewportFrame: ViewportFrame, baseRigModel: Model?): boolean

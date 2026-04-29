@@ -2,6 +2,7 @@ local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local Schema = require(ReplicatedStorage.Lists.Schema)
 local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
@@ -31,12 +32,16 @@ local EQUIPPED_LOADOUT_KEY = Schema.EquippedLoadout and Schema.EquippedLoadout.k
 local ACCESSORIES_DATA_KEY = Schema.Accessories and Schema.Accessories.key or "accessories"
 local EQUIPPED_ACCESSORIES_DATA_KEY = Schema.EquippedAccessories and Schema.EquippedAccessories.key or "equippedAccessories"
 local CRAFTING_MATERIALS_DATA_KEY = Schema.CraftingMaterials and Schema.CraftingMaterials.key or "craftingMaterials"
+local MONEY_DATA_KEY = Schema.Money and Schema.Money.key or "money"
 
 local SELECTED_ROW_TRANSPARENCY = 0
 local DEFAULT_ROW_TRANSPARENCY = 0.16
 local DISABLED_ROW_TRANSPARENCY = 0.45
 local ENABLED_BUTTON_TEXT_TRANSPARENCY = 0
 local DISABLED_BUTTON_TEXT_TRANSPARENCY = 0.35
+local VIEWPORT_ROTATION_SPEED_RADIANS = math.rad(24)
+local ITEM_STAT_ROW_PREFIX = "CraftingItemStat_"
+local ITEM_STAT_TEXT_SIZE_BOOST = 1
 
 type CraftingRemotes = {
 	getState: RemoteFunction,
@@ -49,6 +54,7 @@ type CraftingUi = {
 	recipeList: ScrollingFrame,
 	recipeTemplate: ImageButton,
 	itemName: TextLabel,
+	itemDescription: TextLabel?,
 	viewportFrame: ViewportFrame?,
 	requirementList: ScrollingFrame,
 	requirementTemplate: GuiObject,
@@ -63,6 +69,7 @@ local CraftingController = {
 	_requestInFlight = false,
 	_promptConnection = nil :: RBXScriptConnection?,
 	_searchConnection = nil :: RBXScriptConnection?,
+	_viewportRotationConnection = nil :: RBXScriptConnection?,
 	_ui = nil :: CraftingUi?,
 	_remotes = nil :: CraftingRemotes?,
 	_state = nil :: any,
@@ -80,6 +87,15 @@ end
 
 local function formatWholeNumber(value: any): string
 	return BodyPartPresentation.FormatNumberish(math.max(0, math.floor(tonumber(value) or 0)))
+end
+
+local function buildRecipeItemStatRows(recipe: any): { any }
+	local recipeYield = if typeof(recipe) == "table" then recipe.yield else nil
+	if typeof(recipeYield) ~= "table" or recipeYield.kind ~= "accessory" then
+		return {}
+	end
+
+	return AccessoryPresentation.BuildStatRows(recipeYield.accessoryId)
 end
 
 local function countDictionary(dictionary: any): number
@@ -139,6 +155,68 @@ local function hideNativeTemplates(container: Instance, template: GuiObject)
 	end
 end
 
+local function ensureItemStatLayout(container: TextLabel): UIListLayout
+	local layout = container:FindFirstChild("CraftingItemStatLayout")
+	if layout and layout:IsA("UIListLayout") then
+		return layout
+	end
+
+	layout = Instance.new("UIListLayout")
+	layout.Name = "CraftingItemStatLayout"
+	layout.FillDirection = Enum.FillDirection.Vertical
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+	layout.VerticalAlignment = Enum.VerticalAlignment.Top
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, 2)
+	layout.Parent = container
+	return layout
+end
+
+local function applyItemStatLabelStyle(source: TextLabel, target: TextLabel, color: Color3)
+	target.BackgroundTransparency = 1
+	target.BorderSizePixel = 0
+	target.FontFace = source.FontFace
+	target.RichText = false
+	target.TextColor3 = color
+	target.TextSize = source.TextSize + ITEM_STAT_TEXT_SIZE_BOOST
+	target.TextTransparency = source.TextTransparency
+	target.TextTruncate = Enum.TextTruncate.AtEnd
+	target.TextWrapped = false
+	target.TextYAlignment = Enum.TextYAlignment.Center
+end
+
+local function clearRecipeItemStatRows(container: TextLabel)
+	container.Text = ""
+	hideGeneratedChildren(container, ITEM_STAT_ROW_PREFIX)
+end
+
+local function renderRecipeItemStatRows(container: TextLabel, rows: { any })
+	clearRecipeItemStatRows(container)
+	ensureItemStatLayout(container)
+
+	local statTextSize = container.TextSize + ITEM_STAT_TEXT_SIZE_BOOST
+	local rowHeight = math.max(18, math.ceil(statTextSize + 4))
+	for index, rowData in ipairs(rows) do
+		local row = Instance.new("Frame")
+		row.Name = string.format("%s%03d", ITEM_STAT_ROW_PREFIX, index)
+		row.BackgroundTransparency = 1
+		row.BorderSizePixel = 0
+		row.ClipsDescendants = true
+		row.LayoutOrder = index
+		row.Size = UDim2.new(1, 0, 0, rowHeight)
+		row.Parent = container
+
+		local statLabel = Instance.new("TextLabel")
+		statLabel.Name = "Stat"
+		statLabel.Position = UDim2.fromOffset(0, 0)
+		statLabel.Size = UDim2.new(1, 0, 1, 0)
+		statLabel.Text = string.format("%s %s", rowData.valueText, rowData.labelText)
+		statLabel.TextXAlignment = Enum.TextXAlignment.Left
+		applyItemStatLabelStyle(container, statLabel, rowData.color)
+		statLabel.Parent = row
+	end
+end
+
 local function cloneRecipeEntries(entries: any): { any }
 	local results = {}
 	if typeof(entries) == "table" then
@@ -179,7 +257,7 @@ local function getYieldInfo(recipe: any): (string, string, Model?)
 			return tostring(recipe.label or recipe.id or "Accessory"), "[Accessory]", nil
 		end
 
-		local slotText = if config.slot == "HeadAccessory" then "[Head]" else "[Arm]"
+		local slotText = if config.slot == "HeadAccessory" then "[Head]" else "[Gear]"
 		return config.label, slotText, AccessoryPresentation.GetPlaceholderModel(config)
 	end
 
@@ -231,6 +309,140 @@ local function sortBodyPartIngredients(left: any, right: any): boolean
 	return leftId < rightId
 end
 
+local function getBodyPartIngredientAmount(ingredient: any): number
+	return math.max(1, math.floor(tonumber(ingredient and ingredient.amount) or 1))
+end
+
+local function getBodyPartIngredientKey(ingredient: any): string
+	if typeof(ingredient) ~= "table" then
+		return "unknown"
+	end
+	if typeof(ingredient.pieceId) == "string" and ingredient.pieceId ~= "" then
+		return "piece:" .. ingredient.pieceId
+	end
+	if typeof(ingredient.setId) == "string" and ingredient.setId ~= "" then
+		if typeof(ingredient.region) == "string" and ingredient.region ~= "" then
+			return string.format("set:%s:%s", ingredient.setId, ingredient.region)
+		end
+		return "set:" .. ingredient.setId
+	end
+	return "unknown"
+end
+
+local function getBodyPartRequirementSpecificity(requirement: any): number
+	if typeof(requirement) ~= "table" then
+		return 0
+	end
+	if typeof(requirement.pieceId) == "string" and requirement.pieceId ~= "" then
+		return 3
+	end
+	if typeof(requirement.setId) == "string" and requirement.setId ~= "" and typeof(requirement.region) == "string" and requirement.region ~= "" then
+		return 2
+	end
+	if typeof(requirement.setId) == "string" and requirement.setId ~= "" then
+		return 1
+	end
+	return 0
+end
+
+local function buildExpandedBodyPartRequirements(recipe: any): { any }
+	local requirements = {}
+	for _, ingredient in ipairs(if typeof(recipe) == "table" and typeof(recipe.bodyParts) == "table" then recipe.bodyParts else {}) do
+		for _ = 1, getBodyPartIngredientAmount(ingredient) do
+			table.insert(requirements, {
+				pieceId = ingredient.pieceId,
+				setId = ingredient.setId,
+				region = ingredient.region,
+				amount = 1,
+			})
+		end
+	end
+
+	table.sort(requirements, function(left, right)
+		local leftSpecificity = getBodyPartRequirementSpecificity(left)
+		local rightSpecificity = getBodyPartRequirementSpecificity(right)
+		if leftSpecificity ~= rightSpecificity then
+			return leftSpecificity > rightSpecificity
+		end
+		return getBodyPartIngredientKey(left) < getBodyPartIngredientKey(right)
+	end)
+
+	return requirements
+end
+
+local function bodyPartRecordMatchesIngredient(record: any, ingredient: any): boolean
+	if typeof(record) ~= "table" or typeof(ingredient) ~= "table" then
+		return false
+	end
+
+	if typeof(ingredient.pieceId) == "string" and ingredient.pieceId ~= "" then
+		return record.pieceId == ingredient.pieceId
+	end
+
+	if typeof(ingredient.setId) ~= "string" or ingredient.setId == "" then
+		return false
+	end
+
+	local piece = if typeof(record.pieceId) == "string" then BodyPartsCatalog.GetPiece(record.pieceId) else nil
+	if not piece or piece.setId ~= ingredient.setId then
+		return false
+	end
+
+	return typeof(ingredient.region) ~= "string" or ingredient.region == "" or piece.region == ingredient.region
+end
+
+local function getBodyPartIngredientLabel(ingredient: any): string
+	if typeof(ingredient) ~= "table" then
+		return "Body Part"
+	end
+
+	if typeof(ingredient.pieceId) == "string" and ingredient.pieceId ~= "" then
+		local piece = BodyPartsCatalog.GetPiece(ingredient.pieceId)
+		return if piece then piece.displayName else ingredient.pieceId
+	end
+
+	if typeof(ingredient.setId) == "string" and ingredient.setId ~= "" then
+		local setConfig = BodyPartsCatalog.GetSet(ingredient.setId)
+		local setDisplayName = if setConfig then setConfig.displayName else ingredient.setId
+		if typeof(ingredient.region) == "string" and ingredient.region ~= "" then
+			return string.format("%s %s", setDisplayName, BodyPartPresentation.GetLocalizedRegionLabel(ingredient.region))
+		end
+		return setDisplayName
+	end
+
+	return "Body Part"
+end
+
+local function getBodyPartIngredientSetConfig(ingredient: any): any?
+	if typeof(ingredient) ~= "table" or typeof(ingredient.setId) ~= "string" or ingredient.setId == "" then
+		return nil
+	end
+
+	return BodyPartsCatalog.GetSet(ingredient.setId)
+end
+
+local function applySetRollDisplayStyle(label: TextLabel, setConfig: any?)
+	local rollDisplay = if typeof(setConfig) == "table" then setConfig.rollDisplay else nil
+	if typeof(rollDisplay) ~= "table" then
+		return
+	end
+
+	if typeof(rollDisplay.color) == "Color3" then
+		label.TextColor3 = rollDisplay.color
+	end
+
+	local fontFace = rollDisplay.fontFace
+	if typeof(fontFace) ~= "Font" then
+		return
+	end
+
+	if typeof(rollDisplay.fontWeight) == "EnumItem" then
+		label.FontFace = Font.new(fontFace.Family, rollDisplay.fontWeight, fontFace.Style)
+	else
+		label.FontFace = fontFace
+	end
+end
+
 function CraftingController:_getPlayerGui(): PlayerGui
 	return LOCAL_PLAYER:WaitForChild("PlayerGui")
 end
@@ -272,6 +484,15 @@ function CraftingController:_getMaterialAmounts(): { [string]: number }
 	return normalizeMaterialAmounts(DataController:Get(CRAFTING_MATERIALS_DATA_KEY))
 end
 
+function CraftingController:_getMoney(): number
+	local state = self._state
+	if typeof(state) == "table" and state.money ~= nil then
+		return math.max(0, math.floor(tonumber(state.money) or 0))
+	end
+
+	return math.max(0, math.floor(tonumber(DataController:Get(MONEY_DATA_KEY)) or 0))
+end
+
 function CraftingController:_getEquippedLoadout()
 	return BodyPartLoadout.NormalizeEquippedState(DataController:Get(EQUIPPED_LOADOUT_KEY), self:_getOwnedBodyParts())
 end
@@ -295,14 +516,14 @@ function CraftingController:_findRecipe(recipeId: string?): any?
 	return nil
 end
 
-function CraftingController:_getEligibleBodyParts(pieceId: string): { any }
+function CraftingController:_getEligibleBodyPartsForIngredient(ingredient: any): { any }
 	local ownedBodyParts = self:_getOwnedBodyParts()
 	local equippedLoadout = self:_getEquippedLoadout()
 	local eligible = {}
 
 	for ownedId, record in pairs(ownedBodyParts) do
 		if typeof(record) == "table"
-			and record.pieceId == pieceId
+			and bodyPartRecordMatchesIngredient(record, ingredient)
 			and record.isFavorite ~= true
 			and not isBodyPartEquipped(equippedLoadout, ownedId)
 		then
@@ -320,22 +541,17 @@ function CraftingController:_buildAutoPickedBodyPartIds(recipe: any): ({ string 
 	local reservedByOwnedId = {}
 
 	for _, ingredient in ipairs(if typeof(recipe.bodyParts) == "table" then recipe.bodyParts else {}) do
-		local pieceId = tostring(ingredient.pieceId or "")
-		local amount = math.max(1, math.floor(tonumber(ingredient.amount) or 1))
-		local eligible = self:_getEligibleBodyParts(pieceId)
-		local usable = {}
+		availableCounts[getBodyPartIngredientKey(ingredient)] = #(self:_getEligibleBodyPartsForIngredient(ingredient))
+	end
 
-		for _, record in ipairs(eligible) do
-			if record.ownedId and not reservedByOwnedId[record.ownedId] then
-				table.insert(usable, record)
+	for _, requirement in ipairs(buildExpandedBodyPartRequirements(recipe)) do
+		for _, record in ipairs(self:_getEligibleBodyPartsForIngredient(requirement)) do
+			local ownedId = record.ownedId
+			if ownedId and not reservedByOwnedId[ownedId] then
+				reservedByOwnedId[ownedId] = true
+				table.insert(pickedIds, ownedId)
+				break
 			end
-		end
-
-		availableCounts[pieceId] = #(self:_getEligibleBodyParts(pieceId))
-		for index = 1, math.min(amount, #usable) do
-			local ownedId = usable[index].ownedId
-			reservedByOwnedId[ownedId] = true
-			table.insert(pickedIds, ownedId)
 		end
 	end
 
@@ -348,10 +564,7 @@ function CraftingController:_getCraftability(recipe: any): (boolean, string, { s
 	end
 
 	local pickedIds, bodyPartCounts = self:_buildAutoPickedBodyPartIds(recipe)
-	local requiredBodyPartCount = 0
-	for _, ingredient in ipairs(if typeof(recipe.bodyParts) == "table" then recipe.bodyParts else {}) do
-		requiredBodyPartCount += math.max(1, math.floor(tonumber(ingredient.amount) or 1))
-	end
+	local requiredBodyPartCount = #buildExpandedBodyPartRequirements(recipe)
 	if #pickedIds < requiredBodyPartCount then
 		return false, "Missing body part ingredients.", pickedIds, bodyPartCounts
 	end
@@ -363,6 +576,11 @@ function CraftingController:_getCraftability(recipe: any): (boolean, string, { s
 		if (materialAmounts[materialId] or 0) < requiredAmount then
 			return false, "Missing crafting materials.", pickedIds, bodyPartCounts
 		end
+	end
+
+	local moneyCost = math.max(0, math.floor(tonumber(recipe.moneyCost) or 0))
+	if self:_getMoney() < moneyCost then
+		return false, "Not enough money.", pickedIds, bodyPartCounts
 	end
 
 	local recipeYield = recipe.yield
@@ -417,6 +635,11 @@ function CraftingController:_ensureUi(): CraftingUi
 	local itemName = recipeRoot:WaitForChild("ItemName", 30)
 	assert(itemName and itemName:IsA("TextLabel"), "CraftingMenu.Recipe.ItemName is missing.")
 
+	local itemDescription = recipeRoot:FindFirstChild("ItemDescription")
+	if itemDescription and not itemDescription:IsA("TextLabel") then
+		itemDescription = nil
+	end
+
 	local viewportFrame = recipeRoot:FindFirstChild("AccessoryViewport")
 	if viewportFrame and not viewportFrame:IsA("ViewportFrame") then
 		viewportFrame = nil
@@ -442,6 +665,7 @@ function CraftingController:_ensureUi(): CraftingUi
 		recipeList = recipeList,
 		recipeTemplate = recipeTemplate,
 		itemName = itemName,
+		itemDescription = itemDescription :: TextLabel?,
 		viewportFrame = viewportFrame :: ViewportFrame?,
 		requirementList = requirementList,
 		requirementTemplate = requirementTemplate,
@@ -452,6 +676,13 @@ function CraftingController:_ensureUi(): CraftingUi
 
 	hideNativeTemplates(recipeList, recipeTemplate)
 	hideNativeTemplates(requirementList, requirementTemplate)
+
+	if self._ui.itemDescription then
+		self._ui.itemDescription.RichText = false
+		self._ui.itemDescription.TextXAlignment = Enum.TextXAlignment.Left
+		self._ui.itemDescription.TextYAlignment = Enum.TextYAlignment.Top
+		renderRecipeItemStatRows(self._ui.itemDescription, {})
+	end
 
 	if self._ui.storeButton then
 		self._ui.storeButton.Visible = false
@@ -557,6 +788,10 @@ function CraftingController:_hydrateStateFromData(key: string?)
 		end
 	end
 
+	if key == nil or key == MONEY_DATA_KEY then
+		state.money = math.max(0, math.floor(tonumber(DataController:Get(MONEY_DATA_KEY)) or 0))
+	end
+
 	if state.recipes == nil then
 		state.recipes = CraftingRecipeConfig.GetAll()
 	end
@@ -602,8 +837,7 @@ function CraftingController:_recipeMatchesSearch(recipe: any, query: string): bo
 	}
 
 	for _, ingredient in ipairs(if typeof(recipe.bodyParts) == "table" then recipe.bodyParts else {}) do
-		local piece = BodyPartsCatalog.GetPiece(ingredient.pieceId)
-		table.insert(searchableParts, if piece then piece.displayName else tostring(ingredient.pieceId or ""))
+		table.insert(searchableParts, getBodyPartIngredientLabel(ingredient))
 	end
 
 	for _, ingredient in ipairs(if typeof(recipe.materials) == "table" then recipe.materials else {}) do
@@ -639,6 +873,16 @@ function CraftingController:_setCraftButtonEnabled(enabled: boolean)
 			end
 		end
 	end
+end
+
+function CraftingController:_setCraftButtonText(recipe: any?)
+	local ui = self:_ensureUi()
+	if not ui.craftButtonLabel then
+		return
+	end
+
+	local moneyCost = if typeof(recipe) == "table" then math.max(0, math.floor(tonumber(recipe.moneyCost) or 0)) else 0
+	ui.craftButtonLabel.Text = if moneyCost > 0 then string.format("Craft ($%s)", formatWholeNumber(moneyCost)) else "Craft"
 end
 
 function CraftingController:_refreshRecipeRowStates()
@@ -731,23 +975,64 @@ function CraftingController:_syncRecipeRows()
 	self:_syncDetail()
 end
 
+function CraftingController:_stopViewportRotation()
+	if self._viewportRotationConnection then
+		self._viewportRotationConnection:Disconnect()
+		self._viewportRotationConnection = nil
+	end
+end
+
+function CraftingController:_startViewportRotation(viewportFrame: ViewportFrame)
+	if self._viewportRotationConnection or not self._isOpen then
+		return
+	end
+
+	self._viewportRotationConnection = RunService.RenderStepped:Connect(function(deltaTime: number)
+		local ui = self._ui
+		local activeViewportFrame = ui and ui.viewportFrame
+		if not self._isOpen or activeViewportFrame ~= viewportFrame or not viewportFrame.Parent or not viewportFrame.Visible then
+			self:_stopViewportRotation()
+			return
+		end
+
+		local didRotate = ViewportModelRenderer.RotatePreview(viewportFrame, VIEWPORT_ROTATION_SPEED_RADIANS * deltaTime)
+		if not didRotate then
+			self:_stopViewportRotation()
+		end
+	end)
+end
+
 function CraftingController:_renderYieldViewport(recipe: any)
 	local ui = self:_ensureUi()
 	local viewportFrame = ui.viewportFrame
 	if not viewportFrame then
+		self:_stopViewportRotation()
 		return
 	end
 
 	local _, _, model = getYieldInfo(recipe)
 	if model and model:IsA("Model") then
-		viewportFrame.Visible = ViewportModelRenderer.RenderBundle(viewportFrame, model)
+		local rendered = ViewportModelRenderer.RenderCenteredBundle(viewportFrame, model)
+		viewportFrame.Visible = rendered
+		if rendered then
+			self:_startViewportRotation(viewportFrame)
+		else
+			self:_stopViewportRotation()
+		end
 	else
+		self:_stopViewportRotation()
 		ViewportModelRenderer.Clear(viewportFrame)
 		viewportFrame.Visible = false
 	end
 end
 
-function CraftingController:_addRequirementRow(labelText: string, ownedAmount: number, requiredAmount: number, layoutOrder: number)
+function CraftingController:_addRequirementRow(
+	labelText: string,
+	ownedAmount: number,
+	requiredAmount: number,
+	layoutOrder: number,
+	setConfig: any?
+)
 	local ui = self:_ensureUi()
 	local row = ui.requirementTemplate:Clone()
 	row.Name = string.format("CraftingIngredient_%03d", layoutOrder)
@@ -756,6 +1041,9 @@ function CraftingController:_addRequirementRow(labelText: string, ownedAmount: n
 
 	local label = getFirstTextLabel(row, "MaterialName")
 	if label then
+		if setConfig then
+			applySetRollDisplayStyle(label, setConfig)
+		end
 		label.Text = labelText
 	end
 
@@ -774,13 +1062,13 @@ function CraftingController:_syncRequirements(recipe: any, bodyPartCounts: { [st
 
 	local layoutOrder = 1
 	for _, ingredient in ipairs(if typeof(recipe.bodyParts) == "table" then recipe.bodyParts else {}) do
-		local piece = BodyPartsCatalog.GetPiece(ingredient.pieceId)
 		local requiredAmount = math.max(1, math.floor(tonumber(ingredient.amount) or 1))
 		self:_addRequirementRow(
-			if piece then piece.displayName else tostring(ingredient.pieceId or "Body Part"),
-			bodyPartCounts[ingredient.pieceId] or 0,
+			getBodyPartIngredientLabel(ingredient),
+			bodyPartCounts[getBodyPartIngredientKey(ingredient)] or 0,
 			requiredAmount,
-			layoutOrder
+			layoutOrder,
+			getBodyPartIngredientSetConfig(ingredient)
 		)
 		layoutOrder += 1
 	end
@@ -793,7 +1081,8 @@ function CraftingController:_syncRequirements(recipe: any, bodyPartCounts: { [st
 			if material then material.label else tostring(ingredient.materialId or "Material"),
 			materialAmounts[ingredient.materialId] or 0,
 			requiredAmount,
-			layoutOrder
+			layoutOrder,
+			nil
 		)
 		layoutOrder += 1
 	end
@@ -804,9 +1093,14 @@ function CraftingController:_syncDetail()
 	local recipe = self:_findRecipe(self._selectedRecipeId)
 	if not recipe then
 		ui.itemName.Text = "Select a recipe"
+		if ui.itemDescription then
+			renderRecipeItemStatRows(ui.itemDescription, {})
+		end
+		self:_setCraftButtonText(nil)
 		hideGeneratedChildren(ui.requirementList, "CraftingIngredient_")
 		hideNativeTemplates(ui.requirementList, ui.requirementTemplate)
 		if ui.viewportFrame then
+			self:_stopViewportRotation()
 			ViewportModelRenderer.Clear(ui.viewportFrame)
 			ui.viewportFrame.Visible = false
 		end
@@ -817,6 +1111,10 @@ function CraftingController:_syncDetail()
 	local yieldLabel = getYieldInfo(recipe)
 	local canCraft, _, _, bodyPartCounts = self:_getCraftability(recipe)
 	ui.itemName.Text = yieldLabel
+	if ui.itemDescription then
+		renderRecipeItemStatRows(ui.itemDescription, buildRecipeItemStatRows(recipe))
+	end
+	self:_setCraftButtonText(recipe)
 	self:_syncRequirements(recipe, bodyPartCounts)
 	self:_renderYieldViewport(recipe)
 	self:_setCraftButtonEnabled(canCraft and not self._requestInFlight)
@@ -891,8 +1189,9 @@ function CraftingController:_openCraftingMenu(prompt: ProximityPrompt)
 		sourceInstance = prompt,
 		interactionType = "crafting",
 		speakerModel = speakerModel,
-		blurSize = 2,
+		blurSize = 0,
 		backdropTransparency = 0.9,
+		crispContent = true,
 	})
 end
 
@@ -946,6 +1245,7 @@ function CraftingController:_handlePrepared(frameName: string)
 			ownedBodyParts = {},
 			ownedAccessories = {},
 			equippedAccessories = {},
+			money = self:_getMoney(),
 		}
 	end
 	self:_syncUi()
@@ -958,6 +1258,7 @@ function CraftingController:_handleClosed(frameName: string)
 
 	self._isOpen = false
 	self._requestInFlight = false
+	self:_stopViewportRotation()
 	if self._ui and self._ui.viewportFrame then
 		ViewportModelRenderer.Clear(self._ui.viewportFrame)
 		self._ui.viewportFrame.Visible = false
@@ -974,6 +1275,7 @@ function CraftingController:_refreshIfOpen(key: string?)
 		and key ~= ACCESSORIES_DATA_KEY
 		and key ~= EQUIPPED_ACCESSORIES_DATA_KEY
 		and key ~= CRAFTING_MATERIALS_DATA_KEY
+		and key ~= MONEY_DATA_KEY
 	then
 		return
 	end

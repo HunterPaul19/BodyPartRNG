@@ -10,6 +10,7 @@ local REMOTES_FOLDER_NAME = "Remotes"
 local BOSS_ARENA_FOLDER_NAME = "BossArena"
 local GET_TIMER_STATE_REMOTE_NAME = "GetEncounterTimerState"
 local TIMER_STATE_CHANGED_REMOTE_NAME = "EncounterTimerStateChanged"
+local MARK_LOADING_DISMISSED_REMOTE_NAME = "MarkLoadingScreenDismissed"
 local ACTIVE_PROFILE_ID = "boss_arena"
 
 type BossTimerState = {
@@ -23,10 +24,12 @@ local remotesFolder: Folder? = nil
 local bossArenaFolder: Folder? = nil
 local getTimerStateRemote: RemoteFunction? = nil
 local timerStateChangedRemote: RemoteEvent? = nil
+local markLoadingDismissedRemote: RemoteEvent? = nil
 
 local BossArenaEncounterTimerService = {
 	_started = false,
 	_disconnectTimerListener = nil :: (() -> ())?,
+	_markLoadingDismissedConnection = nil :: RBXScriptConnection?,
 }
 
 local function isEnabledForPlace(): boolean
@@ -120,6 +123,28 @@ local function ensureTimerStateChangedRemote(): RemoteEvent
 	return remote
 end
 
+local function ensureMarkLoadingDismissedRemote(): RemoteEvent
+	local folder = ensureBossArenaFolder()
+	if markLoadingDismissedRemote and markLoadingDismissedRemote.Parent == folder then
+		return markLoadingDismissedRemote
+	end
+
+	local existing = folder:FindFirstChild(MARK_LOADING_DISMISSED_REMOTE_NAME)
+	if existing and existing:IsA("RemoteEvent") then
+		markLoadingDismissedRemote = existing
+		return existing
+	end
+	if existing then
+		existing:Destroy()
+	end
+
+	local remote = Instance.new("RemoteEvent")
+	remote.Name = MARK_LOADING_DISMISSED_REMOTE_NAME
+	remote.Parent = folder
+	markLoadingDismissedRemote = remote
+	return remote
+end
+
 local function broadcastTimerStateChanged()
 	local timerState = BossArenaRuntimeService:GetBossTimerState()
 	local remote = ensureTimerStateChangedRemote()
@@ -141,10 +166,15 @@ function BossArenaEncounterTimerService:OnStart()
 
 	local getTimerState = ensureGetTimerStateRemote()
 	ensureTimerStateChangedRemote()
+	local markLoadingDismissed = ensureMarkLoadingDismissedRemote()
 
 	getTimerState.OnServerInvoke = function(_player: Player): BossTimerState?
 		return BossArenaRuntimeService:GetBossTimerState()
 	end
+
+	self._markLoadingDismissedConnection = markLoadingDismissed.OnServerEvent:Connect(function(player: Player)
+		BossArenaRuntimeService:MarkPlayerLoadingScreenDismissed(player)
+	end)
 
 	self._disconnectTimerListener = BossArenaRuntimeService:ConnectBossTimerStateChanged(function()
 		broadcastTimerStateChanged()

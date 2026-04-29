@@ -114,6 +114,12 @@ local rawOrdered: { AchievementConfigEntry } = {
 		triggerType = "direct_award",
 		targetValue = 1,
 	},
+	{
+		id = "starter_pack_founder",
+		titleId = "founder",
+		triggerType = "direct_award",
+		targetValue = 1,
+	},
 }
 
 local byId: { [string]: AchievementConfigEntry } = {}

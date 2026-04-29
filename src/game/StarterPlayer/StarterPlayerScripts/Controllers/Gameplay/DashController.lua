@@ -7,6 +7,7 @@ local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
+local CombatSoundUtil = require(ReplicatedStorage.Shared.Audio.CombatSoundUtil)
 local GameAssetPaths = require(ReplicatedStorage.Shared.Assets.GameAssetPaths)
 local GameAssetResolver = require(ReplicatedStorage.Shared.Assets.GameAssetResolver)
 local DashStateRules = require(ReplicatedStorage.Shared.Combat.DashStateRules)
@@ -14,9 +15,9 @@ local DashStateRules = require(ReplicatedStorage.Shared.Combat.DashStateRules)
 local LOCAL_PLAYER = Players.LocalPlayer
 local DASH_ANIMATION_NAME = "Dash"
 local DASH_ANIMATION_ID = "rbxassetid://80201492192726"
-local DASH_START_SPEED = 110
-local DASH_END_SPEED = 30
-local SIDE_DASH_PEAK_SPEED = 60
+local DASH_START_SPEED = 165
+local DASH_END_SPEED = 45
+local SIDE_DASH_PEAK_SPEED = 90
 local SIDE_DASH_ACCEL_SECONDS = 0.045
 local BODY_VELOCITY_MAX_FORCE = Vector3.one * 8e4
 local HORIZONTAL_FORCE_MASK = Vector3.new(1, 0, 1)
@@ -120,6 +121,10 @@ local function normalizeApprovedDirection(direction: string?): string
 	return "Front"
 end
 
+local function isDirectionalKeyboardDashEnabled(): boolean
+	return UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter
+end
+
 function DashController:_ensureRemote(): RemoteFunction?
 	if self._requestRemote and self._requestRemote.Parent ~= nil then
 		return self._requestRemote
@@ -183,6 +188,10 @@ function DashController:_resolveControllerDirection(): string
 end
 
 function DashController:_resolveKeyboardDirection(): string
+	if not isDirectionalKeyboardDashEnabled() then
+		return "Front"
+	end
+
 	for _, dashKey in ipairs(KEYBOARD_DASH_KEYS) do
 		if UserInputService:IsKeyDown(dashKey.keyCode) then
 			return dashKey.direction
@@ -420,6 +429,7 @@ function DashController:RequestDash(input: InputObject?)
 
 	self._dashToken += 1
 	local dashToken = self._dashToken
+	CombatSoundUtil.PlayLocalDash(direction)
 	self:_playDashAnimation(parts.character)
 	self:_startMovement(parts.rootPart, direction, durationSeconds, dashToken)
 

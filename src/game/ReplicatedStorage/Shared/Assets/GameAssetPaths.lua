@@ -10,6 +10,8 @@ GameAssetPaths.Animations = {
 GameAssetPaths.Models = {
 	BodyParts = { "Models", "BodyParts" },
 	Bosses = { "Models", "Bosses" },
+	Gear = { "Models", "Gear" },
+	HeadAccessories = { "Models", "HeadAccessories" },
 	Worlds = {
 		BossArenas = { "Models", "Worlds", "BossArenas" },
 	},
@@ -27,6 +29,7 @@ GameAssetPaths.Tools = {
 }
 
 GameAssetPaths.Audio = {
+	Combat = { "Audio", "Combat" },
 	Footsteps = { "Audio", "Footsteps" },
 }
 

@@ -47,6 +47,7 @@ local ALL_CONTROLLER_NAMES = {
 	"BossArenaStudioTestSuiteController",
 	"ChatNotificationController",
 	"ChatTagController",
+	"CombatAudioController",
 	"CombatPhysicsController",
 	"DataController",
 	"DashController",

@@ -275,6 +275,9 @@
           "AutoSellRollController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/AutoSellRollController.lua"
           },
+          "BackgroundMusicController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/BackgroundMusicController.lua"
+          },
           "BodyPartBuildLockController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/BodyPartBuildLockController.lua"
           },
@@ -319,6 +322,9 @@
           },
           "CombatHUDController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Bosses/CombatHUDController.lua"
+          },
+          "CombatAudioController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/CombatAudioController.lua"
           },
           "CombatPhysicsController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Bosses/CombatPhysicsController.lua"

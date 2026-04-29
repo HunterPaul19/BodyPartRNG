@@ -17,6 +17,7 @@ local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile
 local REMOTES_FOLDER_NAME = "Remotes"
 local BOSS_ARENA_FOLDER_NAME = "BossArena"
 local REQUEST_M1_REMOTE_NAME = "RequestPlayerM1"
+local PLAYER_M1_STARTED_REMOTE_NAME = "PlayerM1Started"
 local ACTIVE_PROFILE_ID = "boss_arena"
 local REQUEST_RATE_LIMIT_KEY = "remote.boss_arena.player_m1"
 local IMPACT_MARKER_NAME = "Impact"
@@ -38,6 +39,7 @@ type PlayerConnections = {
 local remotesFolder: Folder? = nil
 local bossArenaFolder: Folder? = nil
 local requestM1Remote: RemoteFunction? = nil
+local playerM1StartedRemote: RemoteEvent? = nil
 local impactDelayCache: { [string]: number } = {}
 local activeSwingByPlayer: { [Player]: SwingState } = {}
 local cooldownEndsAtByPlayer: { [Player]: number } = {}
@@ -158,6 +160,28 @@ local function ensureRequestM1Remote(): RemoteFunction
 	remote.Name = REQUEST_M1_REMOTE_NAME
 	remote.Parent = folder
 	requestM1Remote = remote
+	return remote
+end
+
+local function ensurePlayerM1StartedRemote(): RemoteEvent
+	local folder = ensureBossArenaFolder()
+	if playerM1StartedRemote and playerM1StartedRemote.Parent == folder then
+		return playerM1StartedRemote
+	end
+
+	local existing = folder:FindFirstChild(PLAYER_M1_STARTED_REMOTE_NAME)
+	if existing and existing:IsA("RemoteEvent") then
+		playerM1StartedRemote = existing
+		return existing
+	end
+	if existing then
+		existing:Destroy()
+	end
+
+	local remote = Instance.new("RemoteEvent")
+	remote.Name = PLAYER_M1_STARTED_REMOTE_NAME
+	remote.Parent = folder
+	playerM1StartedRemote = remote
 	return remote
 end
 
@@ -474,6 +498,16 @@ function BossArenaPlayerM1Service:_handleRequest(player: Player, predictedAnimat
 	activeSwingByPlayer[player] = swingState
 	cooldownEndsAtByPlayer[player] = now + PlayerM1Config.CooldownSeconds
 
+	ensurePlayerM1StartedRemote():FireAllClients({
+		player = player,
+		userId = player.UserId,
+		swingId = swingId,
+		animationName = animationInstance.Name,
+		serverStartedAt = now,
+		impactDelaySeconds = impactDelaySeconds,
+		position = rootPart.Position,
+	})
+
 	task.delay(impactDelaySeconds, function()
 		self:_spawnHitboxForSwing(player, swingId)
 	end)
@@ -498,6 +532,7 @@ function BossArenaPlayerM1Service:OnStart()
 	end
 
 	local requestRemote = ensureRequestM1Remote()
+	ensurePlayerM1StartedRemote()
 	requestRemote.OnServerInvoke = function(player: Player, predictedAnimationName: any)
 		return self:_handleRequest(player, predictedAnimationName)
 	end

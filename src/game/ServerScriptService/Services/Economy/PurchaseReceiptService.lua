@@ -621,6 +621,7 @@ local function makePurchaseContext(offer: any, sale: any, context: any?)
 		purchaseKind = purchaseKind,
 		robloxId = sale.robloxId,
 		amount = math.max(0, math.floor(tonumber(offer.amount) or 0)),
+		potionId = if typeof(offer.potionId) == "string" then offer.potionId else nil,
 		purchaseId = if typeof(context) == "table" then context.purchaseId else nil,
 		senderUserId = if typeof(context) == "table" then context.senderUserId else nil,
 		recipientUserId = if typeof(context) == "table" then context.recipientUserId else nil,
@@ -982,15 +983,15 @@ local function schedulePassPromptGrantRetry(player: Player, offer: any, sale: an
 	end
 end
 
-local function processGiftDelivery(player: Player, giftRecord: any)
+local function processGiftDelivery(player: Player, giftRecord: any, options: any?): (boolean, string?, any?)
 	local offer = getOffer(giftRecord.offerKey)
 	if not offer then
 		moveGiftToFinalState(player, giftRecord, "failedById", "missing_offer")
-		return
+		return true, "missing_offer", nil
 	end
 
 	if hasProcessedGiftDelivery(player, giftRecord) then
-		return
+		return true, "already_processed", nil
 	end
 
 	addGiftInboxEntry(player, giftRecord)
@@ -1007,7 +1008,7 @@ local function processGiftDelivery(player: Player, giftRecord: any)
 			robloxId = giftRecord.saleRobloxId,
 			isNew = false,
 		})
-		return
+		return true, "blocked_duplicate", nil
 	end
 
 	local sale = {
@@ -1023,17 +1024,20 @@ local function processGiftDelivery(player: Player, giftRecord: any)
 	})
 	local granted, err = processEntitlementGrant(player, offer, sale, context)
 	if not granted then
-		moveGiftToFinalState(player, giftRecord, "failedById", "grant_failed")
+		if typeof(options) ~= "table" or options.recordFailedGrant ~= false then
+			moveGiftToFinalState(player, giftRecord, "failedById", "grant_failed")
+		end
 		if err then
 			Logger.Warn(string.format("[PurchaseReceipt] Gift delivery failed for '%s': %s", tostring(offer.offerKey), tostring(err)))
 		end
-		return
+		return false, err or "grant_failed", context
 	end
 
 	moveGiftToFinalState(player, giftRecord, "historyById", "delivered")
 	StatsService:RecordGiftDelivered(player, offer.offerKey)
 	PurchaseReceipt.GiftDelivered:Fire(player, offer.offerKey, context)
 	emitOwnedEvents(player)
+	return true, "delivered", context
 end
 
 local function processMarketplaceGiftUpdate(player: Player, data: any)
@@ -1059,6 +1063,46 @@ local function processMarketplaceGiftUpdate(player: Player, data: any)
 		createdAt = math.max(0, math.floor(tonumber(gift.createdAt or data.sendTime) or 0)),
 		deliveredAt = 0,
 	})
+end
+
+local function queueGiftDeliveryUpdate(sender: Player, recipientUserId: number, giftRecord: any): (boolean, string?)
+	local ok, err = pcall(function()
+		DataService:SendGlobalUpdate(sender, recipientUserId, "MarketplaceGift", {
+			giftId = giftRecord.giftId,
+			offerKey = giftRecord.offerKey,
+			senderUserId = giftRecord.senderUserId,
+			recipientUserId = giftRecord.recipientUserId,
+			saleRobloxId = giftRecord.saleRobloxId,
+			purchaseId = giftRecord.purchaseId,
+			createdAt = giftRecord.createdAt,
+		})
+	end)
+	if not ok then
+		return false, tostring(err)
+	end
+
+	return true, nil
+end
+
+local function deliverGiftForReceipt(sender: Player, recipientUserId: number, giftRecord: any): (boolean, string?)
+	local recipient = Players:GetPlayerByUserId(recipientUserId)
+	if recipient and isPlayerLoaded(recipient) then
+		local delivered, deliveryStatus = processGiftDelivery(recipient, giftRecord, {
+			recordFailedGrant = false,
+		})
+		if delivered then
+			return true, deliveryStatus
+		end
+
+		return false, deliveryStatus or "Gift delivery failed."
+	end
+
+	local queued, queueError = queueGiftDeliveryUpdate(sender, recipientUserId, giftRecord)
+	if not queued then
+		return false, queueError or "Failed to queue gift delivery."
+	end
+
+	return true, "queued"
 end
 
 local function makeRepairPayload(adminPlayer: Player, targetUserId: number, offerKey: string, reason: string)
@@ -1189,23 +1233,33 @@ local function processProductReceipt(receiptInfo)
 		senderContext.recipientUserId = pendingGift.recipientUserId
 		senderContext.markOwned = false
 		local giftId = purchaseId ~= "" and purchaseId or string.format("%d:%d:%d", player.UserId, sale.robloxId, os.time())
-		local recorded = markPurchaseRecorded(player, offer, sale, senderContext)
-		clearPendingGiftPrompt(player, sale.robloxId)
-		if recorded then
-			local payload = {
-				giftId = giftId,
-				offerKey = offer.offerKey,
-				senderUserId = player.UserId,
-				recipientUserId = pendingGift.recipientUserId,
-				saleRobloxId = sale.robloxId,
-				purchaseId = purchaseId,
-				createdAt = os.time(),
-			}
-			DataService:SendGlobalUpdate(player, pendingGift.recipientUserId, "MarketplaceGift", payload)
-			StatsService:RecordGiftSent(player, offer.offerKey)
-			PurchaseReceipt.GiftSent:Fire(player, offer.offerKey, senderContext)
+		local giftRecord = {
+			giftId = giftId,
+			offerKey = offer.offerKey,
+			senderUserId = player.UserId,
+			recipientUserId = pendingGift.recipientUserId,
+			saleRobloxId = sale.robloxId,
+			purchaseId = purchaseId,
+			status = "pending",
+			createdAt = os.time(),
+			deliveredAt = 0,
+		}
+		local deliveredOrQueued, deliveryError = deliverGiftForReceipt(player, pendingGift.recipientUserId, giftRecord)
+		if not deliveredOrQueued then
+			if deliveryError then
+				Logger.Warn(string.format(
+					"[PurchaseReceipt] Gift receipt delivery failed for '%s': %s",
+					tostring(offer.offerKey),
+					tostring(deliveryError)
+				))
+			end
+			return Enum.ProductPurchaseDecision.NotProcessedYet
 		end
 
+		markPurchaseRecorded(player, offer, sale, senderContext)
+		clearPendingGiftPrompt(player, sale.robloxId)
+		StatsService:RecordGiftSent(player, offer.offerKey)
+		PurchaseReceipt.GiftSent:Fire(player, offer.offerKey, senderContext)
 		Notify.Send(player, string.format("Sent %s as a gift.", getOfferDisplayName(offer.offerKey)), {
 			channel = "marketplace",
 			tone = "good",

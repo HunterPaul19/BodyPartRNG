@@ -115,6 +115,25 @@ function AccessoryService:GetAccessoryState(player: Player, message: string?)
 	}
 end
 
+local function rebuildAccessoryVisualIfNeeded(
+	player: Player,
+	slot: AccessoryConfig.AccessorySlot,
+	previousOwnedId: string?
+): (boolean, string?)
+	if slot ~= "GearAccessory" and slot ~= "HeadAccessory" then
+		return true, nil
+	end
+
+	local visualOk, visualMessage = BodyPartService:ApplySessionLoadout(player)
+	if visualOk then
+		return true, nil
+	end
+
+	DataService:SetEquippedAccessory(player, slot, previousOwnedId)
+	BodyPartService:ApplySessionLoadout(player)
+	return false, visualMessage or "Failed to apply the equipped accessory visual."
+end
+
 function AccessoryService:EquipOwnedAccessory(player: Player, ownedId: string): (boolean, string)
 	if not waitForPlayerData(player, 10) then
 		return false, "Player data is not ready yet."
@@ -133,9 +152,15 @@ function AccessoryService:EquipOwnedAccessory(player: Player, ownedId: string): 
 		return false, "That accessory no longer exists."
 	end
 
+	local previousOwnedId = DataService:GetEquippedAccessories(player)[config.slot]
 	local ok, message = DataService:SetEquippedAccessory(player, config.slot, ownedId)
 	if not ok then
 		return false, message or "Could not equip accessory."
+	end
+
+	local visualOk, visualMessage = rebuildAccessoryVisualIfNeeded(player, config.slot, previousOwnedId)
+	if not visualOk then
+		return false, visualMessage or "Could not equip accessory visual."
 	end
 
 	BodyPartService.LoadoutChanged:Fire(player)
@@ -158,9 +183,15 @@ function AccessoryService:UnequipAccessorySlot(player: Player, slot: string): (b
 		return true, "Accessory slot is already empty."
 	end
 
+	local previousOwnedId = equippedAccessories[normalizedSlot]
 	local ok, message = DataService:SetEquippedAccessory(player, normalizedSlot, nil)
 	if not ok then
 		return false, message or "Could not unequip accessory."
+	end
+
+	local visualOk, visualMessage = rebuildAccessoryVisualIfNeeded(player, normalizedSlot, previousOwnedId)
+	if not visualOk then
+		return false, visualMessage or "Could not unequip accessory visual."
 	end
 
 	BodyPartService.LoadoutChanged:Fire(player)

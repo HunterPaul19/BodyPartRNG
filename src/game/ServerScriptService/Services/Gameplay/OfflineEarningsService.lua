@@ -6,6 +6,7 @@ local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
 
 local OFFLINE_EARNING_RATE = 0.01
+local OFFLINE_EARNING_MAX_SECONDS = 24 * 60 * 60
 local OFFLINE_INCOME_SOURCE = "offline_income"
 
 local processedPlayers: { [Player]: boolean } = {}
@@ -54,7 +55,8 @@ local function resolveOfflineReward(player: Player): (number, number)
 		return 0, offlineSeconds
 	end
 
-	local reward = math.max(0, math.floor(passiveIncomePerSecond * offlineSeconds * OFFLINE_EARNING_RATE))
+	local paidOfflineSeconds = math.min(offlineSeconds, OFFLINE_EARNING_MAX_SECONDS)
+	local reward = math.max(0, math.floor(passiveIncomePerSecond * paidOfflineSeconds * OFFLINE_EARNING_RATE))
 	return reward, offlineSeconds
 end
 

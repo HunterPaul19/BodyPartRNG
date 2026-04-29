@@ -23,6 +23,7 @@ type BossHitConfirmedPayload = {
 	bossId: string,
 	damage: number,
 	attackerUserId: number,
+	isKillingBlow: boolean?,
 	serverTime: number,
 }
 
