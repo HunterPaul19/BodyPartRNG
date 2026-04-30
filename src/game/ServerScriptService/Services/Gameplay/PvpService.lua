@@ -18,7 +18,7 @@ local REMOTES_FOLDER_NAME = "Remotes"
 local PVP_FOLDER_NAME = "PvP"
 local GET_PVP_STATE_REMOTE_NAME = "GetPvpState"
 local SET_PVP_ENABLED_REMOTE_NAME = "SetPvpEnabled"
-local REQUEST_M1_REMOTE_NAME = "RequestPlayPerM1"
+local REQUEST_M1_REMOTE_NAME = "RequestPlayerM1"
 local PVP_STATE_CHANGED_REMOTE_NAME = "PvpStateChanged"
 local PLAYER_M1_STARTED_REMOTE_NAME = "PlayerM1Started"
 local PLAYER_HIT_CONFIRMED_REMOTE_NAME = "PlayerHitConfirmed"
@@ -699,21 +699,21 @@ function PvpService:OnStart()
 		return
 	end
 
+	local getStateRemote = ensureGetPvpStateRemote()
+	local setEnabledRemote = ensureSetPvpEnabledRemote()
+	local requestRemote = ensureRequestM1Remote()
 	ensurePvpStateChangedRemote()
 	ensurePlayerM1StartedRemote()
 	ensurePlayerHitConfirmedRemote()
 
-	local getStateRemote = ensureGetPvpStateRemote()
 	getStateRemote.OnServerInvoke = function(player: Player)
 		return self:_buildStateForPlayer(player)
 	end
 
-	local setEnabledRemote = ensureSetPvpEnabledRemote()
 	setEnabledRemote.OnServerInvoke = function(player: Player, payload: any)
 		return self:_handleSetPvpEnabled(player, payload)
 	end
 
-	local requestRemote = ensureRequestM1Remote()
 	requestRemote.OnServerInvoke = function(player: Player, predictedAnimationName: any)
 		return self:_handleRequestM1(player, predictedAnimationName)
 	end

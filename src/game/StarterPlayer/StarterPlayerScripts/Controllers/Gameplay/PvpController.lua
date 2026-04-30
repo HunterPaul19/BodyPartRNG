@@ -23,6 +23,7 @@ local GET_PVP_STATE_REMOTE_NAME = "GetPvpState"
 local SET_PVP_ENABLED_REMOTE_NAME = "SetPvpEnabled"
 local REQUEST_M1_REMOTE_NAME = "RequestPlayerM1"
 local PVP_STATE_CHANGED_REMOTE_NAME = "PvpStateChanged"
+local REMOTE_BINDING_WARNING_DELAY_SECONDS = 3
 local M1_SEARCH_PATH_DESCRIPTION =
 	"ReplicatedStorage.GameAssets.Animations.Bosses.M1 or ReplicatedStorage.GameAssets.Animations.M1"
 local warnedMissingM1Folder = false
@@ -30,7 +31,6 @@ local warnedMissingM1Folder = false
 type PvpRemotes = {
 	getState: RemoteFunction,
 	setEnabled: RemoteFunction,
-	requestM1: RemoteFunction,
 	stateChanged: RemoteEvent,
 }
 
@@ -62,6 +62,10 @@ local PvpController = {
 	_stateChangedConnection = nil :: RBXScriptConnection?,
 	_toggleConnection = nil :: RBXScriptConnection?,
 	_remotes = nil :: PvpRemotes?,
+	_requestM1Remote = nil :: RemoteFunction?,
+	_remoteBindingStartedAt = nil :: number?,
+	_warnedMissingRemoteNames = {} :: { [string]: boolean },
+	_warnedMalformedRemoteNames = {} :: { [string]: boolean },
 	_button = nil :: GuiButton?,
 	_mobileAttackButton = nil :: GuiButton?,
 	_usageLabel = nil :: TextLabel?,
@@ -161,11 +165,68 @@ function PvpController:IsPvpEnabled(): boolean
 	return self._enabled == true
 end
 
-function PvpController:_ensureRemotes(): PvpRemotes?
-	if self._remotes then
-		return self._remotes
+function PvpController:_maybeWarnMissingRemote(remoteName: string)
+	local startedAt = self._remoteBindingStartedAt
+	if startedAt == nil or os.clock() - startedAt < REMOTE_BINDING_WARNING_DELAY_SECONDS then
+		return
+	end
+	if self._warnedMissingRemoteNames[remoteName] == true then
+		return
 	end
 
+	self._warnedMissingRemoteNames[remoteName] = true
+	warnWithPrefix(string.format("PvP.%s is missing.", remoteName))
+end
+
+function PvpController:_warnMalformedRemote(remoteName: string, expectedClassName: string, instance: Instance)
+	local warningKey = string.format("%s:%s:%s", remoteName, expectedClassName, instance.ClassName)
+	if self._warnedMalformedRemoteNames[warningKey] == true then
+		return
+	end
+
+	self._warnedMalformedRemoteNames[warningKey] = true
+	warnWithPrefix(string.format(
+		"PvP.%s must be a %s, got %s.",
+		remoteName,
+		expectedClassName,
+		instance.ClassName
+	))
+end
+
+function PvpController:_resolveRemoteFunction(pvpFolder: Folder, remoteName: string): RemoteFunction?
+	local remote = pvpFolder:FindFirstChild(remoteName)
+	if remote == nil then
+		self:_maybeWarnMissingRemote(remoteName)
+		return nil
+	end
+	if not remote:IsA("RemoteFunction") then
+		self:_warnMalformedRemote(remoteName, "RemoteFunction", remote)
+		return nil
+	end
+
+	return remote
+end
+
+function PvpController:_resolveRemoteEvent(pvpFolder: Folder, remoteName: string): RemoteEvent?
+	local remote = pvpFolder:FindFirstChild(remoteName)
+	if remote == nil then
+		self:_maybeWarnMissingRemote(remoteName)
+		return nil
+	end
+	if not remote:IsA("RemoteEvent") then
+		self:_warnMalformedRemote(remoteName, "RemoteEvent", remote)
+		return nil
+	end
+
+	return remote
+end
+
+function PvpController:_clearRemoteBindingWarnings()
+	table.clear(self._warnedMissingRemoteNames)
+	table.clear(self._warnedMalformedRemoteNames)
+end
+
+function PvpController:_resolvePvpFolder(): Folder?
 	local remotesFolder = ReplicatedStorage:FindFirstChild(REMOTES_FOLDER_NAME)
 	if not (remotesFolder and remotesFolder:IsA("Folder")) then
 		return nil
@@ -176,36 +237,54 @@ function PvpController:_ensureRemotes(): PvpRemotes?
 		return nil
 	end
 
-	local getState = pvpFolder:FindFirstChild(GET_PVP_STATE_REMOTE_NAME)
-	local setEnabled = pvpFolder:FindFirstChild(SET_PVP_ENABLED_REMOTE_NAME)
-	local requestM1 = pvpFolder:FindFirstChild(REQUEST_M1_REMOTE_NAME)
-	local stateChanged = pvpFolder:FindFirstChild(PVP_STATE_CHANGED_REMOTE_NAME)
+	return pvpFolder
+end
 
-	if not (getState and getState:IsA("RemoteFunction")) then
-		warnWithPrefix("PvP.GetPvpState is missing.")
+function PvpController:_ensureRemotes(): PvpRemotes?
+	if self._remotes then
+		return self._remotes
+	end
+
+	local pvpFolder = self:_resolvePvpFolder()
+	if pvpFolder == nil then
 		return nil
 	end
-	if not (setEnabled and setEnabled:IsA("RemoteFunction")) then
-		warnWithPrefix("PvP.SetPvpEnabled is missing.")
-		return nil
-	end
-	if not (requestM1 and requestM1:IsA("RemoteFunction")) then
-		warnWithPrefix("PvP.RequestPlayerM1 is missing.")
-		return nil
-	end
-	if not (stateChanged and stateChanged:IsA("RemoteEvent")) then
-		warnWithPrefix("PvP.PvpStateChanged is missing.")
+
+	local getState = self:_resolveRemoteFunction(pvpFolder, GET_PVP_STATE_REMOTE_NAME)
+	local setEnabled = self:_resolveRemoteFunction(pvpFolder, SET_PVP_ENABLED_REMOTE_NAME)
+	local stateChanged = self:_resolveRemoteEvent(pvpFolder, PVP_STATE_CHANGED_REMOTE_NAME)
+	if getState == nil or setEnabled == nil or stateChanged == nil then
 		return nil
 	end
 
 	self._remotes = {
 		getState = getState,
 		setEnabled = setEnabled,
-		requestM1 = requestM1,
 		stateChanged = stateChanged,
 	}
 
+	self:_clearRemoteBindingWarnings()
 	return self._remotes
+end
+
+function PvpController:_ensureRequestM1Remote(): RemoteFunction?
+	if self._requestM1Remote and self._requestM1Remote.Parent ~= nil then
+		return self._requestM1Remote
+	end
+
+	local pvpFolder = self:_resolvePvpFolder()
+	if pvpFolder == nil then
+		self:_maybeWarnMissingRemote(REQUEST_M1_REMOTE_NAME)
+		return nil
+	end
+
+	local requestM1 = self:_resolveRemoteFunction(pvpFolder, REQUEST_M1_REMOTE_NAME)
+	if requestM1 == nil then
+		return nil
+	end
+
+	self._requestM1Remote = requestM1
+	return requestM1
 end
 
 function PvpController:_disconnectTrackStoppedConnection()
@@ -503,15 +582,15 @@ function PvpController:_requestAttack()
 	self._requestInFlight = true
 	local predictedAnimationName = self:_playPredictedSwing()
 
-	local remotes = self:_ensureRemotes()
-	if not remotes then
+	local requestM1 = self:_ensureRequestM1Remote()
+	if requestM1 == nil then
 		self._requestInFlight = false
 		self:_clearActiveSwing(true)
 		return
 	end
 
 	local ok, response = pcall(function()
-		return remotes.requestM1:InvokeServer(predictedAnimationName)
+		return requestM1:InvokeServer(predictedAnimationName)
 	end)
 	self._requestInFlight = false
 
@@ -701,6 +780,7 @@ function PvpController:_startRemoteBinding()
 	end
 
 	self._remoteBindingStarted = true
+	self._remoteBindingStartedAt = os.clock()
 	task.spawn(function()
 		while self._started == true and self._remotes == nil do
 			self:_bindStateRemote()
