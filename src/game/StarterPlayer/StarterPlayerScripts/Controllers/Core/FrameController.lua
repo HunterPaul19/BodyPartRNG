@@ -10,9 +10,9 @@ local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile
 local SoundUtil = require(ReplicatedStorage.Shared.Audio.SoundUtil)
 local FrameController = {}
 
-FrameController.TagName = "frame"
 FrameController.CloseTagName = "close"
 FrameController.ModalRootName = "ModalRoot"
+FrameController.SystemOverlaysName = "SystemOverlays"
 FrameController.BackdropName = "ModalBackdrop"
 FrameController.VignetteName = "ModalVignette"
 FrameController.OpenTween = TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
@@ -20,36 +20,13 @@ FrameController.CloseTween = TweenInfo.new(0.18, Enum.EasingStyle.Quint, Enum.Ea
 FrameController.OverlayTween = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 FrameController.BackdropTransparency = 0.5
 FrameController.VignetteTransparency = 0.35
-FrameController.ClosedYScale = 1.25
+FrameController.ClosedBottomPadding = 32
 
 local MENU_OPEN_SOUND_NAME = "MenuOpen"
 local MENU_CLOSE_SOUND_NAME = "MenuClose"
 
-local FALLBACK_MODAL_FRAME_NAMES = {
-	AppraisalUI = true,
-	AutoSell = true,
-	Gifting = true,
-	Help = true,
-	Index = true,
-	Inventory = true,
-	MerchantTeleportFrame = true,
-	PlayerInfo = true,
-	RobuxStore = true,
-	Titles = true,
-}
-
 local function warnf(message: string, ...)
 	Logger.Warn(string.format("[FrameController] " .. message, ...))
-end
-
-local function isCenteredFrame(frame: GuiObject): boolean
-	local anchorPoint = frame.AnchorPoint
-	local position = frame.Position
-
-	return math.abs(anchorPoint.X - 0.5) < 0.001
-		and math.abs(anchorPoint.Y - 0.5) < 0.001
-		and math.abs(position.X.Scale - 0.5) < 0.001
-		and math.abs(position.Y.Scale - 0.5) < 0.001
 end
 
 local function isPointInsideGuiObject(guiObject: GuiObject, point: Vector2): boolean
@@ -79,7 +56,9 @@ function FrameController:_ensureState()
 	self._framesByName = {}
 	self._currentFrame = nil
 	self._currentName = nil
+	self._currentUsesOverlay = true
 	self._pendingOpen = nil
+	self._pendingOpenOptions = nil
 	self._transitionMode = nil
 	self._frameTween = nil
 	self._frameTweenConnection = nil
@@ -104,24 +83,6 @@ function FrameController:_getPlayerGui(): PlayerGui?
 
 	self._playerGui = player:WaitForChild("PlayerGui")
 	return self._playerGui
-end
-
-function FrameController:_isManagedFrame(instance: Instance): boolean
-	local playerGui = self:_getPlayerGui()
-	if not playerGui then
-		return false
-	end
-
-	if not instance:IsDescendantOf(playerGui) then
-		return false
-	end
-
-	local modalRoot = self:_getModalRoot(false)
-	if not modalRoot then
-		return false
-	end
-
-	return instance.Parent == modalRoot
 end
 
 function FrameController:_findVignetteAsset(): string?
@@ -209,6 +170,27 @@ function FrameController:_getModalRoot(shouldWarn: boolean?): ScreenGui?
 	return nil
 end
 
+function FrameController:_getSystemOverlays(): Folder?
+	local modalRoot = self:_getModalRoot()
+	if not modalRoot then
+		return nil
+	end
+
+	local overlays = modalRoot:FindFirstChild(self.SystemOverlaysName)
+	if overlays and not overlays:IsA("Folder") then
+		overlays:Destroy()
+		overlays = nil
+	end
+
+	if not overlays then
+		overlays = Instance.new("Folder")
+		overlays.Name = self.SystemOverlaysName
+		overlays.Parent = modalRoot
+	end
+
+	return overlays
+end
+
 function FrameController:_registerCloseButton(instance: Instance)
 	local playerGui = self:_getPlayerGui()
 	if not playerGui or not instance:IsDescendantOf(playerGui) then
@@ -266,8 +248,21 @@ function FrameController:_ensureOverlay()
 	if not modalRoot then
 		return nil, nil
 	end
+	local overlays = self:_getSystemOverlays()
+	if not overlays then
+		return nil, nil
+	end
 
-	local backdrop = modalRoot:FindFirstChild(self.BackdropName)
+	local backdrop = overlays:FindFirstChild(self.BackdropName)
+	local legacyBackdrop = modalRoot:FindFirstChild(self.BackdropName)
+	if legacyBackdrop and legacyBackdrop ~= backdrop then
+		if legacyBackdrop:IsA("TextButton") and not backdrop then
+			legacyBackdrop.Parent = overlays
+			backdrop = legacyBackdrop
+		else
+			legacyBackdrop:Destroy()
+		end
+	end
 	if backdrop and not backdrop:IsA("TextButton") then
 		backdrop:Destroy()
 		backdrop = nil
@@ -284,10 +279,19 @@ function FrameController:_ensureOverlay()
 		backdrop.Visible = false
 		backdrop.Size = UDim2.fromScale(1, 1)
 		backdrop.ZIndex = 0
-		backdrop.Parent = modalRoot
+		backdrop.Parent = overlays
 	end
 
-	local vignette = modalRoot:FindFirstChild(self.VignetteName)
+	local vignette = overlays:FindFirstChild(self.VignetteName)
+	local legacyVignette = modalRoot:FindFirstChild(self.VignetteName)
+	if legacyVignette and legacyVignette ~= vignette then
+		if legacyVignette:IsA("ImageLabel") and not vignette then
+			legacyVignette.Parent = overlays
+			vignette = legacyVignette
+		else
+			legacyVignette:Destroy()
+		end
+	end
 	if vignette and not vignette:IsA("ImageLabel") then
 		vignette:Destroy()
 		vignette = nil
@@ -302,7 +306,7 @@ function FrameController:_ensureOverlay()
 		vignette.Size = UDim2.fromScale(1, 1)
 		vignette.Visible = false
 		vignette.ZIndex = 1
-		vignette.Parent = modalRoot
+		vignette.Parent = overlays
 	end
 
 	vignette.Image = self:_findVignetteAsset() or ""
@@ -416,27 +420,31 @@ function FrameController:_getFrameState(frame: GuiObject)
 	state = {
 		OpenPosition = frame.Position,
 		OpenAnchorPoint = frame.AnchorPoint,
+		OpenSize = frame.Size,
 	}
 
 	self._frameStates[frame] = state
-
-	if not isCenteredFrame(frame) then
-		warnf(
-			"Frame '%s' is tagged for modal use but is not authored at the screen center. Expected AnchorPoint=(0.5, 0.5) and Position=(0.5, 0.5).",
-			frame:GetFullName()
-		)
-	end
 
 	return state
 end
 
 function FrameController:_getClosedPosition(frame: GuiObject): UDim2
 	local state = self:_getFrameState(frame)
+	local modalRoot = self:_getModalRoot(false)
+	local viewportHeight = if modalRoot and modalRoot.AbsoluteSize.Y > 0
+		then modalRoot.AbsoluteSize.Y
+		else if workspace.CurrentCamera then workspace.CurrentCamera.ViewportSize.Y else 720
+	local frameTop = frame.AbsolutePosition.Y
+	local shiftPixels = math.max(
+		self.ClosedBottomPadding,
+		viewportHeight + self.ClosedBottomPadding - frameTop
+	)
+
 	return UDim2.new(
 		state.OpenPosition.X.Scale,
 		state.OpenPosition.X.Offset,
-		self.ClosedYScale,
-		math.max(state.OpenPosition.Y.Offset, 0)
+		state.OpenPosition.Y.Scale,
+		state.OpenPosition.Y.Offset + shiftPixels
 	)
 end
 
@@ -453,37 +461,27 @@ function FrameController:_getActiveProfileId(): string
 	return PlaceProfile.GetActiveProfile().id
 end
 
-function FrameController:_shouldUseFallbackFrame(instance: Instance, modalRoot: ScreenGui): boolean
-	return instance:IsA("GuiObject")
-		and instance.Parent == modalRoot
-		and FALLBACK_MODAL_FRAME_NAMES[instance.Name] == true
-end
-
 function FrameController:_registerFrameCandidate(
 	instance: Instance,
 	modalRoot: ScreenGui,
 	namesToInstances: { [string]: GuiObject },
 	duplicateNames: { [string]: { GuiObject } },
-	options: { sourceLabel: string, requiresTag: boolean? }
+	options: { sourceLabel: string }
 )
 	local sourceLabel = options.sourceLabel
 
 	if not instance:IsA("GuiObject") then
-		if options.requiresTag == true then
-			warnf("Ignoring %s '%s' because it is not a GuiObject.", sourceLabel, instance:GetFullName())
-		end
+		warnf("Ignoring %s '%s' because it is not a GuiObject.", sourceLabel, instance:GetFullName())
 		return
 	end
 
 	if instance.Parent ~= modalRoot then
-		if options.requiresTag == true then
-			warnf(
-				"Ignoring %s '%s' because modal frames must be direct children of PlayerGui.%s.",
-				sourceLabel,
-				instance:GetFullName(),
-				self.ModalRootName
-			)
-		end
+		warnf(
+			"Ignoring %s '%s' because modal frames must be direct GuiObject children of PlayerGui.%s.",
+			sourceLabel,
+			instance:GetFullName(),
+			self.ModalRootName
+		)
 		return
 	end
 
@@ -510,7 +508,9 @@ function FrameController:_registerFrameCandidate(
 
 	if instance ~= self._currentFrame then
 		instance.Visible = false
+		instance.AnchorPoint = self._frameStates[instance].OpenAnchorPoint
 		instance.Position = self._frameStates[instance].OpenPosition
+		instance.Size = self._frameStates[instance].OpenSize
 	end
 end
 
@@ -525,24 +525,13 @@ function FrameController:_refreshRegistry()
 	local namesToInstances = {}
 	local duplicateNames = {}
 
-	for _, taggedInstance in ipairs(CollectionService:GetTagged(self.TagName)) do
-		if not taggedInstance:IsDescendantOf(playerGui) then
-			continue
-		end
-
-		self:_registerFrameCandidate(taggedInstance, modalRoot, namesToInstances, duplicateNames, {
-			sourceLabel = "tagged frame",
-			requiresTag = true,
-		})
-	end
-
 	for _, child in ipairs(modalRoot:GetChildren()) do
-		if not self:_shouldUseFallbackFrame(child, modalRoot) then
+		if not child:IsA("GuiObject") then
 			continue
 		end
 
 		self:_registerFrameCandidate(child, modalRoot, namesToInstances, duplicateNames, {
-			sourceLabel = "fallback modal frame",
+			sourceLabel = "direct modal frame",
 		})
 	end
 
@@ -562,7 +551,7 @@ function FrameController:_refreshRegistry()
 	end
 end
 
-function FrameController:_beginOpen(name: string, frame: GuiObject)
+function FrameController:_beginOpen(name: string, frame: GuiObject, options: { useOverlay: boolean? }?)
 	local modalRoot = self:_getModalRoot()
 	if not modalRoot then
 		return false
@@ -570,18 +559,24 @@ function FrameController:_beginOpen(name: string, frame: GuiObject)
 
 	self:_cancelTweens()
 	self._pendingOpen = nil
+	self._pendingOpenOptions = nil
 	self._currentFrame = frame
 	self._currentName = name
+	self._currentUsesOverlay = not (options and options.useOverlay == false)
 	self._transitionMode = "opening"
 	SoundUtil.Play(MENU_OPEN_SOUND_NAME)
 
 	local state = self:_getFrameState(frame)
 	frame.AnchorPoint = state.OpenAnchorPoint
-	frame.Position = self:_getClosedPosition(frame)
+	frame.Position = state.OpenPosition
+	frame.Size = state.OpenSize
 	frame.Visible = true
 	modalRoot.Enabled = true
+	frame.Position = self:_getClosedPosition(frame)
 
-	self:_setOverlayState(true, false)
+	if self._currentUsesOverlay then
+		self:_setOverlayState(true, false)
+	end
 
 	self._frameTween = TweenService:Create(frame, self.OpenTween, {
 		Position = state.OpenPosition,
@@ -595,16 +590,20 @@ function FrameController:_beginOpen(name: string, frame: GuiObject)
 		end
 
 		frame.Position = state.OpenPosition
+		frame.Size = state.OpenSize
 		self._transitionMode = nil
 
 		if self._pendingOpen and self._pendingOpen ~= name then
 			local pendingName = self._pendingOpen
+			local pendingOptions = self._pendingOpenOptions
 			self._pendingOpen = nil
-			self:OpenFrame(pendingName)
+			self._pendingOpenOptions = nil
+			self:OpenFrame(pendingName, pendingOptions)
 			return
 		end
 
 		self._pendingOpen = nil
+		self._pendingOpenOptions = nil
 	end)
 
 	self._frameTween:Play()
@@ -616,15 +615,22 @@ function FrameController:_forceCloseCurrent(instant: boolean?)
 	if frame then
 		local state = self._frameStates[frame]
 		if state then
+			frame.AnchorPoint = state.OpenAnchorPoint
 			frame.Position = state.OpenPosition
+			frame.Size = state.OpenSize
 		end
 		frame.Visible = false
 	end
 
 	self:_cancelTweens()
-	self:_setOverlayState(false, instant == nil and true or instant)
+	if self._currentUsesOverlay then
+		self:_setOverlayState(false, instant == nil and true or instant)
+	end
 	self._currentFrame = nil
 	self._currentName = nil
+	self._currentUsesOverlay = true
+	self._pendingOpen = nil
+	self._pendingOpenOptions = nil
 	self._transitionMode = nil
 end
 
@@ -639,8 +645,11 @@ function FrameController:_beginClose()
 	SoundUtil.Play(MENU_CLOSE_SOUND_NAME)
 
 	local name = self._currentName
+	local usesOverlay = self._currentUsesOverlay
 	local state = self:_getFrameState(frame)
-	self:_setOverlayState(false, false)
+	if usesOverlay then
+		self:_setOverlayState(false, false)
+	end
 
 	self._frameTween = TweenService:Create(frame, self.CloseTween, {
 		Position = self:_getClosedPosition(frame),
@@ -654,20 +663,28 @@ function FrameController:_beginClose()
 		end
 
 		frame.Visible = false
+		frame.AnchorPoint = state.OpenAnchorPoint
 		frame.Position = state.OpenPosition
+		frame.Size = state.OpenSize
 		self._currentFrame = nil
 		self._currentName = nil
+		self._currentUsesOverlay = true
 		self._transitionMode = nil
-		self:_setOverlayState(false, true)
+		if usesOverlay then
+			self:_setOverlayState(false, true)
+		end
 
 		if self._pendingOpen then
 			local pendingName = self._pendingOpen
+			local pendingOptions = self._pendingOpenOptions
 			self._pendingOpen = nil
-			self:OpenFrame(pendingName)
+			self._pendingOpenOptions = nil
+			self:OpenFrame(pendingName, pendingOptions)
 			return
 		end
 
 		self._pendingOpen = nil
+		self._pendingOpenOptions = nil
 	end)
 
 	self._frameTween:Play()
@@ -689,7 +706,7 @@ function FrameController:IsOpen(name: string): boolean
 	return self._currentName == name and self._currentFrame ~= nil and self._transitionMode ~= "closing"
 end
 
-function FrameController:OpenFrame(name: string): boolean
+function FrameController:OpenFrame(name: string, options: { useOverlay: boolean? }?): boolean
 	self:_ensureState()
 
 	self:_refreshRegistry()
@@ -714,6 +731,7 @@ function FrameController:OpenFrame(name: string): boolean
 
 	if self._currentFrame then
 		self._pendingOpen = name
+		self._pendingOpenOptions = options
 
 		if self._transitionMode ~= "closing" then
 			self:_beginClose()
@@ -722,7 +740,7 @@ function FrameController:OpenFrame(name: string): boolean
 		return true
 	end
 
-	return self:_beginOpen(name, frame)
+	return self:_beginOpen(name, frame, options)
 end
 
 function FrameController:CloseFrame(name: string?): boolean
@@ -730,6 +748,7 @@ function FrameController:CloseFrame(name: string?): boolean
 
 	if not self._currentFrame then
 		self._pendingOpen = nil
+		self._pendingOpenOptions = nil
 		return false
 	end
 
@@ -738,6 +757,7 @@ function FrameController:CloseFrame(name: string?): boolean
 	end
 
 	self._pendingOpen = nil
+	self._pendingOpenOptions = nil
 
 	if self._transitionMode == "closing" then
 		return true
@@ -752,6 +772,7 @@ function FrameController:ToggleFrame(name: string): boolean
 	if self._currentName == name and self._currentFrame then
 		if self._transitionMode == "closing" then
 			self._pendingOpen = name
+			self._pendingOpenOptions = nil
 			return true
 		end
 
@@ -782,12 +803,6 @@ function FrameController:OnStart()
 		)
 	end
 
-	table.insert(self._connections, CollectionService:GetInstanceAddedSignal(self.TagName):Connect(function()
-		self:_refreshRegistry()
-	end))
-	table.insert(self._connections, CollectionService:GetInstanceRemovedSignal(self.TagName):Connect(function()
-		self:_refreshRegistry()
-	end))
 	table.insert(self._connections, CollectionService:GetInstanceAddedSignal(self.CloseTagName):Connect(function(instance)
 		self:_registerCloseButton(instance)
 	end))
@@ -797,8 +812,7 @@ function FrameController:OnStart()
 	table.insert(self._connections, playerGui.DescendantAdded:Connect(function(instance)
 		local modalRoot = self:_getModalRoot(false)
 		if instance.Name == self.ModalRootName
-			or CollectionService:HasTag(instance, self.TagName)
-			or (modalRoot ~= nil and self:_shouldUseFallbackFrame(instance, modalRoot))
+			or (modalRoot ~= nil and instance.Parent == modalRoot and instance:IsA("GuiObject"))
 		then
 			self._modalRoot = nil
 			self:_ensureOverlay()
@@ -817,8 +831,7 @@ function FrameController:OnStart()
 		local modalRoot = self._modalRoot
 		if instance == self._currentFrame
 			or instance.Name == self.ModalRootName
-			or CollectionService:HasTag(instance, self.TagName)
-			or (modalRoot ~= nil and self:_shouldUseFallbackFrame(instance, modalRoot))
+			or (modalRoot ~= nil and instance.Parent == modalRoot and instance:IsA("GuiObject"))
 		then
 			task.defer(function()
 				self._modalRoot = nil

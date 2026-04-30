@@ -778,7 +778,10 @@ function CatSummon.StartCast(context)
 		humanoid.AutoRotate = true
 		MinionDisplay.ConfigureHumanoid(humanoid, MINION_DISPLAY_NAME)
 		spawnedMinion:PivotTo(CFrame.lookAt(spawnPosition, lookTarget))
-		MinionHitboxCollider.Attach(spawnedMinion, rootPart)
+		local minionCollider = MinionHitboxCollider.Attach(spawnedMinion, rootPart)
+		if minionCollider == nil then
+			Logger.Warn("[CatSummon] Failed to attach minion hitbox collider.")
+		end
 		setServerNetworkOwnership(spawnedMinion)
 		bindMinionAi(spawnedMinion, humanoid, rootPart)
 	end

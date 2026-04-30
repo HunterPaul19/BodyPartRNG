@@ -1,6 +1,6 @@
 local DayNightCycleConfig = {}
 
-DayNightCycleConfig.LoopDurationSeconds = 12 * 60
+DayNightCycleConfig.LoopDurationSeconds = 28 * 60 + 40
 DayNightCycleConfig.InitialNormalizedTime = 0.28
 
 DayNightCycleConfig.Keyframes = {
@@ -46,7 +46,7 @@ DayNightCycleConfig.Keyframes = {
 	{
 		Phase = "DAYTIME",
 		LabelText = "DAYTIME",
-		NormalizedTime = 0.18,
+		NormalizedTime = 20 / DayNightCycleConfig.LoopDurationSeconds,
 		ClockTime = 13.5,
 		LabelColor = Color3.fromRGB(255, 226, 71),
 		LabelStrokeColor = Color3.fromRGB(107, 73, 10),
@@ -85,7 +85,7 @@ DayNightCycleConfig.Keyframes = {
 	{
 		Phase = "SUNSET",
 		LabelText = "SUNSET",
-		NormalizedTime = 0.58,
+		NormalizedTime = 1220 / DayNightCycleConfig.LoopDurationSeconds,
 		ClockTime = 18.35,
 		LabelColor = Color3.fromRGB(255, 153, 82),
 		LabelStrokeColor = Color3.fromRGB(122, 44, 20),
@@ -124,30 +124,30 @@ DayNightCycleConfig.Keyframes = {
 	{
 		Phase = "NIGHTTIME",
 		LabelText = "NIGHTTIME",
-		NormalizedTime = 0.78,
+		NormalizedTime = 1240 / DayNightCycleConfig.LoopDurationSeconds,
 		ClockTime = 21.9,
 		LabelColor = Color3.fromRGB(193, 160, 255),
 		LabelStrokeColor = Color3.fromRGB(70, 42, 112),
 		Lighting = {
-			Brightness = 1.15,
-			ExposureCompensation = -0.22,
-			Ambient = Color3.fromRGB(95, 108, 152),
-			OutdoorAmbient = Color3.fromRGB(82, 96, 134),
+			Brightness = 2.15,
+			ExposureCompensation = 0.08,
+			Ambient = Color3.fromRGB(166, 178, 216),
+			OutdoorAmbient = Color3.fromRGB(148, 162, 204),
 			ColorShift_Top = Color3.fromRGB(57, 91, 166),
 			ColorShift_Bottom = Color3.fromRGB(42, 71, 118),
 		},
 		Atmosphere = {
-			Density = 0.36,
+			Density = 0.31,
 			Offset = 0.56,
 			Color = Color3.fromRGB(88, 138, 216),
-			Decay = Color3.fromRGB(26, 44, 88),
+			Decay = Color3.fromRGB(66, 92, 150),
 			Glare = 0.01,
-			Haze = 1.85,
+			Haze = 0.65,
 		},
 		ColorCorrection = {
-			Brightness = -0.04,
-			Contrast = 0.16,
-			Saturation = -0.02,
+			Brightness = 0.02,
+			Contrast = 0.08,
+			Saturation = 0.03,
 			TintColor = Color3.fromRGB(201, 224, 255),
 		},
 		Bloom = {

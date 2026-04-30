@@ -5018,7 +5018,7 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 	local closeButtonRoot = inventoryRoot:FindFirstChild("Topbar") or topBar
 	local closeButton = closeButtonRoot and closeButtonRoot:FindFirstChild("CloseButton")
 	local topBarButtons = topBar:WaitForChild("ItemTypes", 30)
-	local potionSellFrame = modalRoot:WaitForChild("PotionSellFrame", 30)
+	local potionSellFrame = inventoryRoot:WaitForChild("PotionSellFrame", 30)
 	local openButton = mainInterface:WaitForChild("Main", 30):WaitForChild("ExtraButtons", 30):WaitForChild("Inventory", 30)
 	local potionSellTitle = potionSellFrame:WaitForChild("Title", 30)
 	local potionSellOwned = potionSellFrame:WaitForChild("Owned", 30)

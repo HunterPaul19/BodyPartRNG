@@ -1430,7 +1430,8 @@ function Hitbox.HitboxTypes.SpacialQuery(self)
 			return
 		end
 
-		local hitParts, hitboxLocation, hitboxSize, hitboxRadius, pyramidState = self:_queryParts("Hitbox")
+		local overlapRequest = if self.Data.OverlapParams ~= nil then self.Data.OverlapParams else "Hitbox"
+		local hitParts, hitboxLocation, hitboxSize, hitboxRadius, pyramidState = self:_queryParts(overlapRequest)
 		if not hitboxLocation and not pyramidState then
 			return
 		end

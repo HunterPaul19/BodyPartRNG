@@ -5,6 +5,7 @@ local Signal = require(ReplicatedStorage.Common.Signal)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local MODAL_ROOT_NAME = "ModalRoot"
+local SYSTEM_OVERLAYS_NAME = "SystemOverlays"
 local FRAME_NAME = "ConfirmationFrame"
 local WARNING_TEXT_NAME = "WarningText"
 local CONFIRM_BUTTON_NAME = "Confirm"
@@ -68,7 +69,12 @@ function ConfirmationWarning:_cacheUi(): CachedUi?
 		return nil
 	end
 
-	local frame = modalRoot:FindFirstChild(FRAME_NAME) or modalRoot:WaitForChild(FRAME_NAME, 5)
+	local overlays = modalRoot:FindFirstChild(SYSTEM_OVERLAYS_NAME) or modalRoot:WaitForChild(SYSTEM_OVERLAYS_NAME, 5)
+	if not (overlays and overlays:IsA("Folder")) then
+		return nil
+	end
+
+	local frame = overlays:FindFirstChild(FRAME_NAME) or overlays:WaitForChild(FRAME_NAME, 5)
 	if not (frame and frame:IsA("GuiObject")) then
 		return nil
 	end

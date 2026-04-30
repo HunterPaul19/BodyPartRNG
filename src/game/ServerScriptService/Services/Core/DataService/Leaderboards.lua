@@ -11,9 +11,9 @@ local Schema = require(ReplicatedStorage.Lists.Schema)
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local RateLimitTelemetry = require(script.Parent.Parent.Common.RateLimitTelemetry)
 
-local RENDER_REFRESH_TIME = 10
-local GLOBAL_FETCH_INTERVAL_SECONDS = 180
-local GLOBAL_FETCH_JITTER_SECONDS = 90
+local GLOBAL_FETCH_POLL_INTERVAL_SECONDS = 30
+local GLOBAL_FETCH_INTERVAL_SECONDS = 3600
+local GLOBAL_FETCH_JITTER_SECONDS = 120
 local GLOBAL_FETCH_ENTRY_LIMIT = 100
 local GLOBAL_FETCH_BOARD_SPACING_SECONDS = 5
 local ORDERED_LIST_BUDGET_FLOOR = 3
@@ -21,9 +21,9 @@ local ROLLS_FLUSH_TIME = 60
 local LEGACY_SYNC_REFRESH_TIME = 120
 local MONEY_MIN_FLUSH_DELTA = 100
 local ENTRY_NAME_PREFIX = "Entry_"
-local SPACER_NAME_PREFIX = "Spacer_"
 local SCOPE = Globals.SCOPE
 local USE_GLOBAL_LEADERBOARDS_IN_STUDIO = true
+local THUMBNAIL_PLACEHOLDER_IMAGE = "rbxasset://textures/ui/GuiImagePlaceholder.png"
 -- Studio leaderboard validation stays isolated in a tester-seeded namespace.
 -- Only players who join Studio sessions after this is enabled will populate these stores.
 local STUDIO_ORDERED_STORE_SUFFIX = "_Studio"
@@ -66,9 +66,12 @@ local BOARD_CONFIGS = {
 
 local usernameCache = {}
 local thumbnailCache = {}
+local usernameRequests = {}
+local thumbnailRequests = {}
 local orderedStores = {}
 local orderedStoreNames = {}
 local orderedEntryCaches = {}
+local boardRenderStates = setmetatable({}, { __mode = "k" })
 local lastSyncedValues = {}
 local lastSyncedAt = {}
 local rollsLiveValues = {}
@@ -255,6 +258,36 @@ local function getThumbnailForUserId(userId)
 	return content
 end
 
+local function getEntryDisplayName(entry)
+	if typeof(entry) ~= "table" then
+		return ""
+	end
+
+	if typeof(entry.name) == "string" and entry.name ~= "" then
+		return entry.name
+	end
+
+	local userId = tonumber(entry.userId)
+	if userId and usernameCache[userId] then
+		return usernameCache[userId]
+	end
+
+	return if userId then "Player " .. tostring(userId) else ""
+end
+
+local function getEntryThumbnail(entry)
+	if typeof(entry) ~= "table" then
+		return nil
+	end
+
+	local userId = tonumber(entry.userId)
+	if not userId then
+		return nil
+	end
+
+	return thumbnailCache[userId]
+end
+
 local function getSurfaceGui(boardModel)
 	for _, descendant in ipairs(boardModel:GetDescendants()) do
 		if descendant:IsA("SurfaceGui") then
@@ -356,22 +389,11 @@ local function ensureScrollingFrameLayout(widgets)
 	widgets.listLayout = layout
 end
 
-local function clearRenderedEntries(widgets)
-	for _, child in ipairs(widgets.scrollingFrame:GetChildren()) do
-		if child:IsA("GuiObject")
-			and (
-				string.sub(child.Name, 1, #ENTRY_NAME_PREFIX) == ENTRY_NAME_PREFIX
-				or string.sub(child.Name, 1, #SPACER_NAME_PREFIX) == SPACER_NAME_PREFIX
-			)
-		then
-			child:Destroy()
-		end
-	end
-end
-
 local function setGuiText(instance, text)
 	if instance and instance:IsA("TextLabel") then
-		instance.Text = text
+		if instance.Text ~= text then
+			instance.Text = text
+		end
 	end
 end
 
@@ -380,27 +402,159 @@ local function setGuiVisible(instance, visible)
 		return
 	end
 
-	instance.Visible = visible
+	if instance.Visible ~= visible then
+		instance.Visible = visible
+	end
 	if instance:IsA("GuiButton") then
 		instance.Active = visible
 		instance.AutoButtonColor = false
 	end
 end
 
-local function createBoardEntry(widgets, rank, entryData, formatName)
-	local row = widgets.template:Clone()
-	row.Name = ENTRY_NAME_PREFIX .. tostring(rank)
-	row.LayoutOrder = rank
-	row.Size = widgets.templateSize
-	row.Visible = true
-	row.Parent = widgets.scrollingFrame
+local function getBoardRenderState(boardModel)
+	local state = boardRenderStates[boardModel]
+	if not state then
+		state = {
+			rowsByRank = {},
+			userIdsByRank = {},
+			lastSignature = nil,
+			renderedEntryCount = 0,
+			topUserId = nil,
+		}
+		boardRenderStates[boardModel] = state
+	end
+
+	return state
+end
+
+local function buildEntriesSignature(entries)
+	local entryCount = math.min(#entries, GLOBAL_FETCH_ENTRY_LIMIT)
+	local parts = table.create(entryCount)
+	for rank = 1, entryCount do
+		local entry = entries[rank]
+		parts[rank] = string.format(
+			"%d:%d",
+			math.floor(tonumber(entry and entry.userId) or 0),
+			normalizeBoardValue(entry and entry.value)
+		)
+	end
+
+	return table.concat(parts, "|")
+end
+
+local function updateRenderedEntryNames(userId, resolvedName)
+	for _, state in pairs(boardRenderStates) do
+		for rank, row in pairs(state.rowsByRank) do
+			if state.userIdsByRank[rank] == userId and row and row.Parent then
+				setGuiText(findFirstChildByNames(row, state.rowPlayerNameLabelNames or { "PlayerName", "Username" }), resolvedName)
+			end
+		end
+
+		if state.topUserId == userId then
+			setGuiText(state.playerInfoDisplayName, resolvedName)
+			setGuiText(state.playerInfoUsername, "@" .. resolvedName)
+		end
+	end
+end
+
+local function updateRenderedThumbnails(userId, thumbnail)
+	for _, state in pairs(boardRenderStates) do
+		if state.topUserId == userId and state.playerInfoIcon and state.playerInfoIcon:IsA("ImageLabel") then
+			if state.playerInfoIcon.Image ~= thumbnail then
+				state.playerInfoIcon.Image = thumbnail
+			end
+		end
+	end
+end
+
+local function requestUsernameHydration(userId)
+	userId = tonumber(userId)
+	if not userId or usernameCache[userId] or usernameRequests[userId] then
+		return
+	end
+
+	usernameRequests[userId] = true
+	task.spawn(function()
+		getUsernameForUserId(userId)
+		usernameRequests[userId] = nil
+
+		local resolvedName = usernameCache[userId]
+		if not resolvedName then
+			return
+		end
+
+		for _, cache in pairs(orderedEntryCaches) do
+			for _, entry in ipairs(cache.entries or {}) do
+				if tonumber(entry.userId) == userId then
+					entry.name = resolvedName
+				end
+			end
+		end
+
+		updateRenderedEntryNames(userId, resolvedName)
+	end)
+end
+
+local function requestThumbnailHydration(userId)
+	userId = tonumber(userId)
+	if not userId or thumbnailCache[userId] or thumbnailRequests[userId] then
+		return
+	end
+
+	thumbnailRequests[userId] = true
+	task.spawn(function()
+		getThumbnailForUserId(userId)
+		thumbnailRequests[userId] = nil
+
+		local thumbnail = thumbnailCache[userId]
+		if thumbnail then
+			updateRenderedThumbnails(userId, thumbnail)
+		end
+	end)
+end
+
+local function getPooledBoardEntry(widgets, state, rank)
+	local row = state.rowsByRank[rank]
+	if row and row.Parent then
+		return row
+	end
+
+	local rowName = ENTRY_NAME_PREFIX .. tostring(rank)
+	local existingRow = widgets.scrollingFrame:FindFirstChild(rowName)
+	if existingRow and existingRow:IsA("GuiObject") then
+		row = existingRow
+	else
+		row = widgets.template:Clone()
+		row.Name = rowName
+		row.Parent = widgets.scrollingFrame
+	end
+
+	state.rowsByRank[rank] = row
+	return row
+end
+
+local function updateBoardEntry(widgets, state, rank, entryData, formatName)
+	local row = getPooledBoardEntry(widgets, state, rank)
+	if row.LayoutOrder ~= rank then
+		row.LayoutOrder = rank
+	end
+	if row.Size ~= widgets.templateSize then
+		row.Size = widgets.templateSize
+	end
+	setGuiVisible(row, true)
+
+	local userId = tonumber(entryData.userId)
+	state.userIdsByRank[rank] = userId
+	if userId then
+		requestUsernameHydration(userId)
+	end
 
 	setGuiText(findFirstChildByNames(row, widgets.rowRankLabelNames), string.format("#%d", rank))
-	setGuiText(findFirstChildByNames(row, widgets.rowPlayerNameLabelNames), resolveEntryName(entryData))
+	setGuiText(findFirstChildByNames(row, widgets.rowPlayerNameLabelNames), getEntryDisplayName(entryData))
 	setGuiText(findFirstChildByNames(row, widgets.rowValueLabelNames), formatValue(formatName, entryData.value))
 end
 
-local function renderPlayerInfo(widgets, config, topEntry)
+local function renderPlayerInfo(widgets, config, topEntry, state)
 	local playerInfo = widgets.playerInfo
 	if not playerInfo then
 		return
@@ -411,64 +565,84 @@ local function renderPlayerInfo(widgets, config, topEntry)
 	end
 
 	if not topEntry then
+		state.topUserId = nil
 		setGuiVisible(playerInfo, false)
 		return
 	end
 
 	setGuiVisible(playerInfo, true)
-	local topName = resolveEntryName(topEntry)
+	local topUserId = tonumber(topEntry.userId)
+	state.topUserId = topUserId
+	state.playerInfoDisplayName = widgets.playerInfoDisplayName
+	state.playerInfoUsername = widgets.playerInfoUsername
+	state.playerInfoIcon = widgets.playerInfoIcon
+	if topUserId then
+		requestUsernameHydration(topUserId)
+	end
+
+	local topName = getEntryDisplayName(topEntry)
 	setGuiText(widgets.playerInfoDisplayName, topName)
 	setGuiText(widgets.playerInfoUsername, "@" .. topName)
 	setGuiText(widgets.playerInfoRollInfoTitle, config.infoTitle or config.format)
 	setGuiText(widgets.playerInfoRollInfoContext, formatValue(config.format, topEntry.value))
 
 	if widgets.playerInfoIcon and widgets.playerInfoIcon:IsA("ImageLabel") then
-		local thumbnail = getThumbnailForUserId(topEntry.userId)
+		local thumbnail = getEntryThumbnail(topEntry)
 		if thumbnail then
 			widgets.playerInfoIcon.Image = thumbnail
+		elseif topUserId then
+			widgets.playerInfoIcon.Image = THUMBNAIL_PLACEHOLDER_IMAGE
+			requestThumbnailHydration(topUserId)
 		end
 	end
 end
 
-local function hydrateRenderedEntryNames(entries, entryCount)
-	if entries[1] then
-		resolveEntryName(entries[1])
-	end
-
-	for rank = 1, entryCount do
-		local entry = entries[rank]
-		if entry then
-			resolveEntryName(entry)
-		end
-	end
-end
-
-local function renderBoard(boardModel, config, entries)
+local function renderBoard(boardModel, config, entries, signature, forceRender)
 	local widgets = getBoardWidgets(boardModel, config)
 	if not widgets then
-		return
+		return false
+	end
+
+	local state = getBoardRenderState(boardModel)
+	local boardSignature = signature or buildEntriesSignature(entries)
+	if not forceRender and state.lastSignature == boardSignature then
+		return false
 	end
 
 	disableBoardScripts(boardModel)
 	ensureScrollingFrameLayout(widgets)
-	clearRenderedEntries(widgets)
 
 	widgets.template.Visible = false
-	widgets.template.Size = widgets.templateSize
-	widgets.template.LayoutOrder = GLOBAL_FETCH_ENTRY_LIMIT + 2
+	if widgets.template.Size ~= widgets.templateSize then
+		widgets.template.Size = widgets.templateSize
+	end
+	if widgets.template.LayoutOrder ~= GLOBAL_FETCH_ENTRY_LIMIT + 2 then
+		widgets.template.LayoutOrder = GLOBAL_FETCH_ENTRY_LIMIT + 2
+	end
 	setGuiText(widgets.headerPlayerName, "Player")
 	setGuiText(widgets.headerValue, config.infoTitle or config.format)
 
 	local entryCount = math.min(#entries, GLOBAL_FETCH_ENTRY_LIMIT)
-	hydrateRenderedEntryNames(entries, entryCount)
-	renderPlayerInfo(widgets, config, entries[1])
+	state.rowPlayerNameLabelNames = widgets.rowPlayerNameLabelNames
+	renderPlayerInfo(widgets, config, entries[1], state)
 
 	for rank = 1, entryCount do
 		local entryData = entries[rank]
 		if entryData then
-			createBoardEntry(widgets, rank, entryData, config.format)
+			updateBoardEntry(widgets, state, rank, entryData, config.format)
 		end
 	end
+
+	for rank, row in pairs(state.rowsByRank) do
+		if rank > entryCount then
+			setGuiVisible(row, false)
+			state.userIdsByRank[rank] = nil
+		end
+	end
+
+	state.lastSignature = boardSignature
+	state.renderedEntryCount = entryCount
+	return true
 end
 
 local function sortEntriesDescending(entries)
@@ -560,10 +734,13 @@ local function getOrderedEntryCache(boardName)
 	if not cache then
 		cache = {
 			entries = {},
+			lastFetchedSignature = nil,
 			lastSuccessfulFetchAt = 0,
 			nextAllowedFetchAt = 0,
 			inFlight = false,
 			lastError = nil,
+			hasRenderedStartupFallback = false,
+			hasRenderedSuccessfulFetch = false,
 		}
 		orderedEntryCaches[boardName] = cache
 	end
@@ -584,7 +761,7 @@ local function scheduleNextFetch(cache, baseDelaySeconds)
 end
 
 local function scheduleInitialFetch(cache)
-	cache.nextAllowedFetchAt = os.clock() + getFetchJitterSeconds()
+	cache.nextAllowedFetchAt = os.clock()
 end
 
 local function getOrderedListBudget()
@@ -778,7 +955,19 @@ local function getOrderedStoreEntries(boardName, storeName, store)
 	return entries, nil
 end
 
-local function updateOrderedEntriesCache(dataService, boardName, config, storeName, store)
+local function renderBoardEntries(config, entries, signature, forceRender)
+	local boardModels = getBoardModels(config)
+	if #boardModels == 0 then
+		return
+	end
+
+	local boardSignature = signature or buildEntriesSignature(entries)
+	for _, boardModel in ipairs(boardModels) do
+		renderBoard(boardModel, config, entries, boardSignature, forceRender)
+	end
+end
+
+local function updateOrderedEntriesCache(boardName, config, storeName, store)
 	local cache = getOrderedEntryCache(boardName)
 	if cache.inFlight then
 		RateLimitTelemetry.Increment("leaderboard", "ordered_list_fetch_in_flight_skip", 1)
@@ -800,10 +989,17 @@ local function updateOrderedEntriesCache(dataService, boardName, config, storeNa
 			entries = overlayLiveRollEntries(entries)
 		end
 
+		local signature = buildEntriesSignature(entries)
+		local shouldRender = signature ~= cache.lastFetchedSignature or not cache.hasRenderedSuccessfulFetch
 		cache.entries = cloneEntries(entries)
+		cache.lastFetchedSignature = signature
 		cache.lastSuccessfulFetchAt = os.clock()
 		cache.lastError = nil
+		cache.hasRenderedSuccessfulFetch = true
 		RateLimitTelemetry.Increment("leaderboard", "ordered_list_fetch_success", 1)
+		if shouldRender then
+			renderBoardEntries(config, cache.entries, signature)
+		end
 	else
 		cache.lastError = tostring(errorMessage)
 	end
@@ -811,22 +1007,7 @@ local function updateOrderedEntriesCache(dataService, boardName, config, storeNa
 	scheduleNextFetch(cache, GLOBAL_FETCH_INTERVAL_SECONDS)
 end
 
-local function getCachedEntriesForBoard(dataService, boardName, config)
-	local cache = getOrderedEntryCache(boardName)
-	local entries = cloneEntries(cache.entries)
-	if #entries == 0 then
-		RateLimitTelemetry.Increment("leaderboard", "cache_render_fallback", 1)
-		entries = getCurrentPlayerEntries(dataService, config.key)
-	end
-
-	if config.useDirtySync then
-		return overlayLiveRollEntries(entries)
-	end
-
-	return entries
-end
-
-local function refreshOrderedEntryCaches(dataService)
+local function refreshOrderedEntryCaches()
 	if not shouldUseOrderedStores() then
 		return
 	end
@@ -838,7 +1019,7 @@ local function refreshOrderedEntryCaches(dataService)
 			local storeName = orderedStoreNames[boardName]
 			local cache = getOrderedEntryCache(boardName)
 			if store and storeName and os.clock() >= cache.nextAllowedFetchAt then
-				updateOrderedEntriesCache(dataService, boardName, config, storeName, store)
+				updateOrderedEntriesCache(boardName, config, storeName, store)
 				task.wait(GLOBAL_FETCH_BOARD_SPACING_SECONDS)
 			end
 		end
@@ -907,19 +1088,33 @@ function Leaderboards.flushPlayer(dataService, player)
 	clearRollsTracking(player.UserId)
 end
 
-function Leaderboards.refresh(dataService)
+function Leaderboards.refresh(dataService, options)
+	local forceRender = typeof(options) == "table" and options.force == true
+
 	for boardName, config in pairs(BOARD_CONFIGS) do
 		local boardModels = getBoardModels(config)
 		if #boardModels > 0 then
-			local entries = nil
 			if shouldUseOrderedStores() then
-				entries = getCachedEntriesForBoard(dataService, boardName, config)
+				local cache = getOrderedEntryCache(boardName)
+				if cache.lastSuccessfulFetchAt > 0 then
+					if forceRender then
+						renderBoardEntries(config, cloneEntries(cache.entries), cache.lastFetchedSignature, true)
+					end
+				elseif not cache.hasRenderedStartupFallback then
+					local fallbackEntries = getCurrentPlayerEntries(dataService, config.key)
+					if #fallbackEntries > 0 or forceRender then
+						cache.hasRenderedStartupFallback = true
+						renderBoardEntries(
+							config,
+							fallbackEntries,
+							"fallback:" .. buildEntriesSignature(fallbackEntries),
+							forceRender
+						)
+					end
+				end
 			else
-				entries = getCurrentPlayerEntries(dataService, config.key)
-			end
-
-			for _, boardModel in ipairs(boardModels) do
-				renderBoard(boardModel, config, entries or {})
+				local entries = getCurrentPlayerEntries(dataService, config.key)
+				renderBoardEntries(config, entries, buildEntriesSignature(entries), forceRender)
 			end
 		end
 	end
@@ -940,7 +1135,9 @@ function Leaderboards.start(dataService)
 	end
 
 	if started then
-		Leaderboards.refresh(dataService)
+		Leaderboards.refresh(dataService, {
+			force = true,
+		})
 		return
 	end
 	started = true
@@ -970,14 +1167,8 @@ function Leaderboards.start(dataService)
 	Leaderboards.refresh(dataService)
 	task.spawn(function()
 		while true do
-			refreshOrderedEntryCaches(dataService)
-			task.wait(RENDER_REFRESH_TIME)
-		end
-	end)
-	task.spawn(function()
-		while true do
-			Leaderboards.refresh(dataService)
-			task.wait(RENDER_REFRESH_TIME)
+			refreshOrderedEntryCaches()
+			task.wait(GLOBAL_FETCH_POLL_INTERVAL_SECONDS)
 		end
 	end)
 	task.spawn(function()

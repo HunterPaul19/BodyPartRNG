@@ -1412,7 +1412,7 @@ function GUIControls:RebuildRollDropdown()
 			button.Luck.UIStroke.Transparency = 0
 		end
 
-		button.MouseButton1Down:Connect(function()
+		button.Activated:Connect(function()
 			GUIControls:SuppressRollClickForInputFrame()
 			GUIControls:SelectRollType(rollType.id)
 		end)
@@ -1845,42 +1845,42 @@ function GUIControls:LoadRollingState()
 	return true
 end
 
-RollButton.MouseButton1Down:Connect(function()
+RollButton.Activated:Connect(function()
 	GUIControls:Roll()
 end)
 
-Main.SkipButton.MouseButton1Down:Connect(function()
+Main.SkipButton.Activated:Connect(function()
 	GUIControls:HideRollResults()
 end)
 
-Main.EquipButton.MouseButton1Down:Connect(function()
+Main.EquipButton.Activated:Connect(function()
 	GUIControls:EquipCurrentRollResult()
 end)
 
-DropdownButton.MouseButton1Down:Connect(function()
+DropdownButton.Activated:Connect(function()
 	GUIControls:SuppressRollClickForInputFrame()
 	GUIControls:ToggleDropdown()
 end)
 
-LeftButton.MouseButton1Down:Connect(function()
+LeftButton.Activated:Connect(function()
 	GUIControls:SuppressRollClickForInputFrame()
 	GUIControls:CycleRollRegion(-1)
 end)
 
-RightButton.MouseButton1Down:Connect(function()
+RightButton.Activated:Connect(function()
 	GUIControls:SuppressRollClickForInputFrame()
 	GUIControls:CycleRollRegion(1)
 end)
 
-QuickRollButton.MouseButton1Down:Connect(function()
+QuickRollButton.Activated:Connect(function()
 	GUIControls:ToggleQuickRoll()
 end)
 
-AutoEquipBestButton.MouseButton1Down:Connect(function()
+AutoEquipBestButton.Activated:Connect(function()
 	GUIControls:ToggleAutoEquipBest()
 end)
 
-AutoRollButton.MouseButton1Down:Connect(function()
+AutoRollButton.Activated:Connect(function()
 	GUIControls:ToggleAutoRoll()
 end)
 

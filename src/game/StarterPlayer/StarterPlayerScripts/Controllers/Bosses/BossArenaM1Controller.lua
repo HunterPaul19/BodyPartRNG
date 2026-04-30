@@ -20,6 +20,7 @@ local REQUEST_M1_REMOTE_NAME = "RequestPlayerM1"
 local ACTIVE_PROFILE_ID = "boss_arena"
 local M1_SEARCH_PATH_DESCRIPTION =
 	"ReplicatedStorage.GameAssets.Animations.Bosses.M1 or ReplicatedStorage.GameAssets.Animations.M1"
+local ACTIVE_TRACK_TIMEOUT_PADDING_SECONDS = 0.1
 local warnedMissingM1Folder = false
 
 type RequestPlayerM1Response = {
@@ -97,6 +98,20 @@ function BossArenaM1Controller:_clearActiveSwing(stopTrack: boolean?)
 	self._activeTrack = nil
 	self._activeSwingId = nil
 	self._predictedAnimationName = nil
+end
+
+function BossArenaM1Controller:_clearStaleActiveSwing()
+	local activeTrack = self._activeTrack
+	if activeTrack == nil then
+		if self._activeSwingId ~= nil or self._predictedAnimationName ~= nil then
+			self:_clearActiveSwing(false)
+		end
+		return
+	end
+
+	if activeTrack.IsPlaying ~= true then
+		self:_clearActiveSwing(false)
+	end
 end
 
 function BossArenaM1Controller:_ensureCameraShaker()
@@ -214,6 +229,16 @@ function BossArenaM1Controller:_setActiveTrack(track: AnimationTrack, swingId: s
 	self._activeTrackStoppedConnection = track.Stopped:Connect(function()
 		if self._activeTrack == track then
 			self:_clearActiveSwing(false)
+		end
+	end)
+
+	local trackLength = if typeof(track.Length) == "number" then track.Length else 0
+	local timeoutSeconds = math.max(PlayerM1Config.CooldownSeconds, trackLength)
+		+ PlayerM1Config.AnimationFadeSeconds
+		+ ACTIVE_TRACK_TIMEOUT_PADDING_SECONDS
+	task.delay(timeoutSeconds, function()
+		if self._activeTrack == track then
+			self:_clearActiveSwing(track.IsPlaying == true)
 		end
 	end)
 end
@@ -371,6 +396,8 @@ function BossArenaM1Controller:_playApprovedSwing(response: RequestPlayerM1Respo
 end
 
 function BossArenaM1Controller:_requestAttack()
+	self:_clearStaleActiveSwing()
+
 	local now = Workspace:GetServerTimeNow()
 	if self._localCooldownEndsAt ~= nil and now < self._localCooldownEndsAt then
 		return

@@ -24,6 +24,12 @@ HUDWindowController.CloseButtonName = "Close"
 local MENU_OPEN_SOUND_NAME = "MenuOpen"
 local MENU_CLOSE_SOUND_NAME = "MenuClose"
 
+type TransparencySnapshot = {
+	instance: Instance,
+	property: string,
+	value: number,
+}
+
 local function scaleUDim2(value: UDim2, factor: number): UDim2
 	return UDim2.new(
 		value.X.Scale * factor,
@@ -31,6 +37,54 @@ local function scaleUDim2(value: UDim2, factor: number): UDim2
 		value.Y.Scale * factor,
 		value.Y.Offset * factor
 	)
+end
+
+local function addTransparencySnapshot(snapshots: { TransparencySnapshot }, instance: Instance, property: string)
+	local ok, value = pcall(function()
+		return (instance :: any)[property]
+	end)
+
+	if ok and typeof(value) == "number" then
+		table.insert(snapshots, {
+			instance = instance,
+			property = property,
+			value = value,
+		})
+	end
+end
+
+local function captureTransparencySnapshots(root: GuiObject): { TransparencySnapshot }
+	local snapshots = {}
+
+	local function visit(instance: Instance)
+		if instance:IsA("GuiObject") then
+			addTransparencySnapshot(snapshots, instance, "BackgroundTransparency")
+		end
+		if instance:IsA("TextLabel") or instance:IsA("TextButton") or instance:IsA("TextBox") then
+			addTransparencySnapshot(snapshots, instance, "TextTransparency")
+			addTransparencySnapshot(snapshots, instance, "TextStrokeTransparency")
+		end
+		if instance:IsA("ImageLabel") or instance:IsA("ImageButton") then
+			addTransparencySnapshot(snapshots, instance, "ImageTransparency")
+		end
+		if instance:IsA("ScrollingFrame") then
+			addTransparencySnapshot(snapshots, instance, "ScrollBarImageTransparency")
+		end
+		if instance:IsA("UIStroke") then
+			addTransparencySnapshot(snapshots, instance, "Transparency")
+		end
+	end
+
+	visit(root)
+	for _, descendant in ipairs(root:GetDescendants()) do
+		visit(descendant)
+	end
+
+	return snapshots
+end
+
+local function resolveTransparencyTarget(originalValue: number, visibleAlpha: number): number
+	return 1 - ((1 - originalValue) * visibleAlpha)
 end
 
 function HUDWindowController:_ensureState()
@@ -46,7 +100,7 @@ function HUDWindowController:_ensureState()
 	self._buttonConnections = {}
 	self._closeButtonConnections = {}
 	self._openSizes = {}
-	self._faders = {}
+	self._fadeSnapshots = {}
 	self._tweens = {}
 	self._fadeTweens = {}
 	self._hudVisibility = {}
@@ -125,17 +179,54 @@ function HUDWindowController:_cancelWindowTweens(name: string)
 	end
 
 	if self._fadeTweens[name] then
-		self._fadeTweens[name]:Cancel()
+		for _, tween in ipairs(self._fadeTweens[name]) do
+			tween:Cancel()
+		end
 		self._fadeTweens[name] = nil
 	end
 end
 
-function HUDWindowController:_getFader(window: GuiObject): CanvasGroup?
-	if window:IsA("CanvasGroup") then
-		return window
+function HUDWindowController:_captureWindowFade(name: string, window: GuiObject)
+	self._fadeSnapshots[name] = captureTransparencySnapshots(window)
+end
+
+function HUDWindowController:_setWindowFade(name: string, visibleAlpha: number)
+	local snapshots = self._fadeSnapshots[name]
+	if not snapshots then
+		return
 	end
 
-	return window:FindFirstChildWhichIsA("CanvasGroup", true)
+	for _, snapshot in ipairs(snapshots) do
+		if snapshot.instance.Parent then
+			pcall(function()
+				(snapshot.instance :: any)[snapshot.property] = resolveTransparencyTarget(snapshot.value, visibleAlpha)
+			end)
+		end
+	end
+end
+
+function HUDWindowController:_tweenWindowFade(name: string, visibleAlpha: number, tweenInfo: TweenInfo)
+	local snapshots = self._fadeSnapshots[name]
+	if not snapshots then
+		return
+	end
+
+	self._fadeTweens[name] = {}
+	for _, snapshot in ipairs(snapshots) do
+		if snapshot.instance.Parent then
+			local target = resolveTransparencyTarget(snapshot.value, visibleAlpha)
+			local ok, tween = pcall(function()
+				return TweenService:Create(snapshot.instance, tweenInfo, {
+					[snapshot.property] = target,
+				})
+			end)
+
+			if ok and tween then
+				table.insert(self._fadeTweens[name], tween)
+				tween:Play()
+			end
+		end
+	end
 end
 
 function HUDWindowController:_setHudVisible(visible: boolean)
@@ -161,11 +252,8 @@ function HUDWindowController:_prepareWindow(name: string)
 	end
 
 	self._openSizes[name] = window.Size
-	self._faders[name] = self:_getFader(window)
-
-	if self._faders[name] then
-		self._faders[name].GroupTransparency = 1
-	end
+	self:_captureWindowFade(name, window)
+	self:_setWindowFade(name, 0)
 
 	window.Visible = false
 
@@ -259,23 +347,15 @@ function HUDWindowController:OpenWindow(name: string, forceOpen: boolean?)
 	self._openSizes[name] = baseSize
 
 	local smallSize = scaleUDim2(baseSize, self.PopScale)
-	local fader = self._faders[name]
-
-	if fader then
-		fader.GroupTransparency = 1
-	end
 
 	SoundUtil.Play(MENU_OPEN_SOUND_NAME)
 	window.Visible = true
 	window.Size = smallSize
+	self:_setWindowFade(name, 0)
 
 	self._tweens[name] = TweenService:Create(window, self.OpenTween, { Size = baseSize })
 	self._tweens[name]:Play()
-
-	if fader then
-		self._fadeTweens[name] = TweenService:Create(fader, self.OpenTween, { GroupTransparency = 0 })
-		self._fadeTweens[name]:Play()
-	end
+	self:_tweenWindowFade(name, 1, self.OpenTween)
 
 	self._currentOpen = name
 	self:_setHudVisible(false)
@@ -299,13 +379,9 @@ function HUDWindowController:CloseWindow(name: string, instant: boolean?)
 	local baseSize = self._openSizes[name] or window.Size
 	self._openSizes[name] = baseSize
 	local smallSize = scaleUDim2(baseSize, self.PopScale)
-	local fader = self._faders[name]
 
 	if instant then
-		if fader then
-			fader.GroupTransparency = 1
-		end
-
+		self:_setWindowFade(name, 0)
 		window.Visible = false
 		window.Size = baseSize
 
@@ -321,11 +397,7 @@ function HUDWindowController:CloseWindow(name: string, instant: boolean?)
 	SoundUtil.Play(MENU_CLOSE_SOUND_NAME)
 	self._tweens[name] = TweenService:Create(window, self.CloseTween, { Size = smallSize })
 	self._tweens[name]:Play()
-
-	if fader then
-		self._fadeTweens[name] = TweenService:Create(fader, self.CloseTween, { GroupTransparency = 1 })
-		self._fadeTweens[name]:Play()
-	end
+	self:_tweenWindowFade(name, 0, self.CloseTween)
 
 	local connection: RBXScriptConnection?
 	connection = self._tweens[name].Completed:Connect(function()

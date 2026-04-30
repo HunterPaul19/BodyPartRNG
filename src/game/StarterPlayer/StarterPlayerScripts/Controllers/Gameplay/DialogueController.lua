@@ -23,6 +23,11 @@ local FRAME_CLOSE_DELAY = FrameController.CloseTween.Time
 local PANEL_CLOSE_DELAY = 0.12
 local TYPEWRITER_GRAPHEMES_PER_SECOND = 45
 local APPRAISAL_DIALOGUE_OPEN_COLOR = Color3.fromRGB(113, 230, 139)
+local DIALOGUE_ID_ATTRIBUTE = "DialogueId"
+local DIALOGUE_NODE_ID_ATTRIBUTE = "DialogueNodeId"
+local DIALOGUE_CHOICE_ID_ATTRIBUTE = "DialogueChoiceId"
+local DIALOGUE_ACTION_TYPE_ATTRIBUTE = "DialogueActionType"
+local DIALOGUE_FRAME_NAME_ATTRIBUTE = "DialogueFrameName"
 
 type DialogueDefinition = DialogueDefinitions.DialogueDefinition
 type DialogueNode = DialogueDefinitions.DialogueNode
@@ -31,6 +36,7 @@ type DialogueChoice = DialogueDefinitions.DialogueChoice
 type ResolvedChoice = {
 	choice: DialogueChoice,
 	disabled: boolean,
+	button: GuiButton?,
 }
 
 type DialogueUiRefs = {
@@ -103,6 +109,47 @@ end
 local function isAppraisalOpenChoice(choice: DialogueChoice): boolean
 	local action = choice.action
 	return action ~= nil and action.type == "openFrame" and action.frameName == APPRAISAL_FRAME_NAME
+end
+
+local function getVisibleSizedGuiObject(target: Instance?): GuiObject?
+	if not (target and target:IsA("GuiObject")) then
+		return nil
+	end
+
+	if target.Parent ~= nil and target.Visible == true and target.AbsoluteSize.X > 0 and target.AbsoluteSize.Y > 0 then
+		return target
+	end
+
+	return nil
+end
+
+local function getChoiceTutorialTarget(button: GuiButton?): GuiObject?
+	local buttonTarget = getVisibleSizedGuiObject(button)
+	if buttonTarget then
+		return buttonTarget
+	end
+
+	if button then
+		return getVisibleSizedGuiObject(button:FindFirstChild("Content"))
+	end
+
+	return nil
+end
+
+local function clearDialogueRootAttributes(dialogueRoot: Instance?)
+	if not dialogueRoot then
+		return
+	end
+
+	dialogueRoot:SetAttribute(DIALOGUE_ID_ATTRIBUTE, nil)
+	dialogueRoot:SetAttribute(DIALOGUE_NODE_ID_ATTRIBUTE, nil)
+end
+
+local function setChoiceAttributes(button: GuiButton, choice: DialogueChoice)
+	local action = choice.action
+	button:SetAttribute(DIALOGUE_CHOICE_ID_ATTRIBUTE, choice.id)
+	button:SetAttribute(DIALOGUE_ACTION_TYPE_ATTRIBUTE, if action then action.type else nil)
+	button:SetAttribute(DIALOGUE_FRAME_NAME_ATTRIBUTE, if action then action.frameName else nil)
 end
 
 local function styleAppraisalOpenButton(button: ImageButton)
@@ -224,6 +271,7 @@ function DialogueController:_ensureUi(): DialogueUiRefs
 		messageUi = messageUi,
 	}
 
+	clearDialogueRootAttributes(dialogueRoot)
 	self:_updateCanvasSize()
 
 	return self._ui
@@ -446,6 +494,7 @@ function DialogueController:_createChoiceButton(choice: DialogueChoice, disabled
 	button.ImageTransparency = 0
 	content.TextTransparency = 0
 	content.Text = choice.text
+	setChoiceAttributes(button, choice)
 
 	if isAppraisalOpenChoice(choice) then
 		styleAppraisalOpenButton(button)
@@ -465,6 +514,7 @@ function DialogueController:_createChoiceButton(choice: DialogueChoice, disabled
 	self._resolvedChoicesById[choice.id] = {
 		choice = choice,
 		disabled = disabled,
+		button = button,
 	}
 end
 
@@ -486,6 +536,8 @@ function DialogueController:_renderNode(node: DialogueNode)
 	ui.itemName.Text = node.speakerName
 	ui.itemName.Visible = node.speakerName ~= ""
 	ui.itemDescLabel.Text = node.text
+	ui.dialogueRoot:SetAttribute(DIALOGUE_ID_ATTRIBUTE, self._activeDialogueId)
+	ui.dialogueRoot:SetAttribute(DIALOGUE_NODE_ID_ATTRIBUTE, node.id)
 	self:_destroyRenderedButtons()
 	ui.itemDescLabel.MaxVisibleGraphemes = 0
 	self:_updateCanvasSize()
@@ -521,6 +573,9 @@ function DialogueController:_closeDialogue(afterClose: (() -> ())?)
 	self._currentNodeId = nil
 	self._context = nil
 	self:_destroyRenderedButtons()
+	if self._ui then
+		clearDialogueRootAttributes(self._ui.dialogueRoot)
+	end
 	self:_clearPortrait()
 
 	guiController:ClosePanel(DIALOGUE_PANEL_NAME, true)
@@ -709,6 +764,24 @@ end
 
 function DialogueController.IsOpen(): boolean
 	return DialogueController._activeDialogueId ~= nil and DialogueController._currentNodeId ~= nil
+end
+
+function DialogueController.IsDialogueOpen(dialogueId: string): boolean
+	return DialogueController._activeDialogueId == dialogueId and DialogueController._currentNodeId ~= nil
+end
+
+function DialogueController:GetTutorialTarget(targetId: string): GuiObject?
+	if targetId ~= "appraisalOpenChoice" or not self:IsOpen() then
+		return nil
+	end
+
+	for _, resolved in pairs(self._resolvedChoicesById) do
+		if not resolved.disabled and isAppraisalOpenChoice(resolved.choice) then
+			return getChoiceTutorialTarget(resolved.button)
+		end
+	end
+
+	return nil
 end
 
 return DialogueController

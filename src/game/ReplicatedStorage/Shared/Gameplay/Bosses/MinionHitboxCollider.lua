@@ -9,6 +9,28 @@ local WELD_NAME = "BossMinionHitboxColliderWeld"
 local HORIZONTAL_SIZE_MULTIPLIER = 2
 local VERTICAL_PADDING_STUDS = 0
 
+local function applyBossBodyCollisionGroup(minionModel: Model)
+	local bossBodyGroup = CombatConstants.COLLISION_GROUPS.BossBody
+	for _, descendant in ipairs(minionModel:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			descendant.CollisionGroup = bossBodyGroup
+		end
+	end
+end
+
+function MinionHitboxCollider.Get(minionModel: Model?): BasePart?
+	if minionModel == nil then
+		return nil
+	end
+
+	local collider = minionModel:FindFirstChild(COLLIDER_NAME)
+	if collider and collider:IsA("BasePart") then
+		return collider
+	end
+
+	return nil
+end
+
 function MinionHitboxCollider.Destroy(minionModel: Model?)
 	if minionModel == nil then
 		return
@@ -29,6 +51,7 @@ function MinionHitboxCollider.Attach(minionModel: Model?, rootPart: BasePart?): 
 	end
 
 	MinionHitboxCollider.Destroy(minionModel)
+	applyBossBodyCollisionGroup(minionModel)
 
 	local boundingCFrame, boundingSize = minionModel:GetBoundingBox()
 	local collider = Instance.new("Part")

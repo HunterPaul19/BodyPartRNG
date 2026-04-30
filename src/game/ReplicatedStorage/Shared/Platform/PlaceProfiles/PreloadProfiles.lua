@@ -30,6 +30,7 @@ local FEATURE_ORDER = {
 	"appraisal",
 	"inventory",
 	"loadout",
+	"crafting",
 	"merchant_shop",
 	"marketplace",
 	"titles",
@@ -56,11 +57,44 @@ local FEATURE_TO_PRELOAD_CONTRIBUTIONS: { [string]: FeaturePreloadContribution }
 		mainInterfaceRoots = { "Roll", "RollWarning" },
 		gameAssetPaths = { "UI/RollCutscene" },
 	},
+	appraisal = {
+		modalRootRoots = { "AppraisalUI" },
+	},
+	inventory = {
+		modalRootRoots = { "Inventory" },
+	},
+	loadout = {
+		modalRootRoots = { "Inventory" },
+	},
+	crafting = {
+		modalRootRoots = { "CraftingMenu" },
+	},
+	merchant_shop = {
+		modalRootRoots = { "MerchantTeleportFrame", "ShopUI" },
+	},
+	marketplace = {
+		modalRootRoots = { "Gifting", "RobuxStore" },
+	},
+	titles = {
+		modalRootRoots = { "Titles" },
+	},
 	potions = {
 		mainInterfaceRoots = {
 			{ name = "BuffsHolder", required = false },
 			{ name = "StatusEffectHover", required = false },
 		},
+	},
+	help = {
+		modalRootRoots = { "Help" },
+	},
+	index = {
+		modalRootRoots = { "Index" },
+	},
+	player_inspect = {
+		modalRootRoots = { "PlayerInfo" },
+	},
+	auto_sell = {
+		modalRootRoots = { "AutoSell" },
 	},
 	boss_fight_flow = {
 		mainInterfaceRoots = { "BossHealthBar", "CombatHUD" },

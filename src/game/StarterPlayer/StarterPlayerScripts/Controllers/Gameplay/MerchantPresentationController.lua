@@ -10,26 +10,23 @@ local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Signal = require(ReplicatedStorage.Common.Signal)
 
+local FrameController = require(script.Parent.FrameController)
+
 local LOCAL_PLAYER = Players.LocalPlayer
 
+local SYSTEM_OVERLAYS_NAME = "SystemOverlays"
 local OVERLAY_NAME = "MerchantTransitionOverlay"
 local BACKDROP_NAME = "MerchantShopBackdrop"
 local BLUR_NAME = "MerchantShopBlur"
-local TRANSITION_WRAPPER_NAME = "MerchantShopTransitionWrapper"
-local CONTENT_GROUP_NAME = "MerchantRuntimeCanvasGroup"
-local SCALE_NAME = "MerchantRuntimeScale"
 
 local OPEN_BLACKOUT_TWEEN = TweenInfo.new(0.20, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local OPEN_REVEAL_TWEEN = TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local OPEN_SCALE_TWEEN = TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 local CLOSE_BLACKOUT_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local CLOSE_REVEAL_TWEEN = TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local BLUR_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 local BACKDROP_TRANSPARENCY = 0.45
 local BLUR_SIZE = 18
-local INITIAL_SCALE = 0.9
-local RUNTIME_WRAPPER_Z_INDEX = 20
 local TRANSITION_OVERLAY_MIN_Z_INDEX = 100
 local CAMERA_OFFSET_X = 0.35
 local CAMERA_OFFSET_Y = 0.18
@@ -53,24 +50,6 @@ type CameraSnapshot = {
 	fieldOfView: number,
 }
 
-type RootLayoutSnapshot = {
-	parent: Instance,
-	position: UDim2,
-	size: UDim2,
-	anchorPoint: Vector2,
-	zIndex: number,
-	zIndexByGuiObject: { [GuiObject]: number },
-	zIndexLiftDelta: number,
-	visible: boolean,
-	backgroundTransparency: number,
-}
-
-type TransitionWrapperState = {
-	wrapper: Frame,
-	content: CanvasGroup,
-	scale: UIScale,
-}
-
 local MerchantPresentationController = {
 	FramePrepared = Signal.new(),
 	Closed = Signal.new(),
@@ -78,6 +57,7 @@ local MerchantPresentationController = {
 	_playerGui = nil :: PlayerGui?,
 	_modalRoot = nil :: ScreenGui?,
 	_mainInterface = nil :: ScreenGui?,
+	_systemOverlays = nil :: Folder?,
 	_overlay = nil :: Frame?,
 	_backdrop = nil :: TextButton?,
 	_blur = nil :: BlurEffect?,
@@ -85,10 +65,6 @@ local MerchantPresentationController = {
 	_controls = nil,
 	_controlsWereDisabled = false,
 	_closeConnectionsByName = {} :: { [string]: RBXScriptConnection },
-	_runtimeWrapperByRoot = {} :: { [GuiObject]: Frame },
-	_runtimeContentByRoot = {} :: { [GuiObject]: CanvasGroup },
-	_runtimeScaleByRoot = {} :: { [GuiObject]: UIScale },
-	_rootLayoutSnapshotsByRoot = {} :: { [GuiObject]: RootLayoutSnapshot },
 	_renderConnection = nil :: RBXScriptConnection?,
 	_isOpen = false,
 	_transitioning = false,
@@ -184,6 +160,16 @@ local function isPointInsideGuiObject(guiObject: GuiObject, point: Vector2): boo
 		and point.Y <= absolutePosition.Y + absoluteSize.Y
 end
 
+local function collectHighestZIndex(root: GuiObject): number
+	local highest = root.ZIndex
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("GuiObject") then
+			highest = math.max(highest, descendant.ZIndex)
+		end
+	end
+	return highest
+end
+
 function MerchantPresentationController:_ensureState()
 	if self._started then
 		return
@@ -212,6 +198,28 @@ function MerchantPresentationController:_getModalRoot(): ScreenGui
 	return modalRoot
 end
 
+function MerchantPresentationController:_getSystemOverlays(): Folder
+	if self._systemOverlays and self._systemOverlays.Parent then
+		return self._systemOverlays
+	end
+
+	local modalRoot = self:_getModalRoot()
+	local overlays = modalRoot:FindFirstChild(SYSTEM_OVERLAYS_NAME)
+	if overlays and not overlays:IsA("Folder") then
+		overlays:Destroy()
+		overlays = nil
+	end
+
+	if not overlays then
+		overlays = Instance.new("Folder")
+		overlays.Name = SYSTEM_OVERLAYS_NAME
+		overlays.Parent = modalRoot
+	end
+
+	self._systemOverlays = overlays
+	return overlays
+end
+
 function MerchantPresentationController:_getMainInterface(): ScreenGui
 	if self._mainInterface and self._mainInterface.Parent then
 		return self._mainInterface
@@ -223,33 +231,19 @@ function MerchantPresentationController:_getMainInterface(): ScreenGui
 	return mainInterface
 end
 
-function MerchantPresentationController:_getInteractiveTarget(): GuiObject?
+function MerchantPresentationController:_isPointInsideActiveShop(point: Vector2): boolean
 	local root = self._activeRoot
 	if not (root and root.Visible and root.Parent) then
-		return nil
-	end
-
-	local runtimeWrapper = self._runtimeWrapperByRoot[root]
-	if runtimeWrapper and runtimeWrapper.Visible and runtimeWrapper.Parent then
-		return runtimeWrapper
-	end
-
-	return root
-end
-
-function MerchantPresentationController:_isPointInsideActiveShop(point: Vector2): boolean
-	local interactiveTarget = self:_getInteractiveTarget()
-	if not interactiveTarget then
 		return false
 	end
 
-	if isPointInsideGuiObject(interactiveTarget, point) then
+	if isPointInsideGuiObject(root, point) then
 		return true
 	end
 
 	local playerGui = self:_getPlayerGui()
 	for _, guiObject in ipairs(playerGui:GetGuiObjectsAtPosition(point.X, point.Y)) do
-		if guiObject == interactiveTarget or guiObject:IsDescendantOf(interactiveTarget) then
+		if guiObject == root or guiObject:IsDescendantOf(root) then
 			return true
 		end
 	end
@@ -292,7 +286,19 @@ function MerchantPresentationController:_ensureOverlay(): Frame
 		return self._overlay
 	end
 
-	local overlay = self:_getModalRoot():FindFirstChild(OVERLAY_NAME)
+	local overlays = self:_getSystemOverlays()
+	local modalRoot = self:_getModalRoot()
+	local overlay = overlays:FindFirstChild(OVERLAY_NAME)
+	local legacyOverlay = modalRoot:FindFirstChild(OVERLAY_NAME)
+	if legacyOverlay and legacyOverlay ~= overlay then
+		if legacyOverlay:IsA("Frame") and not overlay then
+			legacyOverlay.Parent = overlays
+			overlay = legacyOverlay
+		else
+			legacyOverlay:Destroy()
+		end
+	end
+
 	if overlay and not overlay:IsA("Frame") then
 		overlay:Destroy()
 		overlay = nil
@@ -306,9 +312,9 @@ function MerchantPresentationController:_ensureOverlay(): Frame
 		overlay.BorderSizePixel = 0
 		overlay.Size = UDim2.fromScale(1, 1)
 		overlay.Position = UDim2.fromScale(0, 0)
-		overlay.ZIndex = 100
+		overlay.ZIndex = TRANSITION_OVERLAY_MIN_Z_INDEX
 		overlay.Visible = false
-		overlay.Parent = self:_getModalRoot()
+		overlay.Parent = overlays
 	end
 
 	self._overlay = overlay
@@ -320,7 +326,19 @@ function MerchantPresentationController:_ensureBackdrop(): TextButton
 		return self._backdrop
 	end
 
-	local backdrop = self:_getModalRoot():FindFirstChild(BACKDROP_NAME)
+	local overlays = self:_getSystemOverlays()
+	local modalRoot = self:_getModalRoot()
+	local backdrop = overlays:FindFirstChild(BACKDROP_NAME)
+	local legacyBackdrop = modalRoot:FindFirstChild(BACKDROP_NAME)
+	if legacyBackdrop and legacyBackdrop ~= backdrop then
+		if legacyBackdrop:IsA("TextButton") and not backdrop then
+			legacyBackdrop.Parent = overlays
+			backdrop = legacyBackdrop
+		else
+			legacyBackdrop:Destroy()
+		end
+	end
+
 	if backdrop and not backdrop:IsA("TextButton") then
 		backdrop:Destroy()
 		backdrop = nil
@@ -336,9 +354,9 @@ function MerchantPresentationController:_ensureBackdrop(): TextButton
 		backdrop.Text = ""
 		backdrop.Size = UDim2.fromScale(1, 1)
 		backdrop.Position = UDim2.fromScale(0, 0)
-		backdrop.ZIndex = 10
+		backdrop.ZIndex = 0
 		backdrop.Visible = false
-		backdrop.Parent = self:_getModalRoot()
+		backdrop.Parent = overlays
 		backdrop.Activated:Connect(function()
 			if MerchantPresentationController:_shouldCloseFromBackdropClick() then
 				MerchantPresentationController:Close()
@@ -363,185 +381,12 @@ function MerchantPresentationController:_getShopRoot(frameName: string): GuiObje
 	return nil
 end
 
-function MerchantPresentationController:_cleanupLegacyRuntimeContent(root: GuiObject)
-	local content = root:FindFirstChild(CONTENT_GROUP_NAME)
-	if content and content:IsA("CanvasGroup") then
-		for _, child in ipairs(content:GetChildren()) do
-			child.Parent = root
-		end
-		content:Destroy()
-	end
-
-	local scale = root:FindFirstChild(SCALE_NAME)
-	if scale and scale:IsA("UIScale") then
-		scale:Destroy()
-	end
-end
-
-function MerchantPresentationController:_ensureRuntimeContent(root: GuiObject): TransitionWrapperState
-	local runtimeWrapper = self._runtimeWrapperByRoot[root]
-	local runtimeContent = self._runtimeContentByRoot[root]
-	local runtimeScale = self._runtimeScaleByRoot[root]
-	local modalRoot = self:_getModalRoot()
-
-	if runtimeWrapper and runtimeContent and runtimeScale then
-		if runtimeWrapper.Parent == modalRoot and runtimeContent.Parent == runtimeWrapper and runtimeScale.Parent == runtimeWrapper then
-			runtimeWrapper.ClipsDescendants = false
-			runtimeContent.ClipsDescendants = false
-			return {
-				wrapper = runtimeWrapper,
-				content = runtimeContent,
-				scale = runtimeScale,
-			}
-		end
-	end
-
-	local wrapper = modalRoot:FindFirstChild(TRANSITION_WRAPPER_NAME)
-	if wrapper and not wrapper:IsA("Frame") then
-		wrapper:Destroy()
-		wrapper = nil
-	end
-
-	if not wrapper then
-		wrapper = Instance.new("Frame")
-		wrapper.Name = TRANSITION_WRAPPER_NAME
-		wrapper.BackgroundTransparency = 1
-		wrapper.BorderSizePixel = 0
-		wrapper.ClipsDescendants = false
-		wrapper.Visible = false
-		wrapper.Parent = modalRoot
-	end
-
-	local content = wrapper:FindFirstChild(CONTENT_GROUP_NAME)
-	if content and not content:IsA("CanvasGroup") then
-		content:Destroy()
-		content = nil
-	end
-
-	if not content then
-		content = Instance.new("CanvasGroup")
-		content.Name = CONTENT_GROUP_NAME
-		content.BackgroundTransparency = 1
-		content.ClipsDescendants = false
-		content.Size = UDim2.fromScale(1, 1)
-		content.Position = UDim2.fromScale(0, 0)
-		content.Parent = wrapper
-	end
-
-	local scale = wrapper:FindFirstChild(SCALE_NAME)
-	if scale and not scale:IsA("UIScale") then
-		scale:Destroy()
-		scale = nil
-	end
-
-	if not scale then
-		scale = Instance.new("UIScale")
-		scale.Name = SCALE_NAME
-		scale.Parent = wrapper
-	end
-
-	wrapper.ClipsDescendants = false
-	content.ClipsDescendants = false
-	self._runtimeWrapperByRoot[root] = wrapper
-	self._runtimeContentByRoot[root] = content
-	self._runtimeScaleByRoot[root] = scale
-
-	return {
-		wrapper = wrapper,
-		content = content,
-		scale = scale,
-	}
-end
-
-function MerchantPresentationController:_computeRootBounds(root: GuiObject): (Vector2, Vector2)
-	local rootPosition = root.AbsolutePosition
-	local rootSize = root.AbsoluteSize
-	local minX = rootPosition.X
-	local minY = rootPosition.Y
-	local maxX = rootPosition.X + rootSize.X
-	local maxY = rootPosition.Y + rootSize.Y
-
-	for _, descendant in ipairs(root:GetDescendants()) do
-		if descendant:IsA("GuiObject") then
-			local descendantPosition = descendant.AbsolutePosition
-			local descendantSize = descendant.AbsoluteSize
-			minX = math.min(minX, descendantPosition.X)
-			minY = math.min(minY, descendantPosition.Y)
-			maxX = math.max(maxX, descendantPosition.X + descendantSize.X)
-			maxY = math.max(maxY, descendantPosition.Y + descendantSize.Y)
-		end
-	end
-
-	local flooredMin = Vector2.new(math.floor(minX), math.floor(minY))
-	local ceiledMax = Vector2.new(math.ceil(maxX), math.ceil(maxY))
-	return flooredMin, Vector2.new(math.max(1, ceiledMax.X - flooredMin.X), math.max(1, ceiledMax.Y - flooredMin.Y))
-end
-
-local function collectGuiTreeZIndexes(root: GuiObject): ({ [GuiObject]: number }, number, number)
-	local zIndexByGuiObject = {
-		[root] = root.ZIndex,
-	}
-	local minZIndex = root.ZIndex
-	local maxZIndex = root.ZIndex
-
-	for _, descendant in ipairs(root:GetDescendants()) do
-		if descendant:IsA("GuiObject") then
-			zIndexByGuiObject[descendant] = descendant.ZIndex
-			minZIndex = math.min(minZIndex, descendant.ZIndex)
-			maxZIndex = math.max(maxZIndex, descendant.ZIndex)
-		end
-	end
-
-	return zIndexByGuiObject, minZIndex, maxZIndex
-end
-
-local function applyGuiTreeZIndexLift(
-	zIndexByGuiObject: { [GuiObject]: number },
-	minZIndex: number,
-	targetMinZIndex: number
-): number
-	local delta = math.max(0, targetMinZIndex - minZIndex)
-
-	for guiObject, originalZIndex in pairs(zIndexByGuiObject) do
-		if guiObject.Parent then
-			guiObject.ZIndex = originalZIndex + delta
-		end
-	end
-
-	return delta
-end
-
-local function restoreGuiTreeZIndexes(root: GuiObject, snapshot: RootLayoutSnapshot)
-	local function restoreGuiObject(guiObject: GuiObject)
-		local originalZIndex = snapshot.zIndexByGuiObject[guiObject]
-		if originalZIndex ~= nil then
-			guiObject.ZIndex = originalZIndex
-		elseif snapshot.zIndexLiftDelta > 0 then
-			guiObject.ZIndex = math.max(0, guiObject.ZIndex - snapshot.zIndexLiftDelta)
-		end
-	end
-
-	restoreGuiObject(root)
-
-	for _, descendant in ipairs(root:GetDescendants()) do
-		if descendant:IsA("GuiObject") then
-			restoreGuiObject(descendant)
-		end
-	end
-end
-
 function MerchantPresentationController:_raiseTransitionOverlayAbove(root: GuiObject?)
 	local overlay = self:_ensureOverlay()
 	local highestZIndex = TRANSITION_OVERLAY_MIN_Z_INDEX - 1
 
 	if root then
-		local _, _, maxRootZIndex = collectGuiTreeZIndexes(root)
-		highestZIndex = math.max(highestZIndex, maxRootZIndex)
-	end
-
-	local runtimeWrapper = root and self._runtimeWrapperByRoot[root] or nil
-	if runtimeWrapper then
-		highestZIndex = math.max(highestZIndex, runtimeWrapper.ZIndex)
+		highestZIndex = math.max(highestZIndex, collectHighestZIndex(root))
 	end
 
 	local backdrop = self._backdrop
@@ -550,45 +395,6 @@ function MerchantPresentationController:_raiseTransitionOverlayAbove(root: GuiOb
 	end
 
 	overlay.ZIndex = highestZIndex + 1
-end
-
-function MerchantPresentationController:_restoreShopRoot(root: GuiObject)
-	local snapshot = self._rootLayoutSnapshotsByRoot[root]
-	local runtimeWrapper = self._runtimeWrapperByRoot[root]
-	local runtimeContent = self._runtimeContentByRoot[root]
-	local runtimeScale = self._runtimeScaleByRoot[root]
-
-	if snapshot
-		and (
-			(runtimeContent and root.Parent == runtimeContent)
-			or (runtimeWrapper and root.Parent == runtimeWrapper)
-		)
-	then
-		root.Parent = snapshot.parent
-	end
-
-	if snapshot then
-		restoreGuiTreeZIndexes(root, snapshot)
-		root.AnchorPoint = snapshot.anchorPoint
-		root.Position = snapshot.position
-		root.Size = snapshot.size
-		root.ZIndex = snapshot.zIndex
-		root.BackgroundTransparency = snapshot.backgroundTransparency
-		root.Visible = snapshot.visible
-		self._rootLayoutSnapshotsByRoot[root] = nil
-	end
-
-	if runtimeScale and runtimeScale.Parent then
-		runtimeScale.Scale = 1
-	end
-
-	if runtimeContent and runtimeContent.Parent then
-		runtimeContent.GroupTransparency = 1
-	end
-
-	if runtimeWrapper and runtimeWrapper.Parent then
-		runtimeWrapper.Visible = false
-	end
 end
 
 function MerchantPresentationController:_bindCloseButton(frameName: string, root: GuiObject)
@@ -723,7 +529,6 @@ function MerchantPresentationController:_setBlurSize(targetSize: number, tweenIn
 	else
 		blur.Size = targetSize
 	end
-
 end
 
 function MerchantPresentationController:_setCameraBase(cameraPart: BasePart?, frameName: string)
@@ -804,129 +609,11 @@ function MerchantPresentationController:_startCameraParallax(cameraPart: BasePar
 	end)
 end
 
-function MerchantPresentationController:_prepareShopRoot(root: GuiObject, crispContent: boolean?)
-	self:_cleanupLegacyRuntimeContent(root)
-	self:_restoreShopRoot(root)
-
-	local originalParent = root.Parent or self:_getModalRoot()
-	local originalPosition = root.Position
-	local originalSize = root.Size
-	local originalAnchorPoint = root.AnchorPoint
-	local originalZIndex = root.ZIndex
-	local originalVisibility = root.Visible
-	local originalBackgroundTransparency = root.BackgroundTransparency
-	local originalZIndexes, minZIndex = collectGuiTreeZIndexes(root)
-
-	root.Visible = true
-	local rootAbsolutePosition = root.AbsolutePosition
-	local rootAbsoluteSize = root.AbsoluteSize
-
-	local runtimeState = self:_ensureRuntimeContent(root)
-	local wrapperPosition, wrapperSize = self:_computeRootBounds(root)
-	local rootOffset = rootAbsolutePosition - wrapperPosition
-
-	self._rootLayoutSnapshotsByRoot[root] = {
-		parent = originalParent,
-		position = originalPosition,
-		size = originalSize,
-		anchorPoint = originalAnchorPoint,
-		zIndex = originalZIndex,
-		zIndexByGuiObject = originalZIndexes,
-		zIndexLiftDelta = 0,
-		visible = originalVisibility,
-		backgroundTransparency = originalBackgroundTransparency,
-	}
-
-	runtimeState.wrapper.Position = UDim2.fromOffset(wrapperPosition.X, wrapperPosition.Y)
-	runtimeState.wrapper.Size = UDim2.fromOffset(wrapperSize.X, wrapperSize.Y)
-	runtimeState.wrapper.ZIndex = RUNTIME_WRAPPER_Z_INDEX
-	runtimeState.wrapper.Visible = true
-	runtimeState.content.ZIndex = runtimeState.wrapper.ZIndex + 1
-	runtimeState.content.GroupTransparency = 1
-	runtimeState.scale.Scale = if crispContent then 1 else INITIAL_SCALE
-
-	local rootParent = if crispContent then runtimeState.wrapper else runtimeState.content
-	local targetMinZIndex = if crispContent then runtimeState.wrapper.ZIndex + 1 else runtimeState.content.ZIndex + 1
-
-	root.Parent = rootParent
-	root.AnchorPoint = Vector2.zero
-	root.Position = UDim2.fromOffset(rootOffset.X, rootOffset.Y)
-	root.Size = UDim2.fromOffset(rootAbsoluteSize.X, rootAbsoluteSize.Y)
-	local zIndexLiftDelta = applyGuiTreeZIndexLift(
-		originalZIndexes,
-		minZIndex,
-		targetMinZIndex
-	)
-	self._rootLayoutSnapshotsByRoot[root].zIndexLiftDelta = zIndexLiftDelta
-	self:_raiseTransitionOverlayAbove(root)
-	root.Visible = true
-end
-
-function MerchantPresentationController:_preparePreservedShopRoot(root: GuiObject)
-	self:_restoreShopRoot(root)
-
-	local originalParent = root.Parent or self:_getModalRoot()
-	local originalPosition = root.Position
-	local originalSize = root.Size
-	local originalAnchorPoint = root.AnchorPoint
-	local originalZIndex = root.ZIndex
-	local originalVisibility = root.Visible
-	local originalBackgroundTransparency = root.BackgroundTransparency
-	local originalZIndexes, minZIndex = collectGuiTreeZIndexes(root)
-
-	self._rootLayoutSnapshotsByRoot[root] = {
-		parent = originalParent,
-		position = originalPosition,
-		size = originalSize,
-		anchorPoint = originalAnchorPoint,
-		zIndex = originalZIndex,
-		zIndexByGuiObject = originalZIndexes,
-		zIndexLiftDelta = 0,
-		visible = originalVisibility,
-		backgroundTransparency = originalBackgroundTransparency,
-	}
-
-	root.Visible = true
-	local zIndexLiftDelta = applyGuiTreeZIndexLift(
-		originalZIndexes,
-		minZIndex,
-		RUNTIME_WRAPPER_Z_INDEX + 1
-	)
-	self._rootLayoutSnapshotsByRoot[root].zIndexLiftDelta = zIndexLiftDelta
-	self:_raiseTransitionOverlayAbove(root)
-end
-
-function MerchantPresentationController:_playOpenReveal(root: GuiObject, crispContent: boolean?, preserveRootLayout: boolean?)
-	local runtimeState = if preserveRootLayout then nil else self:_ensureRuntimeContent(root)
+function MerchantPresentationController:_playOpenReveal()
 	local overlay = self:_ensureOverlay()
-	self:_raiseTransitionOverlayAbove(root)
-
-	local fadeTween = TweenService:Create(overlay, OPEN_REVEAL_TWEEN, {
+	tweenAsync(overlay, OPEN_REVEAL_TWEEN, {
 		BackgroundTransparency = 1,
 	})
-
-	fadeTween:Play()
-
-	if preserveRootLayout then
-		-- The root is already visible in its authored layout; only the blackout overlay reveals.
-	elseif crispContent then
-		assert(runtimeState ~= nil, "Runtime transition state is missing.")
-		runtimeState.content.GroupTransparency = 1
-		runtimeState.scale.Scale = 1
-	else
-		assert(runtimeState ~= nil, "Runtime transition state is missing.")
-		local groupTween = TweenService:Create(runtimeState.content, OPEN_REVEAL_TWEEN, {
-			GroupTransparency = 0,
-		})
-		local scaleTween = TweenService:Create(runtimeState.scale, OPEN_SCALE_TWEEN, {
-			Scale = 1,
-		})
-
-		groupTween:Play()
-		scaleTween:Play()
-	end
-
-	fadeTween.Completed:Wait()
 	self:_hideOverlay()
 end
 
@@ -970,13 +657,6 @@ function MerchantPresentationController:_restorePresentationState()
 		self:_restoreMainInterfaceSession()
 	end)
 
-	self:_restorePresentationStep("shopRoot", function()
-		local root = self._activeRoot
-		if root then
-			self:_restoreShopRoot(root)
-		end
-	end)
-
 	self:_restorePresentationStep("backdrop", function()
 		local backdrop = self:_ensureBackdrop()
 		backdrop.Visible = false
@@ -1011,6 +691,9 @@ end
 
 function MerchantPresentationController:_recoverTransition(transitionName: string, err: any, closedFrameName: string?)
 	Logger.Warn(string.format("[MerchantPresentationController] %s transition failed: %s", transitionName, tostring(err)))
+	if self._activeFrameName then
+		FrameController:CloseFrame(self._activeFrameName)
+	end
 	self:_restorePresentationState()
 	self:_restorePresentationStep("overlay", function()
 		self:_hideOverlay()
@@ -1027,35 +710,40 @@ function MerchantPresentationController:_midpointOpen(frameName: string, root: G
 	self:_freezePlayer()
 
 	local backdrop = self:_ensureBackdrop()
-	local crispContent = options and options.crispContent == true
-	local preserveRootLayout = options and options.preserveRootLayout == true
-	if preserveRootLayout then
-		self:_preparePreservedShopRoot(root)
-	else
-		self:_prepareShopRoot(root, crispContent)
-	end
-	local runtimeWrapper = self._runtimeWrapperByRoot[root]
 	local backdropTransparency = if options and typeof(options.backdropTransparency) == "number"
 		then math.clamp(options.backdropTransparency, 0, 1)
 		else BACKDROP_TRANSPARENCY
 	local blurSize = if options and typeof(options.blurSize) == "number"
 		then math.max(0, options.blurSize)
 		else BLUR_SIZE
+
 	backdrop.Visible = true
 	backdrop.Active = true
-	backdrop.ZIndex = if preserveRootLayout
-		then RUNTIME_WRAPPER_Z_INDEX
-		else math.max(0, (if runtimeWrapper then runtimeWrapper.ZIndex else root.ZIndex) - 1)
+	backdrop.ZIndex = math.max(0, root.ZIndex - 1)
 	backdrop.BackgroundTransparency = backdropTransparency
 
 	self:_setBlurSize(blurSize, BLUR_TWEEN, true)
 	self:_snapshotCamera()
 	self:_setCameraBase(if options then options.cameraPart else nil, frameName)
+
+	local opened = FrameController:OpenFrame(frameName, {
+		useOverlay = false,
+	})
+	if not opened then
+		error(string.format("FrameController could not open ModalRoot.%s.", frameName), 2)
+	end
+
+	self._isOpen = true
 	self.FramePrepared:Fire(frameName, root, options)
 	self:_bindCloseButton(frameName, root)
+	self:_raiseTransitionOverlayAbove(root)
 end
 
-function MerchantPresentationController:_midpointClose()
+function MerchantPresentationController:_midpointClose(frameName: string?)
+	if frameName then
+		FrameController:CloseFrame(frameName)
+		task.wait(FrameController.CloseTween.Time)
+	end
 	self:_restorePresentationState()
 end
 
@@ -1081,6 +769,10 @@ function MerchantPresentationController:Open(frameName: string, options: OpenOpt
 		return true
 	end
 
+	if self._isOpen then
+		self:Close()
+	end
+
 	local root = self:_getShopRoot(frameName)
 	if not root then
 		Logger.Warn(string.format("[MerchantPresentationController] ModalRoot.%s was not found.", frameName))
@@ -1094,11 +786,7 @@ function MerchantPresentationController:Open(frameName: string, options: OpenOpt
 	local ok, err = xpcall(function()
 		self:_playOpenBlackout()
 		self:_midpointOpen(frameName, root, options)
-		self:_playOpenReveal(
-			root,
-			if options then options.crispContent == true else false,
-			if options then options.preserveRootLayout == true else false
-		)
+		self:_playOpenReveal()
 		self:_hideOverlay()
 		self:_startCameraParallax(if options then options.cameraPart else nil)
 	end, debug.traceback)
@@ -1108,7 +796,6 @@ function MerchantPresentationController:Open(frameName: string, options: OpenOpt
 		return false
 	end
 
-	self._isOpen = true
 	self._transitioning = false
 	return true
 end
@@ -1125,7 +812,7 @@ function MerchantPresentationController:Close(): boolean
 
 	local ok, err = xpcall(function()
 		self:_playCloseBlackout()
-		self:_midpointClose()
+		self:_midpointClose(closingFrameName)
 		tweenAsync(self:_ensureOverlay(), CLOSE_REVEAL_TWEEN, {
 			BackgroundTransparency = 1,
 		})

@@ -14,8 +14,6 @@ local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 local LOCAL_PLAYER = Players.LocalPlayer
 local TAG_NAME = "marketplace"
 local PRICE_LABEL_TAG_NAME = "marketplace_price_label"
-local FRAME_TAG_NAME = "frame"
-local CLOSE_TAG_NAME = "close"
 local MODAL_NAME = "Gifting"
 local STORE_NAME = "RobuxStore"
 local REMOTES_FOLDER_NAME = "Remotes"
@@ -187,37 +185,6 @@ function MarketplaceController:_getRemotes()
 	return self._remotes
 end
 
-function MarketplaceController:_tagCloseButton(root: GuiObject)
-	local closeButton = root:FindFirstChild("CloseButton", true)
-	if closeButton and closeButton:IsA("GuiButton") then
-		CollectionService:AddTag(closeButton, CLOSE_TAG_NAME)
-	end
-end
-
-function MarketplaceController:_ensureRuntimeModal(mainInterface: ScreenGui, modalRoot: ScreenGui): GuiObject
-	local existing = modalRoot:FindFirstChild(MODAL_NAME)
-	if existing and existing:IsA("GuiObject") then
-		existing.Visible = false
-		CollectionService:AddTag(existing, FRAME_TAG_NAME)
-		self:_tagCloseButton(existing)
-		return existing
-	end
-
-	local source = mainInterface:FindFirstChild(MODAL_NAME)
-	if not (source and source:IsA("GuiObject")) then
-		Logger.Error("PlayerGui.MainInterface.Gifting is missing.")
-	end
-
-	local clone = source:Clone()
-	clone.Name = MODAL_NAME
-	clone.Visible = false
-	clone.Parent = modalRoot
-	CollectionService:AddTag(clone, FRAME_TAG_NAME)
-	self:_tagCloseButton(clone)
-
-	return clone
-end
-
 function MarketplaceController:_ensurePromptLabel(line: Instance?): TextLabel?
 	if not (line and line:IsA("GuiObject")) then
 		return nil
@@ -254,7 +221,8 @@ function MarketplaceController:_cacheUi()
 	assert(mainInterface and mainInterface:IsA("ScreenGui"), "PlayerGui.MainInterface is missing.")
 	assert(modalRoot and modalRoot:IsA("ScreenGui"), "PlayerGui.ModalRoot is missing.")
 
-	local giftRoot = self:_ensureRuntimeModal(mainInterface, modalRoot)
+	local giftRoot = modalRoot:WaitForChild(MODAL_NAME, 30)
+	assert(giftRoot and giftRoot:IsA("GuiObject"), "PlayerGui.ModalRoot.Gifting is missing.")
 	local topbar = giftRoot:WaitForChild("Topbar", 30)
 	local scrollingFrame = giftRoot:WaitForChild("ScrollingFrame", 30)
 	local template = scrollingFrame:WaitForChild("Template", 30)

@@ -1,15 +1,12 @@
 local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Diagnostics"):WaitForChild("Logger"))
 
 local Players = game:GetService("Players")
-local CollectionService = game:GetService("CollectionService")
 
 local FrameController = require(script.Parent.FrameController)
 local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local WINDOW_NAME = "RobuxStore"
-local FRAME_TAG_NAME = "frame"
-local CLOSE_TAG_NAME = "close"
 
 local StoreController = {}
 
@@ -24,37 +21,6 @@ function StoreController:_ensureState()
 	self._ui = {}
 	self._openButtonBound = false
 	self._fullUiReady = false
-end
-
-function StoreController:_tagCloseButton(root: GuiObject)
-	local closeButton = root:FindFirstChild("CloseButton", true)
-	if closeButton and closeButton:IsA("GuiButton") then
-		CollectionService:AddTag(closeButton, CLOSE_TAG_NAME)
-	end
-end
-
-function StoreController:_ensureRuntimeModal(mainInterface: ScreenGui, modalRoot: ScreenGui): GuiObject
-	local existing = modalRoot:FindFirstChild(WINDOW_NAME)
-	if existing and existing:IsA("GuiObject") then
-		existing.Visible = false
-		CollectionService:AddTag(existing, FRAME_TAG_NAME)
-		self:_tagCloseButton(existing)
-		return existing
-	end
-
-	local source = mainInterface:FindFirstChild(WINDOW_NAME)
-	if not (source and source:IsA("GuiObject")) then
-		Logger.Error("PlayerGui.MainInterface.RobuxStore is missing.")
-	end
-
-	local clone = source:Clone()
-	clone.Name = WINDOW_NAME
-	clone.Visible = false
-	clone.Parent = modalRoot
-	CollectionService:AddTag(clone, FRAME_TAG_NAME)
-	self:_tagCloseButton(clone)
-
-	return clone
 end
 
 function StoreController:_bindOpenButton(openButton: GuiButton)
@@ -88,7 +54,7 @@ function StoreController:_cacheUi(playerGui: PlayerGui)
 		Logger.Error("PlayerGui.ModalRoot is missing.")
 	end
 
-	local storeRoot = self:_ensureRuntimeModal(mainInterface, modalRoot)
+	local storeRoot = modalRoot:WaitForChild(WINDOW_NAME, 30)
 	local openButton = mainInterface:WaitForChild("Main", 30):WaitForChild("ExtraButtons", 30):WaitForChild("Store", 30)
 	if not (storeRoot and storeRoot:IsA("GuiObject") and openButton and openButton:IsA("GuiButton")) then
 		Logger.Error("Store UI hierarchy is missing required instances.")

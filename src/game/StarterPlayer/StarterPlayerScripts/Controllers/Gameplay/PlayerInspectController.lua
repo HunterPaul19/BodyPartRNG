@@ -35,6 +35,7 @@ local SELECTED_COLOR = Color3.fromRGB(116, 192, 255)
 local DEFAULT_OUTLINE_COLOR = Color3.fromRGB(255, 255, 255)
 local PART_INFO_TWEEN = TweenInfo.new(0.16, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 local DEFAULT_SELECT_TEXT = "Select a body part"
+local DEFAULT_POWER_LABEL_TEXT = "Power: %s"
 
 type InspectEntry = {
 	ownedId: string?,
@@ -88,6 +89,7 @@ type InspectSummary = {
 	currentOwnedBodyParts: number?,
 	currentOwnedAuras: number?,
 	currentOwnedAccessories: number?,
+	combatPower: number?,
 	stats: any,
 	equipped: { [string]: InspectEntry }?,
 	equippedAura: EquippedAuraInspectEntry?,
@@ -123,6 +125,31 @@ local function extractTrailingLabelText(templateText: any, fallback: string): st
 		return normalized
 	end
 	return fallback
+end
+
+local function formatPowerLabelText(templateText: any, valueText: string): string
+	local template = if typeof(templateText) == "string" then string.match(templateText, "^%s*(.-)%s*$") or "" else ""
+	if string.find(template, "%%s", 1, true) then
+		local ok, formatted = pcall(string.format, template, valueText)
+		if ok and typeof(formatted) == "string" then
+			return formatted
+		end
+	end
+
+	local replaced = false
+	local formatted = string.gsub(template, "%d[%d%.,]*", function(match)
+		if replaced then
+			return match
+		end
+
+		replaced = true
+		return valueText
+	end, 1)
+	if replaced then
+		return formatted
+	end
+
+	return string.format(DEFAULT_POWER_LABEL_TEXT, valueText)
 end
 
 local function getSelectionKeyValue(primaryValue: any, fallbackValue: any): string
@@ -287,6 +314,7 @@ function PlayerInspectController:_ensureState()
 	self._partInfoLabelFontFaces = nil
 	self._partInfoEverRolledNativeText = nil
 	self._partInfoEverRolledSuffixText = nil
+	self._powerLabelNativeText = nil
 end
 
 function PlayerInspectController:_isSelectorDisabled(): boolean
@@ -554,6 +582,11 @@ function PlayerInspectController:_syncSummaryLabels()
 	TranslationHelper.setLiteralText(ui.incomeLabel, summaryTexts.income)
 	TranslationHelper.setLiteralText(ui.luckLabel, summaryTexts.luck)
 	TranslationHelper.setLiteralText(ui.rollSpeedLabel, summaryTexts.rollSpeed)
+	if ui.powerLabel and ui.powerLabel:IsA("TextLabel") then
+		local combatPower = math.max(0, math.floor((tonumber(self._summary and self._summary.combatPower) or 0) + 0.5))
+		local templateText = self._powerLabelNativeText or ui.powerLabel.Text
+		TranslationHelper.setLiteralText(ui.powerLabel, formatPowerLabelText(templateText, NumberFormatter.Format(combatPower)))
+	end
 	if ui.totalOddsAddedLabel then
 		ui.totalOddsAddedLabel.Visible = false
 	end
@@ -690,11 +723,9 @@ function PlayerInspectController:_syncAccessoryButtons()
 		if frame then
 			frame.Visible = true
 		end
-		if not button then
-			continue
+		if button then
+			syncSlotPlaceholder(button, self._accessorySlotPlaceholderDefaults[slot], entry ~= nil)
 		end
-
-		syncSlotPlaceholder(button, self._accessorySlotPlaceholderDefaults[slot], entry ~= nil)
 		if entry then
 			local previewPresentation = AccessoryPresentation.BuildPreviewPresentation({
 				record = entry,
@@ -741,7 +772,9 @@ function PlayerInspectController:_syncAccessoryButtons()
 
 		local isSelected = self._selectedAccessorySlot == slot and entry ~= nil
 		local isHovered = self._hoveredAccessorySlot == slot and entry ~= nil
-		setOutlineColor(button, if isSelected then SELECTED_COLOR else DEFAULT_OUTLINE_COLOR, if isSelected or isHovered then 0 else 0.2)
+		if button then
+			setOutlineColor(button, if isSelected then SELECTED_COLOR else DEFAULT_OUTLINE_COLOR, if isSelected or isHovered then 0 else 0.2)
+		end
 	end
 end
 
@@ -1377,6 +1410,11 @@ function PlayerInspectController:_cacheUi(playerGui: PlayerGui)
 		totalOddsAddedLabel = nil
 	end
 
+	local powerLabel = characterRoot:FindFirstChild("Power")
+	if powerLabel and not powerLabel:IsA("TextLabel") then
+		powerLabel = nil
+	end
+
 	local auraFrame = characterRoot:FindFirstChild("Aura")
 	if auraFrame and not auraFrame:IsA("GuiObject") then
 		auraFrame = nil
@@ -1443,6 +1481,7 @@ function PlayerInspectController:_cacheUi(playerGui: PlayerGui)
 		incomeLabel = characterRoot:WaitForChild("Income", 30),
 		luckLabel = characterRoot:WaitForChild("Luck", 30),
 		rollSpeedLabel = characterRoot:WaitForChild("Roll Speed", 30),
+		powerLabel = powerLabel,
 		totalOddsAddedLabel = totalOddsAddedLabel,
 	}
 	self._slotCardRenderer = SlotCardRenderer.new(playerGui)
@@ -1465,6 +1504,7 @@ function PlayerInspectController:_cacheUi(playerGui: PlayerGui)
 		Bundle = self._ui.partInfoLabels.Bundle.FontFace,
 		Rarity = self._ui.partInfoLabels.Rarity.FontFace,
 	}
+	self._powerLabelNativeText = if powerLabel and powerLabel:IsA("TextLabel") then powerLabel.Text else nil
 	self._partInfoEverRolledNativeText = self._ui.partInfoLabels.EverRolled.Text
 	self._partInfoEverRolledSuffixText = extractTrailingLabelText(self._partInfoEverRolledNativeText, "Ever Rolled")
 

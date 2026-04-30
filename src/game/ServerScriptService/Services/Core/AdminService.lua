@@ -1,5 +1,6 @@
 local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Diagnostics"):WaitForChild("Logger"))
 
+local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -22,6 +23,7 @@ local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
 local AuraConfig = require(ReplicatedStorage.Shared.Config.AuraConfig)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local CraftingMaterialConfig = require(ReplicatedStorage.Shared.Config.CraftingMaterialConfig)
+local DayNightCycleConfig = require(ReplicatedStorage.Shared.Config.DayNightCycleConfig)
 local MerchantShopConfig = require(ReplicatedStorage.Shared.Config.MerchantShopConfig)
 local MerchantShopService = require(script.Parent.MerchantShopService)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
@@ -42,6 +44,9 @@ local BossWorldGuideService = require(script.Parent.BossWorldGuideService)
 local REMOTES_FOLDER_NAME = "Remotes"
 local ADMIN_ACTION_REMOTE_NAME = "AdminAction"
 local ACCESS_ATTRIBUTE = "CanUseAdminPanel"
+local SERVER_START_TIME_ATTRIBUTE = "DayNightServerStartTime"
+local INITIAL_NORMALIZED_TIME_ATTRIBUTE = "DayNightInitialNormalizedTime"
+local LOOP_DURATION_ATTRIBUTE = "DayNightLoopDuration"
 local OVERVIEW_TAB_ID = "overview"
 local BODY_PARTS_TAB_ID = "bodyParts"
 local ROLL_SOURCES_TAB_ID = "cases"
@@ -584,6 +589,41 @@ local function handleShowMerchant(payload: any?)
 	})
 	return response(true, "OK", "The merchant has been forced onto the map.", {
 		merchantState = merchantState,
+	})
+end
+
+local function handleSetNighttime()
+	local nighttimeKeyframe = nil
+	for _, keyframe in ipairs(DayNightCycleConfig.Keyframes) do
+		if keyframe.Phase == "NIGHTTIME" then
+			nighttimeKeyframe = keyframe
+			break
+		end
+	end
+
+	if not nighttimeKeyframe then
+		return response(false, "CONFIG_ERROR", "DayNightCycleConfig does not define a NIGHTTIME keyframe.")
+	end
+
+	local normalizedTime = DayNightCycleConfig.NormalizeCycleTime(nighttimeKeyframe.NormalizedTime)
+	local serverTime = Workspace:GetServerTimeNow()
+	Lighting:SetAttribute(SERVER_START_TIME_ATTRIBUTE, serverTime)
+	Lighting:SetAttribute(INITIAL_NORMALIZED_TIME_ATTRIBUTE, normalizedTime)
+	Lighting:SetAttribute(LOOP_DURATION_ATTRIBUTE, DayNightCycleConfig.LoopDurationSeconds)
+	Lighting:SetAttribute("DayNightPhase", nighttimeKeyframe.Phase)
+	Lighting:SetAttribute("DayNightNormalizedTime", normalizedTime)
+	Lighting.ClockTime = DayNightCycleConfig.WrapClockTime(nighttimeKeyframe.ClockTime)
+
+	pushRecentEvent("day_night", "Forced nighttime from admin panel.", {
+		normalizedTime = normalizedTime,
+		clockTime = Lighting.ClockTime,
+	})
+
+	return response(true, "OK", "Set the day/night cycle to nighttime.", {
+		phase = nighttimeKeyframe.Phase,
+		normalizedTime = normalizedTime,
+		clockTime = Lighting.ClockTime,
+		loopDurationSeconds = DayNightCycleConfig.LoopDurationSeconds,
 	})
 end
 
@@ -1840,6 +1880,10 @@ function AdminService:HandleAction(player: Player, request: any)
 
 	if tabId == OVERVIEW_TAB_ID and actionId == "show_merchant" then
 		return handleShowMerchant(payload)
+	end
+
+	if tabId == OVERVIEW_TAB_ID and actionId == "set_nighttime" then
+		return handleSetNighttime()
 	end
 
 	if tabId == OVERVIEW_TAB_ID and actionId == "refresh_server_state" then

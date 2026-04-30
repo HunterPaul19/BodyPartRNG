@@ -16,6 +16,7 @@ local THUMBNAIL_SIZE = Enum.ThumbnailSize.Size420x420
 local LEADERBOARD_OPEN_POSITION = UDim2.fromScale(0.5, 0.5)
 local LEADERBOARD_CLOSED_POSITION = UDim2.fromScale(1.5, 0.5)
 local PANEL_TWEEN_INFO = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local ROLL_REFRESH_DEBOUNCE_SECONDS = 0.25
 local BOSS_ARENA_PROFILE_ID = "boss_arena"
 local DAMAGE_LEADERSTAT_NAME = "Damage"
 
@@ -322,7 +323,7 @@ end
 
 function LeaderboardController:_watchRollsValue(rollsValue: IntValue, playerConnections: { RBXScriptConnection })
 	table.insert(playerConnections, rollsValue:GetPropertyChangedSignal("Value"):Connect(function()
-		self:_refreshRowsNow()
+		self:_scheduleRefresh(ROLL_REFRESH_DEBOUNCE_SECONDS)
 	end))
 end
 

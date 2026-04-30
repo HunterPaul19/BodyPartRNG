@@ -84,6 +84,12 @@ AdminActionRegistry.Tabs = {
 						},
 					},
 					{
+						id = "set_nighttime",
+						title = "Set Nighttime",
+						description = "Jump the live day/night cycle to the configured nighttime phase for visibility and mood testing.",
+						risk = AdminActionRegistry.Risk.Mutating,
+					},
+					{
 						id = "refresh_server_state",
 						title = "Refresh Server State",
 						description = "Refresh admin-readable state snapshots for the current server.",

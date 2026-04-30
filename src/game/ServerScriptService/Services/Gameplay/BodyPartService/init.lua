@@ -34,6 +34,7 @@ local GET_STATE_REMOTE_NAME = "GetSessionLoadout"
 local GET_EXISTENCE_REMOTE_NAME = "GetTotalInExistenceForPiece"
 local GET_EXISTENCES_REMOTE_NAME = "GetTotalInExistenceForPieces"
 local GET_PLAYER_INSPECT_SUMMARY_REMOTE_NAME = "GetPlayerInspectSummary"
+local PREMIUM_MOVEMENT_MULTIPLIER_ATTR = "PremiumMovementSpeedMultiplier"
 local EQUIP_REMOTE_NAME = "EquipOwnedBodyPart"
 local EQUIP_BEST_REMOTE_NAME = "EquipBestLoadout"
 local UNEQUIP_REMOTE_NAME = "UnequipRegion"
@@ -1692,6 +1693,27 @@ local function countOwnedRecords(recordsById: { [string]: any }): number
 	return total
 end
 
+local function resolvePremiumMovementSpeedMultiplier(player: Player): number
+	local multiplier = tonumber(player:GetAttribute(PREMIUM_MOVEMENT_MULTIPLIER_ATTR))
+	if multiplier == nil or multiplier <= 0 then
+		return 1
+	end
+
+	return multiplier
+end
+
+local function calculateLoadoutCombatPower(player: Player, bonuses: any): number
+	local basePlayerStats = BodyPartsCatalog.GetBasePlayerStats()
+	local safeBonuses = if typeof(bonuses) == "table" then bonuses else {}
+
+	return CombatPower.CalculateAboveBase({
+		damage = math.max(0, tonumber(safeBonuses.damage) or tonumber(basePlayerStats.damage) or 20),
+		health = math.max(1, tonumber(safeBonuses.health) or tonumber(basePlayerStats.health) or 100),
+		speed = math.max(0, tonumber(safeBonuses.speed) or tonumber(basePlayerStats.speed) or 16)
+			* resolvePremiumMovementSpeedMultiplier(player),
+	}, basePlayerStats)
+end
+
 computeLoadoutBonuses = function(
 	equippedState: BodyPartLoadout.EquippedState,
 	ownedBodyParts: { [string]: OwnedBodyParts.OwnedBodyPartRecord }?,
@@ -1912,6 +1934,11 @@ function BodyPartService:GetPlayerInspectSummary(targetPlayer: Player)
 	local equipped = {}
 	local equippedAura = nil
 	local equippedAccessories = {}
+	if equippedAuraId and not DataService:GetOwnedAuraByAuraId(targetPlayer, equippedAuraId) then
+		equippedAuraId = nil
+	end
+	equippedAccessoryIds._ownedAccessories = ownedAccessories
+	local loadoutBonuses = computeLoadoutBonuses(equippedState, ownedBodyParts, equippedAuraId, equippedAccessoryIds)
 
 	for _, region in ipairs(BodyPartRegions.Order) do
 		local entry = equippedState[region]
@@ -1951,7 +1978,8 @@ function BodyPartService:GetPlayerInspectSummary(targetPlayer: Player)
 		equipped = equipped,
 		equippedAura = equippedAura,
 		equippedAccessories = equippedAccessories,
-		bonuses = self:GetComputedLoadoutBonuses(targetPlayer),
+		bonuses = loadoutBonuses,
+		combatPower = calculateLoadoutCombatPower(targetPlayer, loadoutBonuses),
 	}
 end
 

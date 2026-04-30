@@ -10,6 +10,7 @@ local BossArenaRuntimeService = require(script.Parent.BossArenaRuntimeService)
 local PlayerLoadoutStatsService = require(script.Parent.PlayerLoadoutStatsService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 local Hitbox = require(ReplicatedStorage.Shared.Combat.Hitbox)
+local MinionHitboxCollider = require(ReplicatedStorage.Shared.Bosses.MinionHitboxCollider)
 local PlayerM1AnimationResolver = require(ReplicatedStorage.Shared.BossArena.PlayerM1AnimationResolver)
 local PlayerM1Config = require(ReplicatedStorage.Shared.BossArena.PlayerM1Config)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
@@ -23,6 +24,7 @@ local REQUEST_RATE_LIMIT_KEY = "remote.boss_arena.player_m1"
 local IMPACT_MARKER_NAME = "Impact"
 local ACTIVE_MINIONS_FOLDER_NAME = "ActiveBossMinions"
 local BOSS_INVULNERABLE_ATTRIBUTE = "BossM1Invulnerable"
+local BOSS_HITBOX_COLLIDER_NAME = "BossHitboxCollider"
 
 type SwingState = {
 	swingId: string,
@@ -316,6 +318,77 @@ local function isActiveBossMinion(model: Model): boolean
 	return activeMinionsFolder ~= nil and model.Parent == activeMinionsFolder
 end
 
+local function hasAliveActiveBossMinion(): boolean
+	local activeMinionsFolder = Workspace:FindFirstChild(ACTIVE_MINIONS_FOLDER_NAME)
+	if activeMinionsFolder == nil then
+		return false
+	end
+
+	for _, child in ipairs(activeMinionsFolder:GetChildren()) do
+		if not child:IsA("Model") then
+			continue
+		end
+
+		local humanoid = resolveHumanoid(child)
+		if humanoid and humanoid.Health > 0 then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function canStartPlayerM1AgainstEncounter(): boolean
+	return BossArenaRuntimeService:IsActiveBossDamageable() or hasAliveActiveBossMinion()
+end
+
+local function addUniqueInstance(instances: { Instance }, seen: { [Instance]: boolean }, instance: Instance?)
+	if instance == nil or instance.Parent == nil or seen[instance] == true then
+		return
+	end
+
+	seen[instance] = true
+	table.insert(instances, instance)
+end
+
+local function collectPlayerM1TargetInstances(bossModel: Model): { Instance }
+	local instances = {}
+	local seen = {}
+
+	local bossCollider = bossModel:FindFirstChild(BOSS_HITBOX_COLLIDER_NAME)
+	if bossCollider and bossCollider:IsA("BasePart") then
+		addUniqueInstance(instances, seen, bossCollider)
+	else
+		addUniqueInstance(instances, seen, bossModel)
+	end
+
+	local activeMinionsFolder = Workspace:FindFirstChild(ACTIVE_MINIONS_FOLDER_NAME)
+	if activeMinionsFolder then
+		for _, child in ipairs(activeMinionsFolder:GetChildren()) do
+			if not child:IsA("Model") then
+				continue
+			end
+
+			local minionCollider = MinionHitboxCollider.Get(child)
+			if minionCollider then
+				addUniqueInstance(instances, seen, minionCollider)
+			else
+				addUniqueInstance(instances, seen, child)
+			end
+		end
+	end
+
+	return instances
+end
+
+local function buildPlayerM1OverlapParams(bossModel: Model): OverlapParams
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = collectPlayerM1TargetInstances(bossModel)
+	params.MaxParts = PlayerM1Config.MaxParts
+	return params
+end
+
 local function resolvePlayerM1Damage(player: Player): number
 	local stats = PlayerLoadoutStatsService:GetFinalStats(player)
 	local damage = tonumber(stats and stats.damage) or PlayerM1Config.Damage
@@ -365,7 +438,7 @@ function BossArenaPlayerM1Service:_spawnHitboxForSwing(player: Player, swingId: 
 		clearSwingState(player)
 		return
 	end
-	if not BossArenaRuntimeService:IsActiveBossDamageable() then
+	if not canStartPlayerM1AgainstEncounter() then
 		clearSwingState(player)
 		return
 	end
@@ -384,6 +457,7 @@ function BossArenaPlayerM1Service:_spawnHitboxForSwing(player: Player, swingId: 
 		HitboxOffset = CFrame.new(0, 0, -forwardOffset),
 		HitboxSize = hitboxSize,
 		HitboxType = "SpacialQuery",
+		OverlapParams = buildPlayerM1OverlapParams(bossModel),
 		Time = PlayerM1Config.HitboxDurationSeconds,
 		MaxParts = PlayerM1Config.MaxParts,
 	}, {
@@ -462,7 +536,7 @@ function BossArenaPlayerM1Service:_handleRequest(player: Player, predictedAnimat
 	if bossModel == nil or bossHumanoid == nil or bossHumanoid.Health <= 0 then
 		return buildFailureResponse("NO_ACTIVE_BOSS")
 	end
-	if not BossArenaRuntimeService:IsActiveBossDamageable() then
+	if not canStartPlayerM1AgainstEncounter() then
 		return buildFailureResponse("BOSS_INACTIVE")
 	end
 

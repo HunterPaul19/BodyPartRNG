@@ -364,9 +364,18 @@ function ScreenDarkener:Deactivate()
 		self.Connection = nil
 	end
 
+	self.Target = nil
 	for frame, goal in pairs(self:OffScreenGoals()) do
+		frame.Active = false
 		self:TweenFrame(frame, goal)
 	end
+
+	local canvasGroup = self.CanvasGroup
+	task.delay(self.TweenTime, function()
+		if self.Target == nil and canvasGroup and canvasGroup.Parent then
+			canvasGroup.Visible = false
+		end
+	end)
 end
 
 function ScreenDarkener:Switch(newTarget, padding: number?)

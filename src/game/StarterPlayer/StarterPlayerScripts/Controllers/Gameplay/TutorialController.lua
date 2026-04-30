@@ -25,6 +25,17 @@ local TutorialTextGui = require(ReplicatedStorage.Shared.UI.TutorialTextGui)
 local LOCAL_PLAYER = Players.LocalPlayer
 local REMOTE_TIMEOUT = 30
 local OBJECTIVE_ID = "new_player_tutorial"
+local APPRAISER_DIALOGUE_ID = "appraiser_default"
+local APPRAISAL_FRAME_NAME = "AppraisalUI"
+local MAIN_INTERFACE_GUI_NAME = "MainInterface"
+local DIALOGUE_ROOT_NAME = "DialogueUI"
+local DIALOGUE_ID_ATTRIBUTE = "DialogueId"
+local DIALOGUE_ACTION_TYPE_ATTRIBUTE = "DialogueActionType"
+local DIALOGUE_FRAME_NAME_ATTRIBUTE = "DialogueFrameName"
+local APPRAISER_SPEAKER_NAME = "Appraiser"
+local APPRAISE_CHOICE_BUTTON_NAME = "Choice_appraise"
+local APPRAISAL_DIALOGUE_TEXT_TOKEN = "appraisal table"
+local APPRAISAL_CHOICE_TEXT_TOKEN = "open the appraisal"
 
 local TutorialController = {
 	_started = false,
@@ -193,6 +204,148 @@ local function isGuiObjectOnScreen(target: GuiObject): boolean
 		and absolutePosition.Y < viewportSize.Y
 		and absolutePosition.X + absoluteSize.X > 0
 		and absolutePosition.Y + absoluteSize.Y > 0
+end
+
+local function getVisibleSizedGuiObject(target: Instance?): GuiObject?
+	if not (target and target:IsA("GuiObject")) then
+		return nil
+	end
+
+	if target.Parent ~= nil and target.Visible == true and target.AbsoluteSize.X > 0 and target.AbsoluteSize.Y > 0 then
+		return target
+	end
+
+	return nil
+end
+
+local function getNormalizedText(value: any): string
+	if typeof(value) ~= "string" then
+		return ""
+	end
+
+	return string.lower(value)
+end
+
+local function textContains(value: any, token: string): boolean
+	return string.find(getNormalizedText(value), token, 1, true) ~= nil
+end
+
+local function getChildTextLabelText(root: Instance, childName: string): string?
+	local child = root:FindFirstChild(childName, true)
+	if child and child:IsA("TextLabel") then
+		return child.Text
+	end
+
+	return nil
+end
+
+local function hasDescendantText(root: Instance, token: string): boolean
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("TextLabel") and textContains(descendant.Text, token) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function getButtonContentText(button: GuiButton): string?
+	local content = button:FindFirstChild("Content")
+	if content and content:IsA("TextLabel") then
+		return content.Text
+	end
+
+	for _, descendant in ipairs(button:GetDescendants()) do
+		if descendant:IsA("TextLabel") then
+			return descendant.Text
+		end
+	end
+
+	return nil
+end
+
+local function hasAppraisalChoiceButton(root: Instance): boolean
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("GuiButton") and textContains(getButtonContentText(descendant), APPRAISAL_CHOICE_TEXT_TOKEN) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function isAppraisalChoiceButton(button: GuiButton): boolean
+	if button:GetAttribute(DIALOGUE_ACTION_TYPE_ATTRIBUTE) == "openFrame"
+		and button:GetAttribute(DIALOGUE_FRAME_NAME_ATTRIBUTE) == APPRAISAL_FRAME_NAME
+	then
+		return true
+	end
+
+	if button.Name == APPRAISE_CHOICE_BUTTON_NAME then
+		return true
+	end
+
+	return textContains(getButtonContentText(button), APPRAISAL_CHOICE_TEXT_TOKEN)
+end
+
+local function getAppraiserDialogueRoot(): GuiObject?
+	local playerGui = LOCAL_PLAYER:FindFirstChildOfClass("PlayerGui")
+	local mainInterface = playerGui and playerGui:FindFirstChild(MAIN_INTERFACE_GUI_NAME)
+	local dialogueRoot = mainInterface and mainInterface:FindFirstChild(DIALOGUE_ROOT_NAME)
+	if not (dialogueRoot and dialogueRoot:IsA("GuiObject")) then
+		return nil
+	end
+
+	if dialogueRoot.Visible ~= true then
+		return nil
+	end
+
+	if dialogueRoot:GetAttribute(DIALOGUE_ID_ATTRIBUTE) == APPRAISER_DIALOGUE_ID then
+		return dialogueRoot
+	end
+
+	if getChildTextLabelText(dialogueRoot, "ItemName") == APPRAISER_SPEAKER_NAME then
+		return dialogueRoot
+	end
+
+	if hasDescendantText(dialogueRoot, APPRAISAL_DIALOGUE_TEXT_TOKEN) then
+		return dialogueRoot
+	end
+
+	if hasAppraisalChoiceButton(dialogueRoot) then
+		return dialogueRoot
+	end
+
+	return nil
+end
+
+local function getChoiceTarget(button: GuiButton): GuiObject?
+	local buttonTarget = getVisibleSizedGuiObject(button)
+	if buttonTarget then
+		return buttonTarget
+	end
+
+	return getVisibleSizedGuiObject(button:FindFirstChild("Content"))
+end
+
+local function resolveAppraiserDialogueChoiceTarget(): (GuiObject?, boolean)
+	local dialogueRoot = getAppraiserDialogueRoot()
+	if not dialogueRoot then
+		return nil, false
+	end
+
+	for _, descendant in ipairs(dialogueRoot:GetDescendants()) do
+		if not descendant:IsA("GuiButton") then
+			continue
+		end
+		if not isAppraisalChoiceButton(descendant) then
+			continue
+		end
+
+		return getChoiceTarget(descendant), true
+	end
+
+	return nil, true
 end
 
 local function isWelcomeInput(input: InputObject): boolean
@@ -484,9 +637,10 @@ function TutorialController:_setDarkenerInputCapture(enabled: boolean)
 		return
 	end
 
+	local shouldCaptureInput = enabled == true and UserInputService.TouchEnabled ~= true
 	for _, frame in ipairs({ darkener.TopFrame, darkener.BottomFrame, darkener.LeftFrame, darkener.RightFrame }) do
 		if frame and frame:IsA("GuiObject") then
-			frame.Active = enabled
+			frame.Active = shouldCaptureInput
 		end
 	end
 end
@@ -768,6 +922,14 @@ end
 
 function TutorialController:_resolveAppraisalSpotlight(): (GuiObject?, string, boolean)
 	if not self:_isAppraisalOpen() then
+		local appraisalOpenChoice, appraiserDialogueOpen = resolveAppraiserDialogueChoiceTarget()
+		if appraisalOpenChoice then
+			return appraisalOpenChoice, "Open the appraisal table.", true
+		end
+		if appraiserDialogueOpen then
+			return nil, "Open the appraisal table.", false
+		end
+
 		return nil, TutorialConfig.TextByStepId[TutorialConfig.Steps.GoAppraise] or "", false
 	end
 
