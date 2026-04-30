@@ -8,15 +8,19 @@ local RateLimitTelemetry = require(script.Parent.Parent.Common.RateLimitTelemetr
 
 local STORE_NAME = "AuraSerials"
 local REUSABLE_STORE_NAME = "AuraSerialReusableRanges"
+local EXISTENCE_SNAPSHOT_STORE_NAME = "AuraSerialExistenceSnapshots"
+local EXISTENCE_SNAPSHOT_KEY = "all"
+local EXISTENCE_SNAPSHOT_VERSION = 1
 local SERIAL_BLOCK_SIZE = 500
 local EXISTENCE_CACHE_REFRESH_SECONDS = 60 * 60
-local EXISTENCE_REFRESH_AURA_PACING_SECONDS = 0.1
-local EXISTENCE_REFRESH_WAIT_TIMEOUT_SECONDS = 30
+local EXISTENCE_BACKFILL_PACING_SECONDS = 1
+local EXISTENCE_SNAPSHOT_SAVE_DEBOUNCE_SECONDS = 10
 
 local AuraSerialStore = {}
 
 local serialStore = DataStoreService:GetDataStore(STORE_NAME, Globals.SCOPE)
 local reusableSerialStore = DataStoreService:GetDataStore(REUSABLE_STORE_NAME, Globals.SCOPE)
+local existenceSnapshotStore = DataStoreService:GetDataStore(EXISTENCE_SNAPSHOT_STORE_NAME, Globals.SCOPE)
 local studioFallbackCounters: { [string]: number } = {}
 local reservedSerialRangesByAuraId: {
 	[string]: {
@@ -30,7 +34,11 @@ local cachedHighWaterByAuraId: {
 		refreshedAt: number,
 	},
 } = {}
-local refreshingAuraIds: { [string]: boolean } = {}
+local existenceCacheLoaded = false
+local existenceCacheRefreshedAt = 0
+local existenceSnapshotRefreshInFlight = false
+local existenceBackfillStarted = false
+local existenceSnapshotSaveScheduled = false
 local existenceRefreshLoopStarted = false
 
 local function validateAuraId(auraId: string): string?
@@ -111,49 +119,185 @@ local function getCachedHighWater(auraId: string): number?
 	return cachedEntry.value
 end
 
-local function waitForAuraRefresh(auraId: string): boolean
-	local timeoutAt = os.clock() + EXISTENCE_REFRESH_WAIT_TIMEOUT_SECONDS
-	while refreshingAuraIds[auraId] == true and os.clock() < timeoutAt do
-		task.wait()
-	end
-
-	return refreshingAuraIds[auraId] ~= true
-end
-
-local function refreshExistenceForAura(auraId: string): (boolean, string?)
-	local validationError = validateAuraId(auraId)
-	if validationError then
-		return false, validationError
-	end
-
-	if refreshingAuraIds[auraId] == true then
-		if waitForAuraRefresh(auraId) then
-			return true, nil
-		end
-
-		return false, string.format("Timed out waiting for aura '%s' existence refresh.", auraId)
-	end
-
-	refreshingAuraIds[auraId] = true
+local function loadExistenceForAura(auraId: string): (number?, string?)
 	local success, result = pcall(function()
 		return serialStore:GetAsync(auraId)
 	end)
-	refreshingAuraIds[auraId] = nil
 
 	if success then
 		local totalInExistence = math.max(0, math.floor(tonumber(result) or 0))
 		cacheHighWater(auraId, totalInExistence)
-		return true, nil
+		return totalInExistence, nil
 	end
 
 	if RunService:IsStudio() then
 		local totalInExistence = studioFallbackCounters[auraId] or 0
 		cacheHighWater(auraId, totalInExistence)
-		return true, nil
+		return totalInExistence, nil
 	end
 
 	RateLimitTelemetry.Increment("data_store_error", "serial_aura_standard_read", 1)
-	return false, tostring(result)
+	return nil, tostring(result)
+end
+
+local function normalizeSnapshotCounts(value: any): { [string]: number }
+	local sourceCounts = nil
+	if typeof(value) == "table" and typeof(value.countsByAuraId) == "table" then
+		sourceCounts = value.countsByAuraId
+	elseif typeof(value) == "table" then
+		sourceCounts = value
+	end
+
+	local countsByAuraId = {}
+	if typeof(sourceCounts) ~= "table" then
+		return countsByAuraId
+	end
+
+	for auraId, rawValue in pairs(sourceCounts) do
+		if typeof(auraId) == "string" and AuraConfig.Get(auraId) then
+			countsByAuraId[auraId] = math.max(0, math.floor(tonumber(rawValue) or 0))
+		end
+	end
+
+	return countsByAuraId
+end
+
+local function copyCachedCounts(): { [string]: number }
+	local countsByAuraId = {}
+	for _, auraConfig in ipairs(AuraConfig.GetOrdered()) do
+		local auraId = auraConfig.id
+		if typeof(auraId) == "string" and auraId ~= "" then
+			countsByAuraId[auraId] = getCachedHighWater(auraId) or 0
+		end
+	end
+
+	return countsByAuraId
+end
+
+local function markExistenceCacheRefreshed()
+	existenceCacheLoaded = true
+	existenceCacheRefreshedAt = os.clock()
+end
+
+local function applySnapshotCounts(countsByAuraId: { [string]: number })
+	for _, auraConfig in ipairs(AuraConfig.GetOrdered()) do
+		local auraId = auraConfig.id
+		if typeof(auraId) == "string" and auraId ~= "" then
+			cacheHighWater(auraId, math.max(countsByAuraId[auraId] or 0, getCachedHighWater(auraId) or 0))
+		end
+	end
+	markExistenceCacheRefreshed()
+end
+
+local function persistExistenceSnapshotNow(): (boolean, string?)
+	local countsByAuraId = copyCachedCounts()
+	local success, result = pcall(function()
+		return existenceSnapshotStore:UpdateAsync(EXISTENCE_SNAPSHOT_KEY, function(currentValue)
+			local mergedCounts = normalizeSnapshotCounts(currentValue)
+			for auraId, count in pairs(countsByAuraId) do
+				mergedCounts[auraId] = math.max(tonumber(mergedCounts[auraId]) or 0, count)
+			end
+
+			return {
+				version = EXISTENCE_SNAPSHOT_VERSION,
+				updatedAtUnix = os.time(),
+				countsByAuraId = mergedCounts,
+			}
+		end)
+	end)
+
+	if not success then
+		RateLimitTelemetry.Increment("data_store_error", "serial_aura_snapshot_write", 1)
+		return false, tostring(result)
+	end
+
+	return true, nil
+end
+
+local function scheduleExistenceSnapshotPersist()
+	if RunService:IsStudio() then
+		return
+	end
+	if existenceSnapshotSaveScheduled then
+		return
+	end
+
+	existenceSnapshotSaveScheduled = true
+	task.delay(EXISTENCE_SNAPSHOT_SAVE_DEBOUNCE_SECONDS, function()
+		existenceSnapshotSaveScheduled = false
+		persistExistenceSnapshotNow()
+	end)
+end
+
+local function startLegacyBackfill()
+	if existenceBackfillStarted or RunService:IsStudio() then
+		return
+	end
+
+	existenceBackfillStarted = true
+	task.spawn(function()
+		local didLoadAny = false
+		for _, auraConfig in ipairs(AuraConfig.GetOrdered()) do
+			local auraId = auraConfig.id
+			if typeof(auraId) == "string" and auraId ~= "" then
+				local value = loadExistenceForAura(auraId)
+				if value ~= nil then
+					didLoadAny = true
+				end
+				task.wait(EXISTENCE_BACKFILL_PACING_SECONDS)
+			end
+		end
+
+		if didLoadAny then
+			markExistenceCacheRefreshed()
+			persistExistenceSnapshotNow()
+		end
+	end)
+end
+
+local function refreshExistenceSnapshotFromStore()
+	if existenceSnapshotRefreshInFlight then
+		return
+	end
+
+	existenceSnapshotRefreshInFlight = true
+	local success, result = pcall(function()
+		return existenceSnapshotStore:GetAsync(EXISTENCE_SNAPSHOT_KEY)
+	end)
+	existenceSnapshotRefreshInFlight = false
+
+	if success then
+		local countsByAuraId = normalizeSnapshotCounts(result)
+		applySnapshotCounts(countsByAuraId)
+		if next(countsByAuraId) == nil then
+			startLegacyBackfill()
+		end
+		return
+	end
+
+	RateLimitTelemetry.Increment("data_store_error", "serial_aura_snapshot_read", 1)
+	markExistenceCacheRefreshed()
+	if RunService:IsStudio() then
+		applySnapshotCounts({})
+	end
+end
+
+local function refreshExistenceSnapshotFromStoreAsync()
+	if existenceSnapshotRefreshInFlight then
+		return
+	end
+
+	task.spawn(refreshExistenceSnapshotFromStore)
+end
+
+local function ensureExistenceCacheFreshAsync()
+	if existenceSnapshotRefreshInFlight then
+		return
+	end
+
+	if not existenceCacheLoaded or os.clock() - existenceCacheRefreshedAt >= EXISTENCE_CACHE_REFRESH_SECONDS then
+		refreshExistenceSnapshotFromStoreAsync()
+	end
 end
 
 local function consumeReservedSerial(auraId: string): number?
@@ -229,6 +373,8 @@ local function reserveSerialRange(auraId: string): (number?, string?)
 		maxSerial = maxSerial,
 	}
 	cacheHighWater(auraId, maxSerial)
+	markExistenceCacheRefreshed()
+	scheduleExistenceSnapshotPersist()
 	return consumeReservedSerial(auraId), nil
 end
 
@@ -257,6 +403,7 @@ function AuraSerialStore:GetNextSerialForAura(auraId: string): (number?, string?
 		local nextSerial = (studioFallbackCounters[auraId] or 0) + 1
 		studioFallbackCounters[auraId] = nextSerial
 		cacheHighWater(auraId, nextSerial)
+		markExistenceCacheRefreshed()
 		return nextSerial, nil
 	end
 
@@ -316,18 +463,8 @@ function AuraSerialStore:GetTotalInExistenceForAura(auraId: string): (number?, s
 		return nil, validationError
 	end
 
-	local cachedHighWater = getCachedHighWater(auraId)
-	if cachedHighWater ~= nil then
-		return cachedHighWater, nil
-	end
-
-	local _, refreshError = refreshExistenceForAura(auraId)
-	cachedHighWater = getCachedHighWater(auraId)
-	if cachedHighWater ~= nil then
-		return cachedHighWater, nil
-	end
-
-	return nil, refreshError or "Failed to refresh aura existence count."
+	ensureExistenceCacheFreshAsync()
+	return getCachedHighWater(auraId) or 0, nil
 end
 
 function AuraSerialStore:StartExistenceRefreshLoop()
@@ -337,14 +474,7 @@ function AuraSerialStore:StartExistenceRefreshLoop()
 
 	existenceRefreshLoopStarted = true
 	task.spawn(function()
-		while true do
-			for _, auraConfig in ipairs(AuraConfig.GetOrdered()) do
-				refreshExistenceForAura(auraConfig.id)
-				task.wait(EXISTENCE_REFRESH_AURA_PACING_SECONDS)
-			end
-
-			task.wait(EXISTENCE_CACHE_REFRESH_SECONDS)
-		end
+		refreshExistenceSnapshotFromStore()
 	end)
 end
 

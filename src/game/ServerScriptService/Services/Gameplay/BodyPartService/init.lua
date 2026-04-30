@@ -25,6 +25,7 @@ local PotionService = require(script.Parent.PotionService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 local StatsService = require(script.Parent.StatsService)
 local TutorialService = require(script.Parent.TutorialService)
+local DefaultBlockyCharacter = require(script.DefaultBlockyCharacter)
 local SessionStore = require(script.SessionStore)
 
 local REMOTES_FOLDER_NAME = "Remotes"
@@ -2434,6 +2435,66 @@ local function logDeferredCharacterActivation(player: Player, source: string, re
 	))
 end
 
+local function hasCurrentCharacterAppearanceLoaded(player: Player, character: Model): boolean
+	if player.Character ~= character then
+		return false
+	end
+
+	local success, hasLoaded = pcall(function()
+		return player:HasAppearanceLoaded()
+	end)
+
+	return success and hasLoaded == true
+end
+
+local function prepareBlockyCharacterAppearance(
+	player: Player,
+	character: Model,
+	source: string
+): (boolean, string?)
+	local success, message, didApply = DefaultBlockyCharacter.Ensure(character)
+	if not success then
+		local detail = message or "Failed to enforce the default blocky character build."
+		Logger.Warn(string.format(
+			"[BodyPartService] Failed to prepare default blocky appearance for %s after %s: %s",
+			player.Name,
+			source,
+			detail
+		))
+		BodyPartService:NotifyClient(player, detail)
+		return false, detail
+	end
+
+	local state = getCharacterLifecycleState(player)
+	state.appearanceLoadedCharacter = character
+	state.pendingRuntimeApply = true
+
+	if didApply then
+		Logger.Print(string.format("[BodyPartService] Applied default blocky appearance for %s via %s.", player.Name, source))
+	end
+
+	return true, nil
+end
+
+local function ensureCharacterAppearancePrepared(
+	player: Player,
+	character: Model,
+	source: string
+): (boolean, string?)
+	local state = getCharacterLifecycleState(player)
+	if state.appearanceLoadedCharacter == character then
+		return true, nil
+	end
+
+	if not hasCurrentCharacterAppearanceLoaded(player, character) then
+		state.pendingRuntimeApply = true
+		logDeferredCharacterActivation(player, source, "Character appearance has not finished loading.")
+		return false, "appearance_not_loaded"
+	end
+
+	return prepareBlockyCharacterAppearance(player, character, source)
+end
+
 local function getCurrentAuraRuntimeStatus(
 	player: Player,
 	character: Model
@@ -2558,6 +2619,13 @@ local function tryActivateCharacterRuntime(
 		return false, "player_data_not_ready"
 	end
 
+	local appearancePrepared, appearancePrepareMessage =
+		ensureCharacterAppearancePrepared(player, character, source)
+	if not appearancePrepared then
+		state.pendingRuntimeApply = true
+		return false, appearancePrepareMessage or "appearance_not_loaded"
+	end
+
 	local forceReapply = if typeof(options) == "table" then options.forceReapply == true else false
 	local didChange = false
 	didChange = syncSessionLoadoutFromPersistedData(player)
@@ -2646,7 +2714,10 @@ local function scheduleCharacterActivationRetry(
 		end
 
 		local _, failureKind = tryActivateCharacterRuntime(player, character, source, options)
-		if failureKind == "placeholder_character" or failureKind == "player_data_not_ready" then
+		if failureKind == "placeholder_character"
+			or failureKind == "player_data_not_ready"
+			or failureKind == "appearance_not_loaded"
+		then
 			scheduleCharacterActivationRetry(player, character, source, retryAttempt + 1, options)
 			return
 		end
@@ -2665,7 +2736,10 @@ local function queueCharacterActivation(
 )
 	task.defer(function()
 		local _, failureKind = tryActivateCharacterRuntime(player, character, source, options)
-		if failureKind == "placeholder_character" or failureKind == "player_data_not_ready" then
+		if failureKind == "placeholder_character"
+			or failureKind == "player_data_not_ready"
+			or failureKind == "appearance_not_loaded"
+		then
 			scheduleCharacterActivationRetry(player, character, source, 1, options)
 		end
 	end)
@@ -3264,7 +3338,7 @@ local function handleToggleFavorite(player: Player, payload: any)
 	end
 
 	local ok, message = BodyPartService:ToggleFavoriteOwnedBodyPart(player, payload.ownedId, payload.isFavorite)
-	return response(ok, message, BodyPartService:GetClientDeltaState(player, message))
+	return response(ok, message, BodyPartService:GetClientState(player, message))
 end
 
 local function handleSellOwned(player: Player, payload: any)
@@ -3273,12 +3347,12 @@ local function handleSellOwned(player: Player, payload: any)
 	end
 
 	local ok, message = BodyPartService:SellOwnedBodyPart(player, payload.ownedId)
-	return response(ok, message, BodyPartService:GetClientDeltaState(player, message))
+	return response(ok, message, BodyPartService:GetClientState(player, message))
 end
 
 local function handleSellAll(player: Player)
 	local ok, message = BodyPartService:SellAllUnfavoritedBodyParts(player)
-	return response(ok, message, BodyPartService:GetClientDeltaState(player, message))
+	return response(ok, message, BodyPartService:GetClientState(player, message))
 end
 
 function BodyPartService:OnStart()
@@ -3490,8 +3564,12 @@ function BodyPartService:OnPlayerAdded(player: Player)
 			activeState = getCharacterLifecycleState(player)
 		end
 
-		activeState.appearanceLoadedCharacter = character
 		activeState.pendingRuntimeApply = true
+		local prepared = prepareBlockyCharacterAppearance(player, character, "CharacterAppearanceLoaded")
+		if prepared then
+			waitForCharacterReady(character, CHARACTER_READY_TIMEOUT_SECONDS)
+		end
+
 		queueCharacterActivation(player, character, "CharacterAppearanceLoaded")
 	end)
 

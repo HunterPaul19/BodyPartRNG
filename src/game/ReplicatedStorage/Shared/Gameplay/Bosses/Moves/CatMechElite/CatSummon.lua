@@ -9,7 +9,9 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
+local MinionDeathPresentation = require(ReplicatedStorage.Shared.Bosses.MinionDeathPresentation)
 local MinionDisplay = require(ReplicatedStorage.Shared.Bosses.MinionDisplay)
+local MinionHitboxCollider = require(ReplicatedStorage.Shared.Bosses.MinionHitboxCollider)
 local MinionM1Animation = require(ReplicatedStorage.Shared.Bosses.MinionM1Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
 local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
@@ -30,7 +32,7 @@ local CAT_SUMMON_VFX_FOLDER_NAME = "CatSummon"
 local MINION_MODEL_NAME = "Cat Mech"
 local MINION_DISPLAY_NAME = "Cat Mech"
 
-local CAT_SUMMON_YAW_OFFSETS_DEGREES = { -15, 15 }
+local CAT_SUMMON_YAW_OFFSETS_DEGREES = { 0, 15, 30, -15, -30 }
 local SUMMON_FLARE_DAMAGE = 300
 local DEFAULT_SUMMON_IMPACT_SIZE = Vector3.new(24, 12, 24)
 local MINION_SCALE = 3
@@ -690,8 +692,10 @@ function CatSummon.StartCast(context)
 		minionRecords[record] = true
 
 		table.insert(record.connections, humanoid.Died:Connect(function()
-			task.defer(function()
-				removeMinionRecord(record, true)
+			local destroyDelaySeconds = MinionDeathPresentation.PlayAndDestroy(spawnedMinion)
+			removeMinionRecord(record, false)
+			task.delay(destroyDelaySeconds + 0.05, function()
+				cleanupActiveMinionsFolderIfEmpty()
 			end)
 		end))
 		table.insert(record.connections, spawnedMinion.AncestryChanged:Connect(function(_, parent)
@@ -769,10 +773,12 @@ function CatSummon.StartCast(context)
 
 		humanoid.MaxHealth = MINION_MAX_HEALTH
 		humanoid.Health = MINION_MAX_HEALTH
+		humanoid.BreakJointsOnDeath = false
 		humanoid.WalkSpeed = MINION_WALK_SPEED
 		humanoid.AutoRotate = true
 		MinionDisplay.ConfigureHumanoid(humanoid, MINION_DISPLAY_NAME)
 		spawnedMinion:PivotTo(CFrame.lookAt(spawnPosition, lookTarget))
+		MinionHitboxCollider.Attach(spawnedMinion, rootPart)
 		setServerNetworkOwnership(spawnedMinion)
 		bindMinionAi(spawnedMinion, humanoid, rootPart)
 	end

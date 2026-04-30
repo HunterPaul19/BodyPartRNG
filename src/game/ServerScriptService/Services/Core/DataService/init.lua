@@ -21,6 +21,7 @@ local RollTargetRegions = require(ReplicatedStorage.Shared.Character.RollTargetR
 local TimeShardState = require(ReplicatedStorage.Shared.Character.TimeShardState)
 local DailyChestState = require(ReplicatedStorage.Shared.Character.DailyChestState)
 local TutorialState = require(ReplicatedStorage.Shared.Character.TutorialState)
+local BossWorldGuideState = require(ReplicatedStorage.Shared.Character.BossWorldGuideState)
 local PlayerStats = require(ReplicatedStorage.Shared.Stats.PlayerStats)
 local AchievementState = require(ReplicatedStorage.Shared.Titles.AchievementState)
 local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
@@ -57,6 +58,7 @@ local TIME_PLAYED_KEY = Schema.TimePlayed and Schema.TimePlayed.key or nil
 local TIME_SHARDS_KEY = Schema.TimeShards and Schema.TimeShards.key or nil
 local DAILY_CHESTS_KEY = Schema.DailyChests and Schema.DailyChests.key or nil
 local TUTORIAL_KEY = Schema.Tutorial and Schema.Tutorial.key or nil
+local BOSS_WORLD_GUIDE_KEY = Schema.BossWorldGuide and Schema.BossWorldGuide.key or nil
 local DIAGNOSTICS_KEY = Schema.Diagnostics and Schema.Diagnostics.key or nil
 local STATS_KEY = Schema.Stats and Schema.Stats.key or nil
 local BODY_PARTS_KEY = Schema.BodyParts and Schema.BodyParts.key or nil
@@ -925,6 +927,9 @@ local function normalizeProfileData(profile: any)
 			tutorialState = TutorialState.CreateCompletedState()
 		end
 		data[TUTORIAL_KEY] = tutorialState
+	end
+	if BOSS_WORLD_GUIDE_KEY then
+		data[BOSS_WORLD_GUIDE_KEY] = BossWorldGuideState.Normalize(data[BOSS_WORLD_GUIDE_KEY])
 	end
 	if STATS_KEY then
 		data[STATS_KEY] = PlayerStats.Normalize(data[STATS_KEY], {

@@ -20,6 +20,7 @@ local GET_PVP_STATE_REMOTE_NAME = "GetPvpState"
 local PVP_STATE_CHANGED_REMOTE_NAME = "PvpStateChanged"
 local SPRING_DAMPING_RATIO = 0.85
 local SPRING_FREQUENCY = 6
+local GENERATED_ALLY_ROW_ATTRIBUTE = "CombatHudGeneratedAllyRow"
 
 type PlayerHealthEntry = {
 	userId: number,
@@ -71,6 +72,7 @@ local CombatHUDController = {
 	_preferredInputConnection = nil :: RBXScriptConnection?,
 	_remoteBindingStarted = false,
 	_uiBindingStarted = false,
+	_warnedMissingUi = false,
 }
 
 local function isEnabledForPlace(): boolean
@@ -96,6 +98,10 @@ local function getBackend(): CombatHudBackend?
 	end
 
 	return nil
+end
+
+local function shouldShowHealthbars(): boolean
+	return PlaceProfile.GetActiveProfile().id == BOSS_ARENA_PROFILE_ID
 end
 
 local function warnWithPrefix(message: string)
@@ -133,6 +139,10 @@ local function setAmountText(label: TextLabel, currentHealth: number)
 	label.Text = tostring(math.max(0, math.round(tonumber(currentHealth) or 0)))
 end
 
+local function isGeneratedAllyRow(row: Instance): boolean
+	return row:GetAttribute(GENERATED_ALLY_ROW_ATTRIBUTE) == true
+end
+
 local function resolveHealthbarUi(root: Frame, requireUsername: boolean): HealthbarUi?
 	local healthbar = findChildOfClass(root, "Healthbar", "Frame") :: Frame?
 	if healthbar == nil then
@@ -157,6 +167,37 @@ local function resolveHealthbarUi(root: Frame, requireUsername: boolean): Health
 		amount = amount,
 		username = if username and username:IsA("TextLabel") then username else nil,
 	}
+end
+
+local function resolveAllyTemplate(alliesRoot: Frame): Frame?
+	local explicitTemplate = findChildOfClass(alliesRoot, "Template", "Frame") :: Frame?
+	if explicitTemplate and resolveHealthbarUi(explicitTemplate, true) ~= nil then
+		return explicitTemplate
+	end
+
+	for _, child in ipairs(alliesRoot:GetChildren()) do
+		if not child:IsA("Frame") or isGeneratedAllyRow(child) then
+			continue
+		end
+		if child == explicitTemplate then
+			continue
+		end
+		if resolveHealthbarUi(child, true) ~= nil then
+			return child
+		end
+	end
+
+	return nil
+end
+
+local function hideAuthoredAllyRows(alliesRoot: Frame)
+	for _, child in ipairs(alliesRoot:GetChildren()) do
+		if not child:IsA("Frame") or isGeneratedAllyRow(child) then
+			continue
+		end
+
+		child.Visible = false
+	end
 end
 
 local function isGamepadInput(inputType: Enum.UserInputType): boolean
@@ -262,6 +303,18 @@ local function normalizeHealthState(state: any): PlayerHealthState?
 	}
 end
 
+function CombatHUDController:_warnMissingUi(missingPaths: { string })
+	if self._warnedMissingUi == true then
+		return
+	end
+
+	self._warnedMissingUi = true
+	warnWithPrefix(string.format(
+		"PlayerGui.MainInterface.CombatHUD is missing required UI children: %s.",
+		table.concat(missingPaths, ", ")
+	))
+end
+
 function CombatHUDController:_ensureUi(): CombatHudUi?
 	if self._ui and self._ui.root.Parent ~= nil then
 		return self._ui
@@ -278,15 +331,35 @@ function CombatHUDController:_ensureUi(): CombatHudUi?
 	end
 
 	local root = findChildOfClass(mainInterface, "CombatHUD", "Frame") :: Frame?
-	local statsRoot = root and findChildOfClass(root, "Stats", "Frame") :: Frame?
-	local alliesRoot = root and findChildOfClass(root, "Allies", "Frame") :: Frame?
-	local allyTemplate = alliesRoot and findChildOfClass(alliesRoot, "Template", "Frame") :: Frame?
-	if root == nil or statsRoot == nil or alliesRoot == nil or allyTemplate == nil then
+	if root == nil then
+		self:_warnMissingUi({ "MainInterface.CombatHUD" })
+		return nil
+	end
+
+	local missingPaths = {}
+	local statsRoot = findChildOfClass(root, "Stats", "Frame") :: Frame?
+	local alliesRoot = findChildOfClass(root, "Allies", "Frame") :: Frame?
+
+	if statsRoot == nil then
+		table.insert(missingPaths, "CombatHUD.Stats")
+	end
+	if alliesRoot == nil then
+		table.insert(missingPaths, "CombatHUD.Allies")
+	end
+
+	local allyTemplate = if alliesRoot then resolveAllyTemplate(alliesRoot) else nil
+	if alliesRoot ~= nil and allyTemplate == nil then
+		table.insert(missingPaths, "CombatHUD.Allies.Template or authored ally row")
+	end
+
+	if #missingPaths > 0 then
+		self:_warnMissingUi(missingPaths)
 		return nil
 	end
 
 	local statsHealthbar = resolveHealthbarUi(statsRoot, false)
 	if statsHealthbar == nil then
+		self:_warnMissingUi({ "CombatHUD.Stats.Healthbar.Fill", "CombatHUD.Stats.Healthbar.Amount" })
 		return nil
 	end
 
@@ -300,10 +373,25 @@ function CombatHUDController:_ensureUi(): CombatHudUi?
 		or controls.MobileControls == nil
 		or controls.XBOXControls == nil
 		or controls.PlayStationControls == nil then
+		local missingControlPaths = {}
+		if controls.PCControls == nil then
+			table.insert(missingControlPaths, "CombatHUD.PCControls")
+		end
+		if controls.MobileControls == nil then
+			table.insert(missingControlPaths, "CombatHUD.MobileControls")
+		end
+		if controls.XBOXControls == nil then
+			table.insert(missingControlPaths, "CombatHUD.XBOXControls")
+		end
+		if controls.PlayStationControls == nil then
+			table.insert(missingControlPaths, "CombatHUD.PlayStationControls")
+		end
+
+		self:_warnMissingUi(missingControlPaths)
 		return nil
 	end
 
-	allyTemplate.Visible = false
+	hideAuthoredAllyRows(alliesRoot)
 	root.Visible = false
 
 	self._ui = {
@@ -405,7 +493,7 @@ function CombatHUDController:_renderHealthbar(healthbar: HealthbarUi, entry: Pla
 	end
 
 	Spring.target(healthbar.fill, SPRING_DAMPING_RATIO, SPRING_FREQUENCY, {
-		Size = UDim2.new(getHealthPercent(entry), 0, 1, 0),
+		Size = UDim2.new(1, 0, getHealthPercent(entry), 0),
 	})
 end
 
@@ -423,6 +511,7 @@ function CombatHUDController:_getOrCreateAllyRow(entry: PlayerHealthEntry): Heal
 	local row = ui.allyTemplate:Clone()
 	row.Name = string.format("Ally_%d", entry.userId)
 	row.LayoutOrder = #self._allyRows + 1
+	row:SetAttribute(GENERATED_ALLY_ROW_ATTRIBUTE, true)
 	row.Visible = true
 	row.Parent = ui.alliesRoot
 
@@ -461,7 +550,7 @@ function CombatHUDController:_hideHud()
 	end
 
 	table.clear(self._allyRows)
-	ui.allyTemplate.Visible = false
+	hideAuthoredAllyRows(ui.alliesRoot)
 	ui.root.Visible = false
 end
 
@@ -475,6 +564,24 @@ function CombatHUDController:_renderState(state: PlayerHealthState?)
 		self:_hideHud()
 		return
 	end
+
+	if not shouldShowHealthbars() then
+		Spring.stop(ui.statsHealthbar.fill, "Size")
+		for _, healthbar in pairs(self._allyRows) do
+			Spring.stop(healthbar.fill, "Size")
+			healthbar.root:Destroy()
+		end
+
+		table.clear(self._allyRows)
+		hideAuthoredAllyRows(ui.alliesRoot)
+		ui.statsRoot.Visible = false
+		ui.alliesRoot.Visible = false
+		self:_updateControlsVisibility()
+		ui.root.Visible = true
+		return
+	end
+
+	hideAuthoredAllyRows(ui.alliesRoot)
 
 	local localEntry = nil :: PlayerHealthEntry?
 	local activeAllyUserIds = {}
@@ -495,12 +602,14 @@ function CombatHUDController:_renderState(state: PlayerHealthState?)
 
 	self:_removeStaleAllyRows(activeAllyUserIds)
 
-	ui.statsRoot.Visible = localEntry ~= nil
+	ui.statsRoot.Visible = true
+	ui.alliesRoot.Visible = true
 	if localEntry then
 		self:_renderHealthbar(ui.statsHealthbar, localEntry)
 	end
 
-	ui.allyTemplate.Visible = false
+	hideAuthoredAllyRows(ui.alliesRoot)
+	self:_updateControlsVisibility()
 	ui.root.Visible = true
 end
 

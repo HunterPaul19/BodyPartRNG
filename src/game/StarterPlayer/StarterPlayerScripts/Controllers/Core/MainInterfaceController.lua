@@ -148,6 +148,14 @@ function MainInterfaceController:_applyProfileUiExclusions()
 			setGuiObjectEnabled(rollWarning, false)
 		end
 	end
+
+	if not PlaceProfile.IsFeatureEnabled("pvp") then
+		local mainPanel = self._panelInfo.Main and self._panelInfo.Main.Frame or nil
+		local pvpButton = mainPanel and mainPanel:FindFirstChild("PVP") or nil
+		if pvpButton and pvpButton:IsA("GuiObject") then
+			setGuiObjectEnabled(pvpButton, false)
+		end
+	end
 end
 
 function MainInterfaceController:_getPanel(panelName: string)

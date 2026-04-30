@@ -8,6 +8,7 @@ local ConfirmationWarning = require(ReplicatedStorage.Shared.UI.ConfirmationWarn
 local AppraisalController = require(script.Parent.AppraisalController)
 local FrameController = require(script.Parent.FrameController)
 local CraftingController = require(script.Parent.CraftingController)
+local DailyChestConfig = require(ReplicatedStorage.Shared.Config.DailyChestConfig)
 local InventoryController = require(script.Parent.InventoryController)
 local ObjectiveGuideController = require(script.Parent.ObjectiveGuideController)
 local PotionController = require(script.Parent.PotionController)
@@ -30,12 +31,14 @@ local TutorialController = {
 	_currentStepId = nil,
 	_claimingChest = false,
 	_chestOpeningActive = false,
+	_chestReturnTextActive = false,
 	_chestRetryScheduled = false,
 	_pendingPostChestState = nil,
 	_pendingPostRollState = nil,
 	_refreshingAdvance = false,
 	_lastAdvanceRefreshStepId = nil,
 	_activeState = nil,
+	_holidayCrownReadyRollHoldActive = false,
 	_spotlightLoopStarted = false,
 	_darkener = nil,
 	_spotlightTarget = nil,
@@ -122,6 +125,16 @@ local function openChestPackagesSequentially(chests: { any })
 	end
 
 	return openedAny
+end
+
+local function getFirstChestReturnMessage(chests: { any }): string
+	for _, package in ipairs(chests) do
+		if typeof(package) == "table" then
+			return DailyChestConfig.GetReturnMessage(package.chestId)
+		end
+	end
+
+	return DailyChestConfig.GetReturnMessage(TutorialConfig.TutorialChestId)
 end
 
 local function waitForChestRewardOverlayReady(timeoutSeconds: number): (boolean, string?)
@@ -263,7 +276,15 @@ function TutorialController:_claimTutorialChest()
 		self:_syncSpotlight()
 
 		local openedChest = openChestPackagesSequentially(chests)
+		local shouldShowReturnText = openedChest == true
+		if shouldShowReturnText then
+			self._chestReturnTextActive = true
+		end
 		self._chestOpeningActive = false
+		if shouldShowReturnText then
+			self:_clearSpotlight()
+			TutorialTextGui.ShowTemporaryTextAsync(getFirstChestReturnMessage(chests))
+		end
 
 		if openedChest ~= true then
 			Logger.Warn("[TutorialController] Tutorial chest rewards were granted, but the chest presentation did not open.")
@@ -280,6 +301,9 @@ function TutorialController:_claimTutorialChest()
 		self._pendingPostChestState = nil
 		if typeof(nextState) ~= "table" then
 			nextState = result.state
+		end
+		if shouldShowReturnText then
+			self._chestReturnTextActive = false
 		end
 		if typeof(nextState) == "table" then
 			self:_applyState(nextState)
@@ -572,7 +596,7 @@ function TutorialController:_isHolidayCrownReadyToCraft(): boolean
 end
 
 function TutorialController:_isChestPresentationActive(): boolean
-	if self._claimingChest == true or self._chestOpeningActive == true then
+	if self._claimingChest == true or self._chestOpeningActive == true or self._chestReturnTextActive == true then
 		return true
 	end
 
@@ -587,6 +611,18 @@ end
 function TutorialController:_showRollPresentationHold()
 	self:_setTutorialText("Finish your roll.")
 	self:_clearSpotlight()
+end
+
+function TutorialController:_shouldHoldHolidayCrownReadyForRollReveal(stateOrStepId: any): boolean
+	local stepId = if typeof(stateOrStepId) == "table" then stateOrStepId.stepId else stateOrStepId
+	if stepId ~= TutorialConfig.Steps.CraftHolidayCrown then
+		return false
+	end
+	if not self:_isRollPresentationPending() then
+		return false
+	end
+
+	return self:_isHolidayCrownAutoCraftEnabled() and self:_isHolidayCrownReadyToCraft()
 end
 
 function TutorialController:_shouldHoldPostRollState(state: any): boolean
@@ -821,7 +857,7 @@ function TutorialController:_resolveCraftingSpotlight(stepId: string): (GuiObjec
 			local closeButton = CraftingController:GetTutorialTarget("closeButton")
 			return closeButton, "Close Crafting, then keep rolling.", closeButton ~= nil
 		end
-		return nil, "Keep rolling for Holiday Crown.", false
+		return nil, TutorialConfig.TextByStepId[stepId] or "", false
 	end
 
 	if not self:_isCraftingOpen() then
@@ -882,10 +918,24 @@ function TutorialController:_syncSpotlight()
 		return
 	end
 
-	local state = self._activeState
-	if typeof(state) ~= "table" or state.completed == true then
+	if self._chestReturnTextActive == true then
 		self:_clearSpotlight()
 		return
+	end
+
+	local state = self._activeState
+	if typeof(state) ~= "table" or state.completed == true then
+		self._holidayCrownReadyRollHoldActive = false
+		self:_clearSpotlight()
+		return
+	end
+	if self:_shouldHoldHolidayCrownReadyForRollReveal(state) then
+		self._holidayCrownReadyRollHoldActive = true
+		self:_showRollPresentationHold()
+		return
+	elseif self._holidayCrownReadyRollHoldActive == true then
+		self._holidayCrownReadyRollHoldActive = false
+		self:_applyObjective(state.stepId)
 	end
 
 	local ok, target, text, captureInput = pcall(function()
@@ -923,9 +973,15 @@ function TutorialController:_startSpotlightLoop()
 end
 
 function TutorialController:_applyObjective(stepId: string)
-	if stepId == TutorialConfig.Steps.GoAppraise then
-		ObjectiveGuideController.ShowObjective(OBJECTIVE_ID, "Workspace.Appraiser", {
-			fallbackTargetPath = "Workspace.Merchant.Appraiser",
+	if self:_shouldHoldHolidayCrownReadyForRollReveal(stepId) then
+		ObjectiveGuideController.ClearObjective(OBJECTIVE_ID)
+	elseif stepId == TutorialConfig.Steps.GoAppraise then
+		ObjectiveGuideController.ShowObjective(OBJECTIVE_ID, "Workspace.Appraiser.Appraiser.HumanoidRootPart", {
+			fallbackTargetPaths = {
+				"Workspace.Appraiser",
+				"Workspace.Merchant.Appraiser.HumanoidRootPart",
+			},
+			projectTargetToGround = false,
 		})
 	elseif stepId == TutorialConfig.Steps.GoCrafting
 		or (
@@ -933,7 +989,10 @@ function TutorialController:_applyObjective(stepId: string)
 			and (not self:_isHolidayCrownAutoCraftEnabled() or self:_isHolidayCrownReadyToCraft())
 		)
 	then
-		ObjectiveGuideController.ShowObjective(OBJECTIVE_ID, "Workspace.Crafting")
+		ObjectiveGuideController.ShowObjective(OBJECTIVE_ID, "Workspace.Crafting.Craftsman.HumanoidRootPart", {
+			fallbackTargetPath = "Workspace.Crafting",
+			projectTargetToGround = false,
+		})
 	else
 		ObjectiveGuideController.ClearObjective(OBJECTIVE_ID)
 	end

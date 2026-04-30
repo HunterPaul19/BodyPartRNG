@@ -677,7 +677,7 @@ function DailyChestService:ClaimTutorialDailyChest(player: Player, payload: any)
 		})
 		state = DailyChestState.MarkClaimedForLocalDay(state, config.id, localDay)
 		DataService:SetDailyChestState(player, state)
-		return response(true, "Come back tomorrow for another chest!", { package })
+		return response(true, DailyChestConfig.GetReturnMessage(config.id), { package })
 	end)
 
 	activeClaimsByPlayer[player] = nil

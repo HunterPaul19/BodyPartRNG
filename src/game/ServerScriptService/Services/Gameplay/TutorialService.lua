@@ -5,6 +5,7 @@ local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local CraftingProgress = require(ReplicatedStorage.Shared.Character.CraftingProgress)
 local CraftingRecipeConfig = require(ReplicatedStorage.Shared.Config.CraftingRecipeConfig)
+local DailyChestConfig = require(ReplicatedStorage.Shared.Config.DailyChestConfig)
 local DailyChestState = require(ReplicatedStorage.Shared.Character.DailyChestState)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local TutorialConfig = require(ReplicatedStorage.Shared.Config.TutorialConfig)
@@ -591,7 +592,7 @@ function TutorialService:ClaimTutorialChest(player: Player, payload: any)
 	state.stepId = TutorialConfig.Steps.UseLuckPotion
 	TutorialAnalyticsService:LogOnboardingStep(player, 11, state)
 	state = setState(player, state)
-	return response(true, "Come back tomorrow for another chest!", state, {
+	return response(true, DailyChestConfig.GetReturnMessage(TutorialConfig.TutorialChestId), state, {
 		chests = result.chests or {},
 	})
 end

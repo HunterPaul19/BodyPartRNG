@@ -6,6 +6,9 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TeleportService = game:GetService("TeleportService")
 local Workspace = game:GetService("Workspace")
 
+local BossWorldGuideService = require(script.Parent.BossWorldGuideService)
+local BossQueueConstants = require(ReplicatedStorage.Shared.BossQueue.Constants)
+local BossQueueTeleportPayload = require(ReplicatedStorage.Shared.BossQueue.TeleportPayload)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 
 type PromptState = {
@@ -17,6 +20,11 @@ local ACTIVE_PROFILE_ID = "main"
 local PROMPT_TAG = "EnterBossLobbyPortalPrompt"
 local DESTINATION_ROUTE_ID = "enter_boss_lobby"
 local IN_FLIGHT_RESET_SECONDS = 10
+local TUTORIAL_BOSS_ID = "Flame Guard General"
+local TUTORIAL_ARENA_ID = "Spire"
+local TUTORIAL_PORTAL_ID = "boss_world_tutorial"
+local TUTORIAL_SOURCE_FLOW = "boss_world_tutorial"
+local TUTORIAL_BOSS_HEALTH_MULTIPLIER = 0.25
 
 local EnterBossLobbyPortalService = {
 	_started = false,
@@ -71,11 +79,83 @@ function EnterBossLobbyPortalService:_markPlayerTeleportInFlight(player: Player)
 	return token
 end
 
+function EnterBossLobbyPortalService:_teleportPlayerToBossTutorial(player: Player, prompt: ProximityPrompt)
+	if BossQueueConstants.BossArenaPlaceId <= 0 then
+		Logger.Warn(string.format(
+			"[EnterBossLobbyPortalService] Prompt %s triggered for boss tutorial but the boss arena place id is not configured.",
+			getPromptDebugName(prompt)
+		))
+		return
+	end
+
+	local payload, payloadError = BossQueueTeleportPayload.Build(
+		TUTORIAL_BOSS_ID,
+		TUTORIAL_ARENA_ID,
+		TUTORIAL_PORTAL_ID,
+		{ player.UserId },
+		os.time(),
+		nil,
+		TUTORIAL_SOURCE_FLOW,
+		TUTORIAL_BOSS_HEALTH_MULTIPLIER
+	)
+	if payload == nil then
+		Logger.Warn(string.format(
+			"[EnterBossLobbyPortalService] Failed to build boss tutorial payload for %s via %s: %s",
+			player.Name,
+			getPromptDebugName(prompt),
+			tostring(payloadError)
+		))
+		return
+	end
+
+	local token = self:_markPlayerTeleportInFlight(player)
+
+	local reserveOk, reservedServerCode = pcall(function()
+		return TeleportService:ReserveServer(BossQueueConstants.BossArenaPlaceId)
+	end)
+	if not reserveOk or typeof(reservedServerCode) ~= "string" or reservedServerCode == "" then
+		self:_clearPlayerTeleportToken(player, token)
+		Logger.Warn(string.format(
+			"[EnterBossLobbyPortalService] Failed to reserve boss tutorial server for %s via %s: %s",
+			player.Name,
+			getPromptDebugName(prompt),
+			tostring(reservedServerCode)
+		))
+		return
+	end
+
+	local teleportOptions = Instance.new("TeleportOptions")
+	teleportOptions.ReservedServerAccessCode = reservedServerCode
+	teleportOptions:SetTeleportData(payload)
+
+	local teleportOk, teleportError = pcall(function()
+		TeleportService:TeleportAsync(BossQueueConstants.BossArenaPlaceId, { player }, teleportOptions)
+	end)
+
+	if teleportOk then
+		BossWorldGuideService:MarkBossTutorialArenaEntered(player)
+		return
+	end
+
+	self:_clearPlayerTeleportToken(player, token)
+	Logger.Warn(string.format(
+		"[EnterBossLobbyPortalService] Boss tutorial TeleportAsync failed for %s via %s: %s",
+		player.Name,
+		getPromptDebugName(prompt),
+		tostring(teleportError)
+	))
+end
+
 function EnterBossLobbyPortalService:_teleportPlayer(player: Player, prompt: ProximityPrompt)
 	if player.Parent ~= Players then
 		return
 	end
 	if self._playerTeleportTokens[player] ~= nil then
+		return
+	end
+
+	if BossWorldGuideService:ShouldRouteToBossTutorial(player) then
+		self:_teleportPlayerToBossTutorial(player, prompt)
 		return
 	end
 
@@ -96,6 +176,7 @@ function EnterBossLobbyPortalService:_teleportPlayer(player: Player, prompt: Pro
 	end)
 
 	if teleportOk then
+		BossWorldGuideService:MarkBossWorldEntered(player)
 		return
 	end
 

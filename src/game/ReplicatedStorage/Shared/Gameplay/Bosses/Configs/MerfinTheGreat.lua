@@ -9,7 +9,7 @@ local WaveCrash = require(ReplicatedStorage.Shared.Bosses.Moves.MerfinTheGreat.W
 return BossConfigFactory.Create({
 	bossId = "Merfin the Great",
 	arenaId = "Sakura",
-	recommendedCombatScore = 700,
+	recommendedCombatScore = 7000,
 	baseHealth = 25000,
 	walkSpeed = 13,
 	aggroRadius = 118,

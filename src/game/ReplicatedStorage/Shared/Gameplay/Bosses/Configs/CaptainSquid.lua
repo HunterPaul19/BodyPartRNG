@@ -9,7 +9,7 @@ local ShipCall = require(ReplicatedStorage.Shared.Bosses.Moves.CaptainSquid.Ship
 return BossConfigFactory.Create({
 	bossId = "Captain Squid",
 	arenaId = "Sakura",
-	recommendedCombatScore = 350,
+	recommendedCombatScore = 3000,
 	baseHealth = 10000,
 	walkSpeed = 12,
 	aggroRadius = 116,

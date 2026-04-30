@@ -110,11 +110,11 @@ end
 
 local function calculatePlayerPower(player: Player): number
 	local basePlayerStats = BodyPartsCatalog.GetBasePlayerStats()
-	return CombatPower.Calculate({
+	return CombatPower.CalculateAboveBase({
 		damage = getNumberAttribute(player, "BodyPartDamage", basePlayerStats.damage, 0),
 		health = getNumberAttribute(player, "BodyPartHealth", basePlayerStats.health, 1),
 		speed = getNumberAttribute(player, "BodyPartSpeed", basePlayerStats.speed, 0),
-	})
+	}, basePlayerStats)
 end
 
 local function formatPowerText(player: Player): string

@@ -8,7 +8,7 @@ function AnimationUtil.getPathingFolders()
 	return Animation.GetPrimaryAssetContainer()
 end
 
-function AnimationUtil.play(character, humanoid, animation, fadeTime, speed)
+function AnimationUtil.play(character, humanoid, animation, fadeTime, speed, priority)
 	if not character or not humanoid or not animation or not animation:IsA("Animation") then
 		return nil
 	end
@@ -18,7 +18,7 @@ function AnimationUtil.play(character, humanoid, animation, fadeTime, speed)
 		return nil
 	end
 
-	return profile:PlayAnimation(animation, nil, speed, nil, fadeTime)
+	return profile:PlayAnimation(animation, priority, speed, nil, fadeTime)
 end
 
 function AnimationUtil.stop(character, animation)

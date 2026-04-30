@@ -30,13 +30,19 @@ local CHEST_ORDER = table.freeze({
 	"VIPPlus",
 })
 
+local RETURN_MESSAGE_BY_CHEST_ID: { [string]: string } = table.freeze({
+	DailyFree = "Come back tomorrow for another daily chest!",
+	VIP = "Come back tomorrow for another VIP chest!",
+	VIPPlus = "Come back tomorrow for another VIP+ chest!",
+})
+
 local CHESTS_BY_ID: { [string]: ChestConfig } = {
 	DailyFree = table.freeze({
 		id = "DailyFree",
 		displayName = "Daily Free Chest",
 		visualChestId = "Basic",
 		timeShardRange = table.freeze({ min = 10, max = 25 }),
-		incomeMinutesRange = table.freeze({ min = 10, max = 25 }),
+		incomeMinutesRange = table.freeze({ min = 5, max = 10 }),
 		potionChances = table.freeze({
 			table.freeze({ tier = 3, chance = 0.35 }),
 			table.freeze({ tier = 4, chance = 0.03 }),
@@ -59,7 +65,7 @@ local CHESTS_BY_ID: { [string]: ChestConfig } = {
 		displayName = "VIP Chest",
 		visualChestId = "VIP",
 		timeShardRange = table.freeze({ min = 25, max = 50 }),
-		incomeMinutesRange = table.freeze({ min = 25, max = 50 }),
+		incomeMinutesRange = table.freeze({ min = 15, max = 25 }),
 		potionChances = table.freeze({
 			table.freeze({ tier = 3, chance = 0.60 }),
 			table.freeze({ tier = 4, chance = 0.20 }),
@@ -78,7 +84,7 @@ local CHESTS_BY_ID: { [string]: ChestConfig } = {
 		displayName = "VIP+ Chest",
 		visualChestId = "VIP+",
 		timeShardRange = table.freeze({ min = 50, max = 100 }),
-		incomeMinutesRange = table.freeze({ min = 50, max = 100 }),
+		incomeMinutesRange = table.freeze({ min = 30, max = 45 }),
 		potionChances = table.freeze({
 			table.freeze({ tier = 3, chance = 1.00 }),
 			table.freeze({ tier = 4, chance = 0.35 }),
@@ -99,6 +105,14 @@ function DailyChestConfig.Get(chestId: string): ChestConfig?
 	end
 
 	return CHESTS_BY_ID[chestId]
+end
+
+function DailyChestConfig.GetReturnMessage(chestId: string): string
+	if typeof(chestId) == "string" and RETURN_MESSAGE_BY_CHEST_ID[chestId] ~= nil then
+		return RETURN_MESSAGE_BY_CHEST_ID[chestId]
+	end
+
+	return RETURN_MESSAGE_BY_CHEST_ID.DailyFree
 end
 
 function DailyChestConfig.GetOrderedChestIds(): { string }

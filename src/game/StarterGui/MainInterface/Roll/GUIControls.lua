@@ -326,15 +326,37 @@ local function shouldPlayRollCutscene(rollResult)
 	return rollResult.shouldPlayCutscene == true
 end
 
-local function playRollCutsceneIfNeeded(rollResult, rollInfo)
+local function playRollCutsceneIfNeeded(rollResult, rollInfo, beforeReveal)
 	if not shouldPlayRollCutscene(rollResult) or typeof(rollInfo) ~= "table" then
+		if beforeReveal then
+			beforeReveal()
+		end
 		return
 	end
 
 	local cutsceneColor = if typeof(rollInfo.Color) == "Color3" then rollInfo.Color else Color3.new(1, 1, 1)
 	local tier = tonumber(rollResult.cutsceneTier) or RollCutsceneConfig.ResolveTier(rollInfo.Rarity)
+	local didReveal = false
+	local function revealOnce()
+		if didReveal then
+			return
+		end
+
+		didReveal = true
+		if beforeReveal then
+			beforeReveal()
+		end
+	end
+
+	local cutsceneDuration = RollResultAudio.GetCutsceneDuration(rollResult, rollInfo, RollCutsceneConfig.DefaultDuration)
 	RollResultAudio.PlayCutscene(rollResult, rollInfo)
-	RollCutscene.Play(cutsceneColor, tier, RollCutsceneConfig.DefaultDuration)
+	local ok, err = pcall(function()
+		RollCutscene.Play(cutsceneColor, tier, cutsceneDuration, revealOnce)
+	end)
+	if not ok then
+		Logger.Warn(string.format("[RollGUI] Roll cutscene failed: %s", tostring(err)))
+	end
+	revealOnce()
 end
 
 local function resolveRollResultMutationId(rollInfo)
@@ -1618,6 +1640,22 @@ function GUIControls:HideRollResults()
 	end
 end
 
+local function revealFinalRollResult(rollResult, finalResult)
+	if typeof(finalResult) ~= "table" then
+		return false
+	end
+
+	if shouldPlayRollCutscene(rollResult) then
+		playRollCutsceneIfNeeded(rollResult, finalResult, function()
+			GUIControls:ShowRollResults(finalResult)
+		end)
+	else
+		GUIControls:ShowRollResults(finalResult)
+	end
+
+	return true
+end
+
 function GUIControls:Roll(triggerSource)
 	task.spawn(function()
 		local resolvedTriggerSource = if typeof(triggerSource) == "string" and triggerSource ~= "" then triggerSource else "manual"
@@ -1693,11 +1731,24 @@ function GUIControls:Roll(triggerSource)
 		showAutoCraftNotification(rollResult)
 		playRollStartSound()
 		if rollResult.skipPresentation == true then
-			playRollCutsceneIfNeeded(rollResult, rollResult.finalResult)
-			GUIControls.CurrentRollResult = nil
-			GUIControls.CurrentRollResultEquipped = false
+			local finalResult = if typeof(rollResult.finalResult) == "table" then rollResult.finalResult else nil
+			GUIControls.CurrentRollResult = rollResult
+			GUIControls.CurrentRollResultEquipped = rollResult.autoEquipped == true
 			GUIControls.EquipDebounce = false
 			GUIControls.CurrentlyRolling = false
+			if finalResult and shouldPlayRollCutscene(rollResult) then
+				Main.Visible = true
+				MainButtons.RollButton.Visible = false
+				MainButtons.QuickRoll.Visible = false
+				MainButtons.AutoRoll.Visible = false
+				AutoEquipBestButton.Visible = false
+				GUIControls:BeginRollPreviewSession()
+				revealFinalRollResult(rollResult, finalResult)
+				return
+			end
+
+			GUIControls.CurrentRollResult = nil
+			GUIControls.CurrentRollResultEquipped = false
 			GUIControls.RollPresentationPending = false
 			if predictedSkippedPresentation then
 				Main.Visible = false
@@ -1735,34 +1786,10 @@ function GUIControls:Roll(triggerSource)
 		GUIControls.EquipDebounce = false
 
 		GUIControls:BeginRollPreviewSession()
-		local shouldDelayFinalReveal = shouldPlayRollCutscene(rollResult)
 		if rollResult.skipPreview == true then
 			local finalResult = if typeof(rollResult.finalResult) == "table" then rollResult.finalResult else nil
 			GUIControls.CurrentlyRolling = false
-			if finalResult then
-				if shouldDelayFinalReveal then
-					playRollCutsceneIfNeeded(rollResult, finalResult)
-				end
-				GUIControls:ShowRollResults(finalResult)
-			else
-				restoreIdleRollUi()
-				GUIControls.RollPresentationPending = false
-				endRollNotificationHold()
-				GUIControls:RefreshEquipButton()
-				GUIControls:RefreshRollControls()
-				GUIControls:SetButtonCooldown()
-				GUIControls:SetTemporaryStatus(rollResponse.message or "Roll complete.")
-			end
-			return
-		end
-
-		if shouldDelayFinalReveal then
-			local finalResult = if typeof(rollResult.finalResult) == "table" then rollResult.finalResult else nil
-			GUIControls.CurrentlyRolling = false
-			if finalResult then
-				playRollCutsceneIfNeeded(rollResult, finalResult)
-				GUIControls:ShowRollResults(finalResult)
-			else
+			if not revealFinalRollResult(rollResult, finalResult) then
 				restoreIdleRollUi()
 				GUIControls.RollPresentationPending = false
 				endRollNotificationHold()
@@ -1783,7 +1810,15 @@ function GUIControls:Roll(triggerSource)
 		local finalResult = if typeof(finalPreviewEntry) == "table" then finalPreviewEntry else rollResult.finalResult
 		GUIControls.CurrentlyRolling = false
 		finalResult = if typeof(previewedResult) == "table" then previewedResult else finalResult
-		GUIControls:ShowRollResults(finalResult)
+		if not revealFinalRollResult(rollResult, finalResult) then
+			restoreIdleRollUi()
+			GUIControls.RollPresentationPending = false
+			endRollNotificationHold()
+			GUIControls:RefreshEquipButton()
+			GUIControls:RefreshRollControls()
+			GUIControls:SetButtonCooldown()
+			GUIControls:SetTemporaryStatus(rollResponse.message or "Roll complete.")
+		end
 	end)
 end
 

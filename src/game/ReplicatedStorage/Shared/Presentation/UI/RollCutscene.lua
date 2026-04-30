@@ -64,7 +64,7 @@ local function cleanupExistingRuntime(playerGui: PlayerGui)
 	end
 end
 
-function RollCutscene.Play(color: Color3, tier: number, length: number?): boolean
+function RollCutscene.Play(color: Color3, tier: number, length: number?, beforeReveal: (() -> ())?): boolean
 	local player = Players.LocalPlayer
 	if not player then
 		return false
@@ -141,6 +141,21 @@ function RollCutscene.Play(color: Color3, tier: number, length: number?): boolea
 	local firstIconPopped = false
 	local finishedEvent = Instance.new("BindableEvent")
 	local finishing = false
+	local didRunBeforeReveal = false
+
+	local function runBeforeReveal()
+		if didRunBeforeReveal then
+			return
+		end
+
+		didRunBeforeReveal = true
+		if beforeReveal then
+			local ok, err = pcall(beforeReveal)
+			if not ok then
+				Logger.Warn(string.format("[RollCutscene] beforeReveal callback failed: %s", tostring(err)))
+			end
+		end
+	end
 
 	background.ImageColor3 = Color3.new(0, 0, 0)
 	background.Visible = true
@@ -248,6 +263,8 @@ function RollCutscene.Play(color: Color3, tier: number, length: number?): boolea
 			end
 
 			task.spawn(function()
+				runBeforeReveal()
+
 				local tween = TweenService:Create(
 					transitionCover,
 					TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),

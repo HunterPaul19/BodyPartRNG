@@ -10,7 +10,7 @@ return BossConfigFactory.Create({
 	bossId = "Destroyer 3000",
 	displayName = "Destroyer 3000",
 	arenaId = "Spire",
-	recommendedCombatScore = 4500,
+	recommendedCombatScore = 65000,
 	baseHealth = 300000,
 	walkSpeed = 14,
 	aggroRadius = 122,

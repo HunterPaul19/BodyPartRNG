@@ -3071,22 +3071,33 @@ local function computeNeutralFootSupportDistance(
 		return nil
 	end
 
-	local lowestFootBottomY = math.huge
-	for _, partName in ipairs(SUPPORT_PART_NAMES) do
-		local part = character:FindFirstChild(partName)
-		local referenceCFrame = resolvedReferencePose.partCFrames[partName]
-		if not (part and part:IsA("BasePart") and referenceCFrame) then
-			return nil
+	local largestLegSupportDistance: number? = nil
+	for _, legPartNames in ipairs({ REGION_PARTS.LeftLeg, REGION_PARTS.RightLeg }) do
+		local lowestLegBottomY = math.huge
+		local hasCompleteLeg = true
+
+		for _, partName in ipairs(legPartNames) do
+			local part = character:FindFirstChild(partName)
+			local referenceCFrame = resolvedReferencePose.partCFrames[partName]
+			if not (part and part:IsA("BasePart") and referenceCFrame) then
+				hasCompleteLeg = false
+				break
+			end
+
+			lowestLegBottomY = math.min(lowestLegBottomY, computeLowestPointY(part.Size, referenceCFrame))
 		end
 
-		lowestFootBottomY = math.min(lowestFootBottomY, computeLowestPointY(part.Size, referenceCFrame))
+		if hasCompleteLeg and lowestLegBottomY ~= math.huge then
+			local supportDistance = resolvedReferencePose.rootCFrame.Position.Y - lowestLegBottomY
+			if largestLegSupportDistance == nil then
+				largestLegSupportDistance = supportDistance
+			else
+				largestLegSupportDistance = math.max(largestLegSupportDistance, supportDistance)
+			end
+		end
 	end
 
-	if lowestFootBottomY == math.huge then
-		return nil
-	end
-
-	return resolvedReferencePose.rootCFrame.Position.Y - lowestFootBottomY
+	return largestLegSupportDistance
 end
 
 function BodyPartVisuals.ValidateReferencePose(character: Model): (boolean, string?, string?)

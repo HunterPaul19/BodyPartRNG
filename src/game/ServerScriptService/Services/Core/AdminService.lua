@@ -37,6 +37,7 @@ local TitleConfig = require(ReplicatedStorage.Shared.Config.TitleConfig)
 local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
 local TutorialConfig = require(ReplicatedStorage.Shared.Config.TutorialConfig)
 local TutorialService = require(script.Parent.TutorialService)
+local BossWorldGuideService = require(script.Parent.BossWorldGuideService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local ADMIN_ACTION_REMOTE_NAME = "AdminAction"
@@ -50,6 +51,7 @@ local DIAGNOSTICS_TAB_ID = "diagnostics"
 local MONEY_KEY = Schema.Money and Schema.Money.key or "money"
 local TIME_PLAYED_KEY = Schema.TimePlayed and Schema.TimePlayed.key or "timePlayed"
 local ACHIEVEMENTS_KEY = Schema.Achievements and Schema.Achievements.key or "achievements"
+local BOSS_WORLD_GUIDE_KEY = Schema.BossWorldGuide and Schema.BossWorldGuide.key or "bossWorldGuide"
 local MIN_SANDBOX_SCALE = 0.4
 local MAX_SANDBOX_SCALE = 2.5
 local MIN_NOTIFICATION_DURATION = 1
@@ -829,6 +831,29 @@ local function handleTriggerTutorial(payload: any)
 	return response(true, "OK", string.format("Triggered tutorial for %s at %s.", targetPlayer.Name, state.stepId), {
 		userId = targetPlayer.UserId,
 		tutorial = state,
+	})
+end
+
+local function handleArmBossTutorial(payload: any)
+	local targetPlayer, errorMessage = getPayloadTargetPlayer(payload, nil)
+	if not targetPlayer then
+		return response(false, "BAD_REQUEST", errorMessage or "Could not resolve the target player.")
+	end
+
+	local ok, armError = BossWorldGuideService:ArmBossTutorialForAdmin(targetPlayer)
+	if not ok then
+		return response(false, "ARM_FAILED", armError or "Failed to arm boss tutorial.")
+	end
+
+	local state = DataService:Get(targetPlayer, BOSS_WORLD_GUIDE_KEY)
+	pushRecentEvent("boss_tutorial", string.format("Armed boss tutorial portal flow for %s.", targetPlayer.Name), {
+		userId = targetPlayer.UserId,
+		bossWorldGuide = state,
+	})
+
+	return response(true, "OK", string.format("Armed boss tutorial portal flow for %s.", targetPlayer.Name), {
+		userId = targetPlayer.UserId,
+		bossWorldGuide = state,
 	})
 end
 
@@ -1847,6 +1872,10 @@ function AdminService:HandleAction(player: Player, request: any)
 
 	if tabId == PLAYERS_TAB_ID and actionId == "trigger_tutorial" then
 		return handleTriggerTutorial(payload)
+	end
+
+	if tabId == PLAYERS_TAB_ID and actionId == "arm_boss_tutorial" then
+		return handleArmBossTutorial(payload)
 	end
 
 	if tabId == PLAYERS_TAB_ID and actionId == "teleport_to_player" then

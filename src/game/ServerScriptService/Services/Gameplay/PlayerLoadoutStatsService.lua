@@ -128,7 +128,7 @@ function PlayerLoadoutStatsService:GetFinalStats(player: Player): FinalStats
 end
 
 function PlayerLoadoutStatsService:GetCombatScore(player: Player): number
-	return CombatPower.Calculate(resolveFinalStats(player))
+	return CombatPower.CalculateAboveBase(resolveFinalStats(player), BodyPartsCatalog.GetBasePlayerStats())
 end
 
 function PlayerLoadoutStatsService:OnStart()

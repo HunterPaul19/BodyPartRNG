@@ -20,6 +20,8 @@ local ONBOARDING_STEPS = table.freeze({
 	[10] = "Holiday Crown Equipped",
 	[11] = "Tutorial Chest Claimed",
 	[12] = "Luck Potion Used",
+	[13] = "Boss World Guide Prompted",
+	[14] = "Boss World Entered",
 })
 
 local loggedStepsByPlayer: { [Player]: { [number]: boolean } } = {}
@@ -82,6 +84,14 @@ function TutorialAnalyticsService:LogOnboardingStep(player: Player, stepNumber: 
 			))
 		end
 	end)
+end
+
+function TutorialAnalyticsService:LogBossWorldGuidePrompted(player: Player)
+	self:LogOnboardingStep(player, 13, nil)
+end
+
+function TutorialAnalyticsService:LogBossWorldGuideCompleted(player: Player)
+	self:LogOnboardingStep(player, 14, nil)
 end
 
 function TutorialAnalyticsService:OnPlayerRemoving(player: Player)

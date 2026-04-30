@@ -31,10 +31,13 @@ type PortalState = {
 	countdownDeadline: number,
 	enqueuedAtUnix: number,
 	launchInFlight: boolean,
+	exitSequence: number,
+	exitTokensByPlayer: { [Player]: number },
 	connections: { RBXScriptConnection },
 }
 
 local ACTIVE_PROFILE_ID = "boss_lobby"
+local EXIT_RECHECK_DELAY_SECONDS = 0.25
 
 local BossQueueService = {
 	_started = false,
@@ -123,6 +126,7 @@ local function computeQueuedPlayers(state: PortalState): { Player }
 			})
 		else
 			state.playersInZone[player] = nil
+			state.exitTokensByPlayer[player] = nil
 		end
 	end
 
@@ -297,6 +301,7 @@ function BossQueueService:_launchPortal(state: PortalState, countdownToken: numb
 
 	for _, player in ipairs(teleportPlayers) do
 		state.playersInZone[player] = nil
+		state.exitTokensByPlayer[player] = nil
 	end
 
 	Logger.Print(string.format(
@@ -360,6 +365,7 @@ function BossQueueService:_handlePlayerEntered(state: PortalState, player: Playe
 	if player.Parent ~= Players then
 		return
 	end
+	state.exitTokensByPlayer[player] = nil
 	if state.playersInZone[player] ~= nil then
 		return
 	end
@@ -374,8 +380,31 @@ function BossQueueService:_handlePlayerExited(state: PortalState, player: Player
 		return
 	end
 
-	state.playersInZone[player] = nil
-	self:_refreshPortalState(state)
+	state.exitSequence += 1
+	local exitToken = state.exitSequence
+	state.exitTokensByPlayer[player] = exitToken
+
+	task.delay(EXIT_RECHECK_DELAY_SECONDS, function()
+		if self._portalsByInstance[state.instance] ~= state then
+			return
+		end
+		if state.exitTokensByPlayer[player] ~= exitToken then
+			return
+		end
+		if state.playersInZone[player] == nil then
+			state.exitTokensByPlayer[player] = nil
+			return
+		end
+
+		if player.Parent == Players and state.zone:findPlayer(player) then
+			state.exitTokensByPlayer[player] = nil
+			return
+		end
+
+		state.exitTokensByPlayer[player] = nil
+		state.playersInZone[player] = nil
+		self:_refreshPortalState(state)
+	end)
 end
 
 function BossQueueService:_buildPortalState(instance: Instance): (PortalState?, string?)
@@ -455,6 +484,8 @@ function BossQueueService:_buildPortalState(instance: Instance): (PortalState?, 
 		countdownDeadline = 0,
 		enqueuedAtUnix = 0,
 		launchInFlight = false,
+		exitSequence = 0,
+		exitTokensByPlayer = {},
 		connections = {},
 	}
 
@@ -512,6 +543,7 @@ function BossQueueService:_unregisterPortal(instance: Instance)
 
 	self._portalsByInstance[instance] = nil
 	self:_cancelCountdown(state)
+	state.exitTokensByPlayer = {}
 
 	for _, connection in ipairs(state.connections) do
 		connection:Disconnect()
@@ -558,7 +590,10 @@ function BossQueueService:OnPlayerRemoving(player: Player)
 	for _, state in pairs(self._portalsByInstance) do
 		if state.playersInZone[player] ~= nil then
 			state.playersInZone[player] = nil
+			state.exitTokensByPlayer[player] = nil
 			self:_refreshPortalState(state)
+		else
+			state.exitTokensByPlayer[player] = nil
 		end
 	end
 end

@@ -1780,6 +1780,10 @@ function BossArenaRuntimeService:_spawnBossEncounter(payload: any)
 	BossPhysicsStabilizer.ResetMotion(bossModel)
 	applyBossBaseHealth(bossHumanoid, bossDefinition.baseHealth)
 	applyBossHealthScaling(bossHumanoid, encounterScaling.healthMultiplier)
+	local bossHealthMultiplier = tonumber(payload.bossHealthMultiplier)
+	if bossHealthMultiplier ~= nil and bossHealthMultiplier > 0 then
+		applyBossHealthScaling(bossHumanoid, bossHealthMultiplier)
+	end
 
 	bossModel:SetAttribute(BOSS_INVULNERABLE_ATTRIBUTE, true)
 	bossHumanoid.WalkSpeed = 0

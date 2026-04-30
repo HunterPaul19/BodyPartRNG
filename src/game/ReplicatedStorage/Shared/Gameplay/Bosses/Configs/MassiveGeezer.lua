@@ -9,7 +9,7 @@ local EatChicken = require(ReplicatedStorage.Shared.Bosses.Moves.MassiveGeezer.E
 return BossConfigFactory.Create({
 	bossId = "Massive Geezer",
 	arenaId = "Spire",
-	recommendedCombatScore = 8500,
+	recommendedCombatScore = 120000,
 	baseHealth = 600000,
 	walkSpeed = 11,
 	aggroRadius = 124,

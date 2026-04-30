@@ -9,7 +9,7 @@ local Stomp = require(ReplicatedStorage.Shared.Bosses.Moves.MagmaFiend.Stomp)
 return BossConfigFactory.Create({
 	bossId = "Magma Fiend",
 	arenaId = "Suburban",
-	recommendedCombatScore = 2000,
+	recommendedCombatScore = 25000,
 	baseHealth = 100000,
 	walkSpeed = 12,
 	aggroRadius = 117,

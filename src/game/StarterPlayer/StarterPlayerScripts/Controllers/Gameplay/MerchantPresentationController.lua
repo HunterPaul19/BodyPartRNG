@@ -43,6 +43,7 @@ type OpenOptions = {
 	blurSize: number?,
 	backdropTransparency: number?,
 	crispContent: boolean?,
+	preserveRootLayout: boolean?,
 }
 
 type CameraSnapshot = {
@@ -861,8 +862,42 @@ function MerchantPresentationController:_prepareShopRoot(root: GuiObject, crispC
 	root.Visible = true
 end
 
-function MerchantPresentationController:_playOpenReveal(root: GuiObject, crispContent: boolean?)
-	local runtimeState = self:_ensureRuntimeContent(root)
+function MerchantPresentationController:_preparePreservedShopRoot(root: GuiObject)
+	self:_restoreShopRoot(root)
+
+	local originalParent = root.Parent or self:_getModalRoot()
+	local originalPosition = root.Position
+	local originalSize = root.Size
+	local originalAnchorPoint = root.AnchorPoint
+	local originalZIndex = root.ZIndex
+	local originalVisibility = root.Visible
+	local originalBackgroundTransparency = root.BackgroundTransparency
+	local originalZIndexes, minZIndex = collectGuiTreeZIndexes(root)
+
+	self._rootLayoutSnapshotsByRoot[root] = {
+		parent = originalParent,
+		position = originalPosition,
+		size = originalSize,
+		anchorPoint = originalAnchorPoint,
+		zIndex = originalZIndex,
+		zIndexByGuiObject = originalZIndexes,
+		zIndexLiftDelta = 0,
+		visible = originalVisibility,
+		backgroundTransparency = originalBackgroundTransparency,
+	}
+
+	root.Visible = true
+	local zIndexLiftDelta = applyGuiTreeZIndexLift(
+		originalZIndexes,
+		minZIndex,
+		RUNTIME_WRAPPER_Z_INDEX + 1
+	)
+	self._rootLayoutSnapshotsByRoot[root].zIndexLiftDelta = zIndexLiftDelta
+	self:_raiseTransitionOverlayAbove(root)
+end
+
+function MerchantPresentationController:_playOpenReveal(root: GuiObject, crispContent: boolean?, preserveRootLayout: boolean?)
+	local runtimeState = if preserveRootLayout then nil else self:_ensureRuntimeContent(root)
 	local overlay = self:_ensureOverlay()
 	self:_raiseTransitionOverlayAbove(root)
 
@@ -872,10 +907,14 @@ function MerchantPresentationController:_playOpenReveal(root: GuiObject, crispCo
 
 	fadeTween:Play()
 
-	if crispContent then
+	if preserveRootLayout then
+		-- The root is already visible in its authored layout; only the blackout overlay reveals.
+	elseif crispContent then
+		assert(runtimeState ~= nil, "Runtime transition state is missing.")
 		runtimeState.content.GroupTransparency = 1
 		runtimeState.scale.Scale = 1
 	else
+		assert(runtimeState ~= nil, "Runtime transition state is missing.")
 		local groupTween = TweenService:Create(runtimeState.content, OPEN_REVEAL_TWEEN, {
 			GroupTransparency = 0,
 		})
@@ -917,22 +956,49 @@ function MerchantPresentationController:_hideOverlay()
 	overlay.BackgroundTransparency = 1
 end
 
-function MerchantPresentationController:_restorePresentationState()
-	local root = self._activeRoot
-	if root then
-		self:_restoreShopRoot(root)
+function MerchantPresentationController:_restorePresentationStep(stepName: string, callback: () -> ())
+	local ok, err = xpcall(callback, debug.traceback)
+	if ok then
+		return
 	end
 
-	local backdrop = self:_ensureBackdrop()
-	backdrop.Visible = false
-	backdrop.Active = false
-	backdrop.BackgroundTransparency = 1
+	Logger.Warn(string.format("[MerchantPresentationController] Restore step '%s' failed: %s", stepName, tostring(err)))
+end
 
-	self:_stopCameraParallax()
-	self:_restoreCamera()
-	self:_restorePlayer()
-	self:_setBlurSize(0, nil, false)
-	self:_restoreMainInterfaceSession()
+function MerchantPresentationController:_restorePresentationState()
+	self:_restorePresentationStep("mainInterface", function()
+		self:_restoreMainInterfaceSession()
+	end)
+
+	self:_restorePresentationStep("shopRoot", function()
+		local root = self._activeRoot
+		if root then
+			self:_restoreShopRoot(root)
+		end
+	end)
+
+	self:_restorePresentationStep("backdrop", function()
+		local backdrop = self:_ensureBackdrop()
+		backdrop.Visible = false
+		backdrop.Active = false
+		backdrop.BackgroundTransparency = 1
+	end)
+
+	self:_restorePresentationStep("cameraParallax", function()
+		self:_stopCameraParallax()
+	end)
+
+	self:_restorePresentationStep("camera", function()
+		self:_restoreCamera()
+	end)
+
+	self:_restorePresentationStep("player", function()
+		self:_restorePlayer()
+	end)
+
+	self:_restorePresentationStep("blur", function()
+		self:_setBlurSize(0, nil, false)
+	end)
 end
 
 function MerchantPresentationController:_resetTransitionState()
@@ -946,7 +1012,9 @@ end
 function MerchantPresentationController:_recoverTransition(transitionName: string, err: any, closedFrameName: string?)
 	Logger.Warn(string.format("[MerchantPresentationController] %s transition failed: %s", transitionName, tostring(err)))
 	self:_restorePresentationState()
-	self:_hideOverlay()
+	self:_restorePresentationStep("overlay", function()
+		self:_hideOverlay()
+	end)
 	self:_resetTransitionState()
 
 	if closedFrameName then
@@ -960,7 +1028,12 @@ function MerchantPresentationController:_midpointOpen(frameName: string, root: G
 
 	local backdrop = self:_ensureBackdrop()
 	local crispContent = options and options.crispContent == true
-	self:_prepareShopRoot(root, crispContent)
+	local preserveRootLayout = options and options.preserveRootLayout == true
+	if preserveRootLayout then
+		self:_preparePreservedShopRoot(root)
+	else
+		self:_prepareShopRoot(root, crispContent)
+	end
 	local runtimeWrapper = self._runtimeWrapperByRoot[root]
 	local backdropTransparency = if options and typeof(options.backdropTransparency) == "number"
 		then math.clamp(options.backdropTransparency, 0, 1)
@@ -970,7 +1043,9 @@ function MerchantPresentationController:_midpointOpen(frameName: string, root: G
 		else BLUR_SIZE
 	backdrop.Visible = true
 	backdrop.Active = true
-	backdrop.ZIndex = math.max(0, (if runtimeWrapper then runtimeWrapper.ZIndex else root.ZIndex) - 1)
+	backdrop.ZIndex = if preserveRootLayout
+		then RUNTIME_WRAPPER_Z_INDEX
+		else math.max(0, (if runtimeWrapper then runtimeWrapper.ZIndex else root.ZIndex) - 1)
 	backdrop.BackgroundTransparency = backdropTransparency
 
 	self:_setBlurSize(blurSize, BLUR_TWEEN, true)
@@ -1019,7 +1094,11 @@ function MerchantPresentationController:Open(frameName: string, options: OpenOpt
 	local ok, err = xpcall(function()
 		self:_playOpenBlackout()
 		self:_midpointOpen(frameName, root, options)
-		self:_playOpenReveal(root, if options then options.crispContent == true else false)
+		self:_playOpenReveal(
+			root,
+			if options then options.crispContent == true else false,
+			if options then options.preserveRootLayout == true else false
+		)
 		self:_hideOverlay()
 		self:_startCameraParallax(if options then options.cameraPart else nil)
 	end, debug.traceback)

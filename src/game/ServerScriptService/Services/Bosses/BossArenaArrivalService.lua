@@ -53,6 +53,8 @@ local function clonePayload(payload: ArrivalPayload): ArrivalPayload
 		queueSize = payload.queueSize,
 		enqueuedAtUnix = payload.enqueuedAtUnix,
 		potionEffectsByUserId = clonePotionEffectsByUserId(payload.potionEffectsByUserId),
+		sourceFlow = payload.sourceFlow,
+		bossHealthMultiplier = payload.bossHealthMultiplier,
 	}
 end
 

@@ -162,7 +162,7 @@ local ENTRIES: { HeadAccessoryConfigEntry } = {
 	headAccessory("valkyrie_helm", "Valkyrie Helm", "Prime", 310, 1365767, 225, 65, 225, "Valkyrie Helm", nil, Color3.fromRGB(168, 200, 255)),
 	headAccessory("empyrean_reignment", "Empyrean Reignment", "Elite", 320, 15967743, 350, 80, 400, "Empyrean Reignment", nil, Color3.fromRGB(255, 210, 120)),
 	headAccessory("silver_king_of_the_night", "Silver King of the Night", "Elite", 330, 439945661, 500, 90, 650, "Silver King of the Night", nil, Color3.fromRGB(190, 204, 220)),
-	headAccessory("lord_of_the_federation", "Lord of the Federation", "Apex", 340, 21070012, 850, 150, 800, "Lord of the Federation (Dominus Empyreus)", nil, Color3.fromRGB(190, 112, 255)),
+	headAccessory("lord_of_the_federation", "Lord of the Federation", "Apex", 340, 88885069, 850, 150, 800, "Lord of the Federation", nil, Color3.fromRGB(190, 112, 255)),
 }
 
 local entriesById: { [string]: HeadAccessoryConfigEntry } = {}

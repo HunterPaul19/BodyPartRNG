@@ -714,6 +714,9 @@ function CraftingService:CraftRecipe(player: Player, recipeId: string, options: 
 
 	CraftingProgress.SetRecipeProgress(progressState, recipe.id, nil)
 	progressState.autoReadyNotifiedRecipeIds[recipe.id] = nil
+	if recipeYield.kind == "accessory" then
+		progressState.autoRecipeIds[recipe.id] = nil
+	end
 	local saved, saveError = saveProgress(player, progressState)
 	if not saved then
 		return false, saveError or "Failed to clear crafting progress.", nil

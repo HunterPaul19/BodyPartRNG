@@ -157,6 +157,13 @@ AdminActionRegistry.Tabs = {
 						},
 					},
 					{
+						id = "arm_boss_tutorial",
+						title = "Arm Boss Tutorial",
+						description = "Set the selected player's next boss portal interaction to launch the one-time Flame Guard General tutorial arena.",
+						risk = AdminActionRegistry.Risk.Mutating,
+						fields = { playerField() },
+					},
+					{
 						id = "teleport_to_player",
 						title = "Teleport To Player",
 						description = "Move your character next to the selected player.",

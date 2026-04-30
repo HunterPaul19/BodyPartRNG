@@ -18,7 +18,7 @@ local REMOTES_FOLDER_NAME = "Remotes"
 local PVP_FOLDER_NAME = "PvP"
 local GET_PVP_STATE_REMOTE_NAME = "GetPvpState"
 local SET_PVP_ENABLED_REMOTE_NAME = "SetPvpEnabled"
-local REQUEST_M1_REMOTE_NAME = "RequestPlayerM1"
+local REQUEST_M1_REMOTE_NAME = "RequestPlayPerM1"
 local PVP_STATE_CHANGED_REMOTE_NAME = "PvpStateChanged"
 local PLAYER_M1_STARTED_REMOTE_NAME = "PlayerM1Started"
 local PLAYER_HIT_CONFIRMED_REMOTE_NAME = "PlayerHitConfirmed"
@@ -334,7 +334,7 @@ local function resolveHitboxSizeAndForwardOffset(character: Model, rootPart: Bas
 	local averagePartSize = resolveAveragePartSize(character, rootPart)
 	local hitboxSize = Vector3.new(
 		math.max(1, averagePartSize.X * PlayerM1Config.WidthScale),
-		math.max(1, averagePartSize.Y * PlayerM1Config.HeightScale),
+		PlayerM1Config.HitboxHeightStuds,
 		math.max(1, averagePartSize.Z * PlayerM1Config.DepthScale)
 	)
 	local forwardOffset = math.max(rootPart.Size.Z * 0.5, hitboxSize.Z * PlayerM1Config.ForwardOffsetScale)

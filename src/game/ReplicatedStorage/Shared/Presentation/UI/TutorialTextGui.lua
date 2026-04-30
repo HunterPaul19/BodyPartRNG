@@ -7,6 +7,58 @@ local frame: Frame? = nil
 local label: TextLabel? = nil
 local labelStroke: UIStroke? = nil
 local DEFAULT_DISPLAY_ORDER = 1000
+local DEFAULT_TEMPORARY_DURATION_SECONDS = 3
+local FADE_DURATION_SECONDS = 0.2
+local textToken = 0
+
+TutorialTextGui.DefaultTemporaryDurationSeconds = DEFAULT_TEMPORARY_DURATION_SECONDS
+
+local function nextTextToken(): number
+	textToken += 1
+	return textToken
+end
+
+local function showLabelText(text: string)
+	if not label then
+		return
+	end
+
+	label.Text = text
+
+	if label.TextTransparency > 0 then
+		TweenService:Create(label, TweenInfo.new(FADE_DURATION_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			TextTransparency = 0,
+		}):Play()
+	else
+		label.TextTransparency = 0
+	end
+
+	if labelStroke then
+		if labelStroke.Transparency > 0.2 then
+			TweenService:Create(labelStroke, TweenInfo.new(FADE_DURATION_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				Transparency = 0.2,
+			}):Play()
+		else
+			labelStroke.Transparency = 0.2
+		end
+	end
+end
+
+local function hideLabelText()
+	if not label then
+		return
+	end
+
+	TweenService:Create(label, TweenInfo.new(FADE_DURATION_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		TextTransparency = 1,
+	}):Play()
+
+	if labelStroke then
+		TweenService:Create(labelStroke, TweenInfo.new(FADE_DURATION_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Transparency = 1,
+		}):Play()
+	end
+end
 
 function TutorialTextGui.Init(playerGui: PlayerGui)
 	if gui then
@@ -56,45 +108,46 @@ function TutorialTextGui.LayerAboveDisplayOrder(displayOrder: number?)
 end
 
 function TutorialTextGui.SetText(text: string)
-	if not label then
-		return
-	end
-
-	label.Text = text
-
-	if label.TextTransparency > 0 then
-		TweenService:Create(label, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			TextTransparency = 0,
-		}):Play()
-	else
-		label.TextTransparency = 0
-	end
-
-	if labelStroke then
-		if labelStroke.Transparency > 0.2 then
-			TweenService:Create(labelStroke, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-				Transparency = 0.2,
-			}):Play()
-		else
-			labelStroke.Transparency = 0.2
-		end
-	end
+	nextTextToken()
+	showLabelText(text)
 end
 
 function TutorialTextGui.HideText()
+	nextTextToken()
+	hideLabelText()
+end
+
+function TutorialTextGui.ShowTemporaryText(text: string, durationSeconds: number?): number
 	if not label then
-		return
+		return 0
 	end
 
-	TweenService:Create(label, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		TextTransparency = 1,
-	}):Play()
-
-	if labelStroke then
-		TweenService:Create(labelStroke, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			Transparency = 1,
-		}):Play()
+	local resolvedText = if typeof(text) == "string" then text else ""
+	if resolvedText == "" then
+		return 0
 	end
+
+	local duration = math.max(0, tonumber(durationSeconds) or DEFAULT_TEMPORARY_DURATION_SECONDS)
+	local token = nextTextToken()
+	showLabelText(resolvedText)
+
+	task.delay(duration, function()
+		if textToken == token then
+			hideLabelText()
+		end
+	end)
+
+	return duration
+end
+
+function TutorialTextGui.ShowTemporaryTextAsync(text: string, durationSeconds: number?): boolean
+	local duration = TutorialTextGui.ShowTemporaryText(text, durationSeconds)
+	if duration <= 0 then
+		return false
+	end
+
+	task.wait(duration + FADE_DURATION_SECONDS)
+	return true
 end
 
 return TutorialTextGui

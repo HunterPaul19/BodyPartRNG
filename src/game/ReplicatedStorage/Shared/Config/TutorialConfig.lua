@@ -55,12 +55,12 @@ TutorialConfig.TextByStepId = table.freeze({
 	[Steps.EquipBodyPart] = "Nice roll. Open Inventory and equip that body part.",
 	[Steps.SelectRoll2] = "Select Roll 2. It costs more, but the odds are better.",
 	[Steps.PaidRolls] = "Roll 5 times",
-	[Steps.GoAppraise] = "Take an equipped body part to the Appraiser.",
+	[Steps.GoAppraise] = "Talk to the appraiser",
 	[Steps.GoCrafting] = "Go to Crafting and select the first Head Accessory recipe: Holiday Crown.",
-	[Steps.CraftHolidayCrown] = "Turn on Auto Craft for Holiday Crown, keep rolling until it is ready, then return to Crafting and press Craft.",
+	[Steps.CraftHolidayCrown] = "Keep rolling until you can craft Holiday Crown!",
 	[Steps.EquipHolidayCrown] = "Open Inventory and equip your Holiday Crown head accessory.",
 	[Steps.ClaimDailyChest] = "Here is your free daily chest.",
-	[Steps.UseLuckPotion] = "Come back tomorrow for another chest! Open Inventory, go to Potions, and use Luck Potion I.",
+	[Steps.UseLuckPotion] = "Open Inventory, go to Potions, and use Luck Potion I.",
 	[Steps.Completed] = "",
 })
 

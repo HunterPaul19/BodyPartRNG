@@ -343,7 +343,14 @@ function PvpController:_playSwingTrack(animationInstance: Animation, swingId: st
 
 	self:_clearActiveSwing(true)
 
-	local track = AnimationUtil.play(character, humanoid, animationInstance, PlayerM1Config.AnimationFadeSeconds, 1)
+	local track = AnimationUtil.play(
+		character,
+		humanoid,
+		animationInstance,
+		PlayerM1Config.AnimationFadeSeconds,
+		1,
+		PlayerM1Config.AnimationPriority
+	)
 	if track == nil then
 		warnWithPrefix(string.format("Failed to play M1 animation '%s'.", animationInstance.Name))
 		return nil

@@ -4,8 +4,10 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local ChestOpeningSequence = require(ReplicatedStorage.Shared.UI.ChestOpeningSequence)
+local DailyChestConfig = require(ReplicatedStorage.Shared.Config.DailyChestConfig)
 local DataController = require(script.Parent.DataController)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
+local TutorialTextGui = require(ReplicatedStorage.Shared.UI.TutorialTextGui)
 local TutorialState = require(ReplicatedStorage.Shared.Character.TutorialState)
 
 local LOCAL_PLAYER = Players.LocalPlayer
@@ -72,7 +74,10 @@ local function openChestPackagesSequentially(chests: { any })
 			else package.chestId
 		local rewards = if typeof(package.rewards) == "table" then package.rewards else {}
 		if typeof(visualChestId) == "string" and #rewards > 0 then
-			ChestOpeningSequence.OpenChestAsync(visualChestId, rewards)
+			local opened = ChestOpeningSequence.OpenChestAsync(visualChestId, rewards)
+			if opened == true then
+				TutorialTextGui.ShowTemporaryTextAsync(DailyChestConfig.GetReturnMessage(package.chestId))
+			end
 		end
 	end
 end
@@ -95,6 +100,8 @@ function DailyChestController:OnStart()
 		if tutorialState.completed ~= true then
 			return
 		end
+
+		TutorialTextGui.Init(LOCAL_PLAYER:WaitForChild("PlayerGui"))
 
 		local claimRemote = resolveClaimRemote()
 		if not claimRemote then

@@ -9,7 +9,7 @@ local PrometheusSlash = require(ReplicatedStorage.Shared.Bosses.Moves.FlameGuard
 return BossConfigFactory.Create({
 	bossId = "Flame Guard General",
 	arenaId = "Spire",
-	recommendedCombatScore = 150,
+	recommendedCombatScore = 1500,
 	baseHealth = 5000,
 	scaleMultiplier = 12.5,
 	walkSpeed = 13,

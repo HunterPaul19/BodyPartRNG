@@ -20,6 +20,17 @@ function CombatPower.Calculate(stats: Stats?): number
 	return damage + (health * 8) + (speed * 25)
 end
 
+function CombatPower.CalculateAboveBase(finalStats: Stats?, baseStats: Stats?): number
+	local safeFinalStats = if typeof(finalStats) == "table" then finalStats else {}
+	local safeBaseStats = if typeof(baseStats) == "table" then baseStats else {}
+
+	return CombatPower.Calculate({
+		damage = math.max(0, (tonumber(safeFinalStats.damage) or 0) - (tonumber(safeBaseStats.damage) or 0)),
+		health = math.max(0, (tonumber(safeFinalStats.health) or 0) - (tonumber(safeBaseStats.health) or 0)),
+		speed = math.max(0, (tonumber(safeFinalStats.speed) or 0) - (tonumber(safeBaseStats.speed) or 0)),
+	})
+end
+
 function CombatPower.GetBodyPartCombatMultiplier(record: any): number
 	local mutationMultiplier = tonumber(record and record.mutationMultiplier)
 	if mutationMultiplier == nil or mutationMultiplier <= 0 then

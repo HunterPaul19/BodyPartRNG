@@ -1,5 +1,6 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local Logger = require(ReplicatedStorage.Shared.Diagnostics.Logger)
 local SoundUtil = require(script.Parent.SoundUtil)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
@@ -70,7 +71,26 @@ function RollResultAudio.PlayCutscene(rollResult, rollInfo, parent: Instance?): 
 		return nil
 	end
 
-	return SoundUtil.Play(soundName, parent)
+	local sound = SoundUtil.Play(soundName, parent)
+	if not sound then
+		Logger.Warn(string.format("[RollResultAudio] Cutscene sound %q could not be resolved.", soundName))
+	end
+
+	return sound
+end
+
+function RollResultAudio.GetCutsceneDuration(rollResult, rollInfo, fallbackDuration: number?): number?
+	local soundName = resolveCutsceneSoundName(rollResult, rollInfo)
+	if not soundName then
+		return fallbackDuration
+	end
+
+	local soundDuration = SoundUtil.GetDuration(soundName)
+	if soundDuration then
+		return soundDuration
+	end
+
+	return fallbackDuration
 end
 
 function RollResultAudio.PlayRarity(rollInfo, parent: Instance?): Sound?

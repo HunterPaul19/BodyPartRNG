@@ -284,7 +284,7 @@ local function resolveHitboxSizeAndForwardOffset(character: Model, rootPart: Bas
 	local averagePartSize = resolveAveragePartSize(character, rootPart)
 	local hitboxSize = Vector3.new(
 		math.max(1, averagePartSize.X * PlayerM1Config.WidthScale),
-		math.max(1, averagePartSize.Y * PlayerM1Config.HeightScale),
+		PlayerM1Config.HitboxHeightStuds,
 		math.max(1, averagePartSize.Z * PlayerM1Config.DepthScale)
 	)
 	local forwardOffset = math.max(rootPart.Size.Z * 0.5, hitboxSize.Z * PlayerM1Config.ForwardOffsetScale)

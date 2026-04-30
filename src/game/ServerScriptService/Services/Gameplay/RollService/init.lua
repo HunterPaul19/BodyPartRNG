@@ -58,6 +58,7 @@ local finalizeAutoSellRollRemote: RemoteFunction? = nil
 local promptQuickRollPurchaseRemote: RemoteFunction? = nil
 local updatedRemote: RemoteEvent? = nil
 local rollLocks: { [Player]: boolean } = {}
+local rollCooldownUntilByPlayer: { [Player]: number } = {}
 local pendingAutoSellByPlayer: { [Player]: { [string]: any } } = {}
 local nextPendingAutoSellToken = 0
 local adminLuckOverridesByPlayer: { [Player]: number } = {}
@@ -1601,6 +1602,21 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 
 	local successfulRollCount = DataService:GetSuccessfulRollCount(player)
 	local luckState, bonuses, potionBonuses = computeLuckState(player, selectedRollType, successfulRollCount)
+	local quickRollState = buildQuickRollState(player)
+	local effectiveRollCooldown = getEffectiveRollCooldown(player, bonuses, quickRollState)
+	local now = os.clock()
+	local cooldownUntil = rollCooldownUntilByPlayer[player]
+	if cooldownUntil and now < cooldownUntil then
+		local retryAfterSeconds = cooldownUntil - now
+		rollLocks[player] = nil
+		StatsService:RecordRollFailure(player, "cooldown")
+		PerfStats.Measure("PerformRoll", startedAt, {
+			detail = string.format("%s:cooldown", player.Name),
+		})
+		return false, string.format("You're rolling too quickly. Try again in %.1fs.", retryAfterSeconds), nil
+	end
+
+	rollCooldownUntilByPlayer[player] = now + effectiveRollCooldown
 	local tutorialRollOverride = TutorialService:GetRollOverride(player, {
 		rollTypeId = selectedRollType.id,
 		rollRegion = selectedRollRegion,
@@ -1612,7 +1628,7 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 			luckState.bandLuckInput = luckState.rawLuck * luckState.bandLuckScalar
 		end
 	end
-	local quickRollApplied = buildQuickRollState(player).enabled == true
+	local quickRollApplied = quickRollState.enabled == true
 	local triggerSource = if typeof(payload) == "table" and payload.triggerSource == "auto" then "auto" else "manual"
 	local skipPresentation = quickRollApplied and triggerSource == "auto"
 	local skipPreview = quickRollApplied and triggerSource ~= "auto"
@@ -2186,6 +2202,7 @@ end
 
 function RollService:OnPlayerRemoving(player: Player)
 	rollLocks[player] = nil
+	rollCooldownUntilByPlayer[player] = nil
 	adminLuckOverridesByPlayer[player] = nil
 
 	local pendingState = pendingAutoSellByPlayer[player]

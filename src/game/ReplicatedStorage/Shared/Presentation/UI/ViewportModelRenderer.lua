@@ -12,14 +12,26 @@ local POTION_MARGIN_SCALE = 1.5
 local POTION_FOCUS_Y_SCALE = -0.02
 local POTION_CAMERA_BACK_OFFSET = 2
 local POTION_CAMERA_UP_OFFSET = 2
+local BOSS_PREVIEW_MARGIN_SCALE = 1.18
+local BOSS_PREVIEW_SIDE_ANGLE_DEGREES = 24
+local BOSS_PREVIEW_FOCUS_HEIGHT_SCALE = 0.5
+local BOSS_PREVIEW_DISTANCE_SCALE = 1.05
 local DIALOGUE_PORTRAIT_MIN_HEIGHT = 2.6
 local DIALOGUE_PORTRAIT_MARGIN_SCALE = 1.08
 local VIEWPORT_AMBIENT = Color3.fromRGB(255, 255, 255)
 local VIEWPORT_LIGHT_COLOR = Color3.fromRGB(255, 255, 255)
 local VIEWPORT_LIGHT_DIRECTION = Vector3.new(-1, -0.6, -0.8)
 local CACHE_KEY_ATTRIBUTE = "ViewportModelRenderer_CacheKey"
+local USE_VISIBLE_BOUNDS_ATTRIBUTE = "ViewportModelRenderer_UseVisibleBounds"
 local rollPreviewSessions = setmetatable({}, { __mode = "k" })
 local bodyPartPreviewSourceModels: { [string]: Model } = {}
+
+export type BossPreviewOptions = {
+	yawDegrees: number?,
+	distanceScale: number?,
+	focusHeightScale: number?,
+	sideAngleDegrees: number?,
+}
 
 local BODY_COLOR3_PROPERTY_BY_REGION = table.freeze({
 	Head = "HeadColor3",
@@ -104,6 +116,65 @@ local function sanitizePreviewModel(previewModel: Model): boolean
 	return hasRenderablePart
 end
 
+local function hasVisibleBasePartDescendant(instance: Instance): boolean
+	for _, descendant in ipairs(instance:GetDescendants()) do
+		if descendant:IsA("BasePart") and descendant.Transparency < 1 then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function getPreviewBoundingBox(previewModel: Model, useVisibleBounds: boolean?): (CFrame, Vector3)
+	local fallbackCFrame, fallbackSize = previewModel:GetBoundingBox()
+	if useVisibleBounds ~= true then
+		return fallbackCFrame, fallbackSize
+	end
+
+	local hiddenParts = {}
+	for _, descendant in ipairs(previewModel:GetDescendants()) do
+		if descendant:IsA("BasePart") and descendant.Transparency >= 1 and not hasVisibleBasePartDescendant(descendant) then
+			table.insert(hiddenParts, {
+				part = descendant,
+				parent = descendant.Parent,
+			})
+			descendant.Parent = nil
+		end
+	end
+
+	if #hiddenParts == 0 then
+		return fallbackCFrame, fallbackSize
+	end
+
+	local hasVisiblePart = false
+	for _, descendant in ipairs(previewModel:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			hasVisiblePart = true
+			break
+		end
+	end
+
+	local ok, boundingBoxCFrame, boundingBoxSize
+	if hasVisiblePart then
+		ok, boundingBoxCFrame, boundingBoxSize = pcall(function()
+			return previewModel:GetBoundingBox()
+		end)
+	end
+
+	for _, hiddenPart in ipairs(hiddenParts) do
+		if hiddenPart.part.Parent == nil and hiddenPart.parent ~= nil then
+			hiddenPart.part.Parent = hiddenPart.parent
+		end
+	end
+
+	if ok and typeof(boundingBoxCFrame) == "CFrame" and typeof(boundingBoxSize) == "Vector3" then
+		return boundingBoxCFrame, boundingBoxSize
+	end
+
+	return fallbackCFrame, fallbackSize
+end
+
 local function facePreviewModel(previewModel: Model)
 	local boundingBoxCFrame = previewModel:GetBoundingBox()
 	local center = boundingBoxCFrame.Position
@@ -113,8 +184,8 @@ local function facePreviewModel(previewModel: Model)
 	previewModel:PivotTo(rotatedPivot)
 end
 
-local function centerPreviewModel(previewModel: Model)
-	local boundingBoxCFrame = previewModel:GetBoundingBox()
+local function centerPreviewModel(previewModel: Model, useVisibleBounds: boolean?)
+	local boundingBoxCFrame = getPreviewBoundingBox(previewModel, useVisibleBounds)
 	local center = boundingBoxCFrame.Position
 	local currentPivot = previewModel:GetPivot()
 	previewModel:PivotTo(CFrame.new(-center) * currentPivot)
@@ -290,12 +361,12 @@ local function buildBodyPartPreviewSourceModel(
 	return previewModel
 end
 
-local function getBundleCameraCFrame(previewModel: Model, framingPreviewModel: Model?): CFrame
+local function getBundleCameraCFrame(previewModel: Model, framingPreviewModel: Model?, useVisibleBounds: boolean?): CFrame
 	local boundingBoxCFrame, boundingBoxSize
 	if framingPreviewModel then
-		boundingBoxCFrame, boundingBoxSize = framingPreviewModel:GetBoundingBox()
+		boundingBoxCFrame, boundingBoxSize = getPreviewBoundingBox(framingPreviewModel, useVisibleBounds)
 	else
-		boundingBoxCFrame, boundingBoxSize = previewModel:GetBoundingBox()
+		boundingBoxCFrame, boundingBoxSize = getPreviewBoundingBox(previewModel, useVisibleBounds)
 	end
 	local extent = math.max(boundingBoxSize.X, boundingBoxSize.Y, boundingBoxSize.Z, MINIMUM_EXTENT)
 
@@ -331,6 +402,76 @@ local function getPotionCameraCFrame(viewportFrame: ViewportFrame, previewModel:
 	local cameraPosition = baseCameraPosition
 		+ frontVector * POTION_CAMERA_BACK_OFFSET
 		+ Vector3.yAxis * POTION_CAMERA_UP_OFFSET
+
+	return CFrame.lookAt(cameraPosition, focusPoint, Vector3.yAxis)
+end
+
+local function normalizeBossPreviewOptions(options: BossPreviewOptions?): BossPreviewOptions
+	local source = if typeof(options) == "table" then options else {}
+	return {
+		yawDegrees = tonumber(source.yawDegrees) or 0,
+		distanceScale = math.max(0.1, tonumber(source.distanceScale) or BOSS_PREVIEW_DISTANCE_SCALE),
+		focusHeightScale = math.clamp(
+			tonumber(source.focusHeightScale) or BOSS_PREVIEW_FOCUS_HEIGHT_SCALE,
+			0,
+			1
+		),
+		sideAngleDegrees = tonumber(source.sideAngleDegrees) or BOSS_PREVIEW_SIDE_ANGLE_DEGREES,
+	}
+end
+
+local function getBossFrontVector(previewModel: Model): Vector3
+	local root = previewModel:FindFirstChild("HumanoidRootPart", true)
+	local sourceCFrame = if root and root:IsA("BasePart") then root.CFrame else previewModel:GetPivot()
+	local lookVector = Vector3.new(sourceCFrame.LookVector.X, 0, sourceCFrame.LookVector.Z)
+	if lookVector.Magnitude > 0.001 then
+		return lookVector.Unit
+	end
+
+	return Vector3.new(0, 0, -1)
+end
+
+local function alignBossPreviewModel(previewModel: Model, yawDegrees: number?)
+	local function alignBoundsToOrigin()
+		local boundingBoxCFrame, boundingBoxSize = previewModel:GetBoundingBox()
+		local bottomY = boundingBoxCFrame.Position.Y - (boundingBoxSize.Y * 0.5)
+		local currentPivot = previewModel:GetPivot()
+		local offset = Vector3.new(-boundingBoxCFrame.Position.X, -bottomY, -boundingBoxCFrame.Position.Z)
+		previewModel:PivotTo(CFrame.new(offset) * currentPivot)
+	end
+
+	alignBoundsToOrigin()
+
+	local yawRadians = math.rad(tonumber(yawDegrees) or 0)
+	if math.abs(yawRadians) > 0.00001 then
+		local currentPivot = previewModel:GetPivot()
+		previewModel:PivotTo(CFrame.Angles(0, yawRadians, 0) * currentPivot)
+		alignBoundsToOrigin()
+	end
+end
+
+local function getBossPreviewCameraCFrame(
+	viewportFrame: ViewportFrame,
+	previewModel: Model,
+	options: BossPreviewOptions
+): CFrame
+	local boundingBoxCFrame, boundingBoxSize = previewModel:GetBoundingBox()
+	local focusY = boundingBoxCFrame.Position.Y - (boundingBoxSize.Y * 0.5) + (boundingBoxSize.Y * options.focusHeightScale)
+	local focusPoint = Vector3.new(boundingBoxCFrame.Position.X, focusY, boundingBoxCFrame.Position.Z)
+	local frontVector = getBossFrontVector(previewModel)
+	local sideAngleRadians = math.rad(options.sideAngleDegrees or BOSS_PREVIEW_SIDE_ANGLE_DEGREES)
+	local cameraDirection = CFrame.fromAxisAngle(Vector3.yAxis, sideAngleRadians):VectorToWorldSpace(frontVector)
+
+	local viewportSize = viewportFrame.AbsoluteSize
+	local aspectRatio = if viewportSize.Y > 0 then viewportSize.X / viewportSize.Y else 1
+	local verticalFov = math.rad(DEFAULT_FIELD_OF_VIEW)
+	local horizontalFov = 2 * math.atan(math.tan(verticalFov * 0.5) * math.max(aspectRatio, 0.01))
+	local verticalHalfExtent = math.max(boundingBoxSize.Y * 0.5, MINIMUM_EXTENT * 0.5) * BOSS_PREVIEW_MARGIN_SCALE
+	local horizontalHalfExtent = math.max(boundingBoxSize.X, boundingBoxSize.Z, MINIMUM_EXTENT) * 0.5 * BOSS_PREVIEW_MARGIN_SCALE
+	local verticalDistance = verticalHalfExtent / math.tan(verticalFov * 0.5)
+	local horizontalDistance = horizontalHalfExtent / math.tan(horizontalFov * 0.5)
+	local distance = math.max(verticalDistance, horizontalDistance) * (options.distanceScale or BOSS_PREVIEW_DISTANCE_SCALE)
+	local cameraPosition = focusPoint + cameraDirection.Unit * distance
 
 	return CFrame.lookAt(cameraPosition, focusPoint, Vector3.yAxis)
 end
@@ -419,7 +560,8 @@ local function rotateModelAroundCenter(previewModel: Model, deltaRadians: number
 		return true
 	end
 
-	local boundingBoxCFrame = previewModel:GetBoundingBox()
+	local useVisibleBounds = previewModel:GetAttribute(USE_VISIBLE_BOUNDS_ATTRIBUTE) == true
+	local boundingBoxCFrame = getPreviewBoundingBox(previewModel, useVisibleBounds)
 	local center = boundingBoxCFrame.Position
 	local currentPivot = previewModel:GetPivot()
 	previewModel:PivotTo(CFrame.new(center) * CFrame.Angles(0, deltaRadians, 0) * CFrame.new(-center) * currentPivot)
@@ -427,7 +569,14 @@ local function rotateModelAroundCenter(previewModel: Model, deltaRadians: number
 	return true
 end
 
-local function renderModel(viewportFrame: ViewportFrame, sourceModel: Model?, framingModel: Model?, shouldCenterModel: boolean?): boolean
+local function renderModel(
+	viewportFrame: ViewportFrame,
+	sourceModel: Model?,
+	framingModel: Model?,
+	shouldCenterModel: boolean?,
+	shouldFaceViewport: boolean?,
+	useVisibleBounds: boolean?
+): boolean
 	if not (viewportFrame and viewportFrame:IsA("ViewportFrame")) then
 		return false
 	end
@@ -436,11 +585,14 @@ local function renderModel(viewportFrame: ViewportFrame, sourceModel: Model?, fr
 		return false
 	end
 
+	local faceViewport = shouldFaceViewport ~= false
 	local cacheKey = table.concat({
 		"model",
 		getModelCacheToken(sourceModel),
 		getModelCacheToken(framingModel),
 		if shouldCenterModel == true then "centered" else "source",
+		if faceViewport then "face:on" else "face:off",
+		if useVisibleBounds == true then "bounds:visible" else "bounds:all",
 	}, "|")
 	if viewportFrame:GetAttribute(CACHE_KEY_ATTRIBUTE) == cacheKey
 		and viewportFrame.CurrentCamera ~= nil
@@ -455,38 +607,34 @@ local function renderModel(viewportFrame: ViewportFrame, sourceModel: Model?, fr
 	worldModel.Name = "PreviewWorld"
 	worldModel.Parent = viewportFrame
 
-	local previewModel = createPreviewClone(sourceModel, "PreviewModel")
+	local previewModel = createPreviewClone(sourceModel, "PreviewModel", faceViewport)
 	if not previewModel then
 		worldModel:Destroy()
 		return false
+	end
+	if useVisibleBounds == true then
+		previewModel:SetAttribute(USE_VISIBLE_BOUNDS_ATTRIBUTE, true)
 	end
 
 	previewModel.Parent = worldModel
 
 	local framingPreviewModel = nil
 	if framingModel and framingModel:IsA("Model") then
-		framingPreviewModel = createPreviewClone(framingModel, "FramingModel")
+		framingPreviewModel = createPreviewClone(framingModel, "FramingModel", faceViewport)
 	end
 
 	if framingPreviewModel then
 		previewModel:PivotTo(framingPreviewModel:GetPivot())
 	end
 	if shouldCenterModel == true then
-		centerPreviewModel(previewModel)
-	end
-
-	local boundingBoxCFrame, boundingBoxSize
-	if framingPreviewModel then
-		boundingBoxCFrame, boundingBoxSize = framingPreviewModel:GetBoundingBox()
-	else
-		boundingBoxCFrame, boundingBoxSize = previewModel:GetBoundingBox()
+		centerPreviewModel(previewModel, useVisibleBounds)
 	end
 
 	local camera = Instance.new("Camera")
 	camera.Name = "PreviewCamera"
 	camera.FieldOfView = DEFAULT_FIELD_OF_VIEW
 	camera.Parent = viewportFrame
-	camera.CFrame = getBundleCameraCFrame(previewModel, framingPreviewModel)
+	camera.CFrame = getBundleCameraCFrame(previewModel, framingPreviewModel, useVisibleBounds)
 
 	if framingPreviewModel then
 		framingPreviewModel:Destroy()
@@ -775,6 +923,62 @@ local function renderPotion(viewportFrame: ViewportFrame, sourceModel: Model?): 
 	return true
 end
 
+local function renderBossPreview(
+	viewportFrame: ViewportFrame,
+	sourceModel: Model?,
+	options: BossPreviewOptions?
+): boolean
+	if not (viewportFrame and viewportFrame:IsA("ViewportFrame")) then
+		return false
+	end
+	if not (sourceModel and sourceModel:IsA("Model")) then
+		clearViewport(viewportFrame)
+		return false
+	end
+
+	local resolvedOptions = normalizeBossPreviewOptions(options)
+	local cacheKey = table.concat({
+		"bossPreview",
+		getModelCacheToken(sourceModel),
+		string.format("yaw:%.3f", resolvedOptions.yawDegrees or 0),
+		string.format("distance:%.3f", resolvedOptions.distanceScale or BOSS_PREVIEW_DISTANCE_SCALE),
+		string.format("focus:%.3f", resolvedOptions.focusHeightScale or BOSS_PREVIEW_FOCUS_HEIGHT_SCALE),
+		string.format("side:%.3f", resolvedOptions.sideAngleDegrees or BOSS_PREVIEW_SIDE_ANGLE_DEGREES),
+	}, "|")
+	if viewportFrame:GetAttribute(CACHE_KEY_ATTRIBUTE) == cacheKey
+		and viewportFrame.CurrentCamera ~= nil
+		and viewportFrame:FindFirstChild("PreviewWorld") ~= nil
+	then
+		return true
+	end
+
+	clearViewport(viewportFrame)
+
+	local worldModel = Instance.new("WorldModel")
+	worldModel.Name = "PreviewWorld"
+	worldModel.Parent = viewportFrame
+
+	local previewModel = createPreviewClone(sourceModel, "BossPreviewModel", false)
+	if not previewModel then
+		worldModel:Destroy()
+		return false
+	end
+
+	alignBossPreviewModel(previewModel, resolvedOptions.yawDegrees)
+	previewModel.Parent = worldModel
+
+	local camera = Instance.new("Camera")
+	camera.Name = "PreviewCamera"
+	camera.FieldOfView = DEFAULT_FIELD_OF_VIEW
+	camera.Parent = viewportFrame
+	camera.CFrame = getBossPreviewCameraCFrame(viewportFrame, previewModel, resolvedOptions)
+
+	applyViewportLighting(viewportFrame, camera)
+	viewportFrame:SetAttribute(CACHE_KEY_ATTRIBUTE, cacheKey)
+
+	return true
+end
+
 function ViewportModelRenderer.Clear(viewportFrame: ViewportFrame)
 	clearViewport(viewportFrame)
 end
@@ -900,11 +1104,19 @@ function ViewportModelRenderer.RenderBundle(viewportFrame: ViewportFrame, bundle
 end
 
 function ViewportModelRenderer.RenderCenteredBundle(viewportFrame: ViewportFrame, bundleModel: Model?): boolean
-	return renderModel(viewportFrame, bundleModel, nil, true)
+	return renderModel(viewportFrame, bundleModel, nil, true, false, true)
 end
 
 function ViewportModelRenderer.RenderPotion(viewportFrame: ViewportFrame, potionModel: Model?): boolean
 	return renderPotion(viewportFrame, potionModel)
+end
+
+function ViewportModelRenderer.RenderBossPreview(
+	viewportFrame: ViewportFrame,
+	bossModel: Model?,
+	options: BossPreviewOptions?
+): boolean
+	return renderBossPreview(viewportFrame, bossModel, options)
 end
 
 function ViewportModelRenderer.RenderCharacterModel(viewportFrame: ViewportFrame, characterModel: Model?, framingModel: Model?): boolean

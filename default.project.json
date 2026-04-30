@@ -197,6 +197,9 @@
         "DayNightCycleService": {
           "$path": "src/game/ServerScriptService/Services/Gameplay/DayNightCycleService.lua"
         },
+        "BossWorldGuideService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/BossWorldGuideService.lua"
+        },
         "DashService": {
           "$path": "src/game/ServerScriptService/Services/Gameplay/DashService.lua"
         },
@@ -409,6 +412,9 @@
           },
           "ObjectiveGuideController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/ObjectiveGuideController.lua"
+          },
+          "BossWorldGuideController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/BossWorldGuideController.lua"
           },
           "TutorialController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/TutorialController.lua"

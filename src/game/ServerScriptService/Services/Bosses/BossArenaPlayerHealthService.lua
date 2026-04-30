@@ -175,8 +175,15 @@ local function disconnectConnection(connection: RBXScriptConnection?)
 	end
 end
 
-local function isCombatHudActive(): boolean
-	return BossArenaRuntimeService:GetBossHealthState() ~= nil
+local function isCombatHudActive(rosterUserIds: { number }): boolean
+	if BossArenaRuntimeService:HasActiveEncounter() ~= true then
+		return false
+	end
+	if #rosterUserIds <= 0 then
+		return false
+	end
+
+	return BossArenaRuntimeService:GetBossResultsState(nil) == nil
 end
 
 function BossArenaPlayerHealthService:_buildHealthEntry(userId: number): PlayerHealthEntry?
@@ -217,7 +224,7 @@ function BossArenaPlayerHealthService:_buildHealthState(): PlayerHealthState
 	end
 
 	return {
-		active = isCombatHudActive(),
+		active = isCombatHudActive(rosterUserIds),
 		roster = roster,
 		serverTime = Workspace:GetServerTimeNow(),
 	}

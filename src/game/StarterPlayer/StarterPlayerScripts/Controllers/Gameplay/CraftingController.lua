@@ -11,6 +11,7 @@ local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catal
 local CraftingMaterialConfig = require(ReplicatedStorage.Shared.Config.CraftingMaterialConfig)
 local CraftingRecipeConfig = require(ReplicatedStorage.Shared.Config.CraftingRecipeConfig)
 local TutorialConfig = require(ReplicatedStorage.Shared.Config.TutorialConfig)
+local BossRewards = require(ReplicatedStorage.Shared.BossArena.BossRewards)
 local CraftingProgress = require(ReplicatedStorage.Shared.Character.CraftingProgress)
 local BodyPartLoadout = require(ReplicatedStorage.Shared.Character.BodyPartLoadout)
 local OwnedAccessories = require(ReplicatedStorage.Shared.Character.OwnedAccessories)
@@ -55,6 +56,13 @@ local VIEWPORT_ROTATION_SPEED_RADIANS = math.rad(24)
 local ITEM_STAT_ROW_PREFIX = "CraftingItemStat_"
 local SELECT_PART_PREFIX = "CraftingSelectPart_"
 local INGREDIENT_ROW_PREFIX = "CraftingIngredient_"
+local BOSS_LOOT_MARKER_TEXT = "REQUIRES BOSS LOOT"
+local ITEM_STAT_TEXT_REFERENCE_PARENT_HEIGHT = 295
+local ITEM_STAT_TEXT_REFERENCE_SIZE = 15
+local ITEM_STAT_MIN_TEXT_SIZE = 6
+local ITEM_STAT_MAX_TEXT_SIZE = 18
+local ITEM_STAT_ROW_PADDING_SCALE = 0.3
+local ITEM_STAT_LAYOUT_PADDING_SCALE = 0.13
 local AUTO_ON_COLOR = Color3.fromRGB(86, 220, 116)
 local AUTO_OFF_COLOR = Color3.fromRGB(255, 255, 255)
 local SELECT_PART_SELECTED_OUTLINE_COLOR = Color3.fromRGB(116, 192, 255)
@@ -127,6 +135,7 @@ local CraftingController = {
 	_requestInFlight = false,
 	_promptConnection = nil :: RBXScriptConnection?,
 	_searchConnection = nil :: RBXScriptConnection?,
+	_itemDescriptionSizeConnection = nil :: RBXScriptConnection?,
 	_viewportRotationConnection = nil :: RBXScriptConnection?,
 	_helpMenuCloseConnection = nil :: RBXScriptConnection?,
 	_ui = nil :: CraftingUi?,
@@ -293,6 +302,89 @@ local function applySelectPartOutline(button: GuiButton, isSelected: boolean)
 	stroke.Enabled = isSelected
 end
 
+local cachedBossLootSetIds = nil :: { [string]: boolean }?
+local cachedBossLootMaterialIds = nil :: { [string]: boolean }?
+
+local function getBossLootLookups(): ({ [string]: boolean }, { [string]: boolean })
+	if cachedBossLootSetIds and cachedBossLootMaterialIds then
+		return cachedBossLootSetIds, cachedBossLootMaterialIds
+	end
+
+	local setIds = {}
+	local materialIds = {}
+	for _, profile in ipairs(BossRewards.GetAllBossRewardProfiles()) do
+		if typeof(profile) == "table" then
+			if typeof(profile.bossSetId) == "string" and profile.bossSetId ~= "" then
+				setIds[profile.bossSetId] = true
+			end
+
+			if typeof(profile.bossId) == "string" and profile.bossId ~= "" then
+				for _, drop in ipairs(BossRewards.GetBossMaterialDrops(profile.bossId)) do
+					if typeof(drop) == "table" and typeof(drop.materialId) == "string" and drop.materialId ~= "" then
+						materialIds[drop.materialId] = true
+					end
+				end
+			end
+		end
+	end
+
+	cachedBossLootSetIds = table.freeze(setIds)
+	cachedBossLootMaterialIds = table.freeze(materialIds)
+	return cachedBossLootSetIds, cachedBossLootMaterialIds
+end
+
+local function recipeRequiresBossLoot(recipe: any): boolean
+	if typeof(recipe) ~= "table" then
+		return false
+	end
+
+	local bossSetIds, bossMaterialIds = getBossLootLookups()
+	for _, ingredient in ipairs(if typeof(recipe.bodyParts) == "table" then recipe.bodyParts else {}) do
+		if typeof(ingredient) == "table" then
+			if typeof(ingredient.setId) == "string" and bossSetIds[ingredient.setId] == true then
+				return true
+			end
+
+			if typeof(ingredient.pieceId) == "string" then
+				local piece = BodyPartsCatalog.GetPiece(ingredient.pieceId)
+				if piece and bossSetIds[piece.setId] == true then
+					return true
+				end
+			end
+		end
+	end
+
+	for _, ingredient in ipairs(if typeof(recipe.materials) == "table" then recipe.materials else {}) do
+		if
+			typeof(ingredient) == "table"
+			and typeof(ingredient.materialId) == "string"
+			and bossMaterialIds[ingredient.materialId] == true
+		then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function escapeRichText(value: string): string
+	return (string.gsub(string.gsub(string.gsub(value, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"))
+end
+
+local function formatRecipeDescription(recipe: any, richText: boolean?): string
+	local description = tostring(if typeof(recipe) == "table" then recipe.description or "" else "")
+	if not recipeRequiresBossLoot(recipe) then
+		return if richText then escapeRichText(description) else description
+	end
+
+	local markerText = if richText then string.format("<i>%s</i>", BOSS_LOOT_MARKER_TEXT) else BOSS_LOOT_MARKER_TEXT
+	if description == "" then
+		return markerText
+	end
+
+	return string.format("%s\n%s", if richText then escapeRichText(description) else description, markerText)
+end
+
 local function ensureItemStatLayout(container: TextLabel): UIListLayout
 	local layout = container:FindFirstChild("CraftingItemStatLayout")
 	if layout and layout:IsA("UIListLayout") then
@@ -315,12 +407,60 @@ local function clearRecipeItemStatRows(container: TextLabel)
 	hideGeneratedChildren(container, ITEM_STAT_ROW_PREFIX)
 end
 
+local function getGuiParentHeight(container: TextLabel): number
+	local parent = container.Parent
+	if parent and parent:IsA("GuiObject") and parent.AbsoluteSize.Y > 0 then
+		return parent.AbsoluteSize.Y
+	end
+
+	if container.Size.Y.Scale > 0 and container.AbsoluteSize.Y > 0 then
+		return container.AbsoluteSize.Y / container.Size.Y.Scale
+	end
+
+	return container.AbsoluteSize.Y
+end
+
+local function getRecipeItemStatContainerHeight(container: TextLabel): number
+	if container.AbsoluteSize.Y > 0 then
+		return container.AbsoluteSize.Y
+	end
+
+	return getGuiParentHeight(container) * math.max(container.Size.Y.Scale, 0)
+end
+
+local function getRecipeItemStatTextSize(container: TextLabel, rowHeight: number): number
+	local parentHeight = getGuiParentHeight(container)
+	local fallbackTextSize = math.clamp(container.TextSize + 1, ITEM_STAT_MIN_TEXT_SIZE, ITEM_STAT_MAX_TEXT_SIZE)
+	if parentHeight <= 0 then
+		return math.min(fallbackTextSize, math.max(rowHeight, 1))
+	end
+
+	local textSize = parentHeight * (ITEM_STAT_TEXT_REFERENCE_SIZE / ITEM_STAT_TEXT_REFERENCE_PARENT_HEIGHT)
+	local fitTextSize = rowHeight / (1 + ITEM_STAT_ROW_PADDING_SCALE)
+	local resolvedTextSize = math.min(textSize, fitTextSize)
+	return math.clamp(math.floor(resolvedTextSize + 0.5), ITEM_STAT_MIN_TEXT_SIZE, ITEM_STAT_MAX_TEXT_SIZE)
+end
+
 local function renderRecipeItemStatRows(container: TextLabel, rows: { any })
 	clearRecipeItemStatRows(container)
-	ensureItemStatLayout(container)
+	container.ClipsDescendants = true
+	local layout = ensureItemStatLayout(container)
 
-	local statTextSize = container.TextSize + 1
-	local rowHeight = math.max(18, math.ceil(statTextSize + 4))
+	local rowCount = #rows
+	if rowCount <= 0 then
+		layout.Padding = UDim.new(0, 0)
+		return
+	end
+
+	local containerHeight = getRecipeItemStatContainerHeight(container)
+	local layoutPadding = if rowCount > 1
+		then math.max(0, math.floor((math.min(containerHeight / rowCount, ITEM_STAT_TEXT_REFERENCE_SIZE) * ITEM_STAT_LAYOUT_PADDING_SCALE) + 0.5))
+		else 0
+	local totalPadding = layoutPadding * math.max(rowCount - 1, 0)
+	local rowHeight = math.max(1, math.floor((math.max(containerHeight - totalPadding, rowCount)) / rowCount))
+	local statTextSize = getRecipeItemStatTextSize(container, rowHeight)
+	layout.Padding = UDim.new(0, layoutPadding)
+
 	for index, rowData in ipairs(rows) do
 		local row = Instance.new("Frame")
 		row.Name = string.format("%s%03d", ITEM_STAT_ROW_PREFIX, index)
@@ -336,11 +476,13 @@ local function renderRecipeItemStatRows(container: TextLabel, rows: { any })
 		statLabel.BackgroundTransparency = 1
 		statLabel.BorderSizePixel = 0
 		statLabel.FontFace = container.FontFace
-		statLabel.RichText = false
+		statLabel.RichText = rowData.richText == true
 		statLabel.Position = UDim2.fromOffset(0, 0)
 		statLabel.Size = UDim2.new(1, 0, 1, 0)
-		statLabel.Text = string.format("%s %s", rowData.valueText, rowData.labelText)
-		statLabel.TextColor3 = rowData.color
+		statLabel.Text = if typeof(rowData.text) == "string"
+			then rowData.text
+			else string.format("%s %s", rowData.valueText, rowData.labelText)
+		statLabel.TextColor3 = rowData.color or container.TextColor3
 		statLabel.TextSize = statTextSize
 		statLabel.TextTransparency = container.TextTransparency
 		statLabel.TextTruncate = Enum.TextTruncate.AtEnd
@@ -391,6 +533,66 @@ local function applyRecipeRowColor(row: ImageButton, color: Color3?)
 	end
 end
 
+local PERCENT_DELTA_BONUS_KEYS = table.freeze({
+	"luckBonus",
+	"rollSpeedBonus",
+})
+
+local PERCENT_MULTIPLIER_BONUS_KEYS = table.freeze({
+	"luckMultiplier",
+	"passiveIncomeMultiplier",
+	"damageMultiplier",
+	"healthMultiplier",
+	"speedMultiplier",
+})
+
+local function getRecipeAccessoryConfig(recipe: any): AccessoryConfig.AccessoryConfigEntry?
+	local recipeYield = if typeof(recipe) == "table" then recipe.yield else nil
+	if typeof(recipeYield) ~= "table" or recipeYield.kind ~= "accessory" then
+		return nil
+	end
+
+	return AccessoryConfig.Get(recipeYield.accessoryId)
+end
+
+local function addPositiveScore(score: number, value: any): number
+	local numericValue = tonumber(value)
+	if not numericValue or numericValue <= 0 then
+		return score
+	end
+
+	return score + numericValue
+end
+
+local function getAccessoryStatScore(config: AccessoryConfig.AccessoryConfigEntry?): number?
+	local bonuses = if config and typeof(config.bonuses) == "table" then config.bonuses else nil
+	if not bonuses then
+		return nil
+	end
+
+	local score = 0
+	for _, key in ipairs(PERCENT_DELTA_BONUS_KEYS) do
+		score = addPositiveScore(score, (tonumber(bonuses[key]) or 0) * 100)
+	end
+	for _, key in ipairs(PERCENT_MULTIPLIER_BONUS_KEYS) do
+		local value = tonumber(bonuses[key])
+		if value and value > 1 then
+			score += (value - 1) * 100
+		end
+	end
+
+	return score
+end
+
+local function getRecipeAccessoryStatScore(recipe: any): number?
+	return getAccessoryStatScore(getRecipeAccessoryConfig(recipe))
+end
+
+local function getRecipeAccessorySellPrice(recipe: any): number
+	local config = getRecipeAccessoryConfig(recipe)
+	return math.max(0, math.floor(tonumber(config and config.sellPrice) or 0))
+end
+
 local function cloneRecipeEntries(entries: any): { any }
 	local results = {}
 	if typeof(entries) == "table" then
@@ -408,6 +610,20 @@ local function cloneRecipeEntries(entries: any): { any }
 	end
 
 	table.sort(results, function(left, right)
+		local leftScore = getRecipeAccessoryStatScore(left)
+		local rightScore = getRecipeAccessoryStatScore(right)
+		if leftScore ~= nil and rightScore ~= nil then
+			if leftScore ~= rightScore then
+				return leftScore < rightScore
+			end
+
+			local leftSellPrice = getRecipeAccessorySellPrice(left)
+			local rightSellPrice = getRecipeAccessorySellPrice(right)
+			if leftSellPrice ~= rightSellPrice then
+				return leftSellPrice < rightSellPrice
+			end
+		end
+
 		local leftOrder = math.floor(tonumber(left.sortOrder) or 0)
 		local rightOrder = math.floor(tonumber(right.sortOrder) or 0)
 		if leftOrder ~= rightOrder then
@@ -889,6 +1105,7 @@ function CraftingController:_ensureUi(): CraftingUi
 		self._ui.itemDescription.TextYAlignment = Enum.TextYAlignment.Top
 		renderRecipeItemStatRows(self._ui.itemDescription, {})
 	end
+	self:_bindItemDescriptionSizeRefresh()
 
 	if self._ui.storeButton then
 		self._ui.storeButton.Visible = false
@@ -975,6 +1192,25 @@ function CraftingController:_ensureUi(): CraftingUi
 	end
 
 	return self._ui
+end
+
+function CraftingController:_bindItemDescriptionSizeRefresh()
+	if self._itemDescriptionSizeConnection then
+		self._itemDescriptionSizeConnection:Disconnect()
+		self._itemDescriptionSizeConnection = nil
+	end
+
+	local ui = self._ui
+	local itemDescription = ui and ui.itemDescription
+	if not itemDescription then
+		return
+	end
+
+	self._itemDescriptionSizeConnection = itemDescription:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		if self._isOpen then
+			self:_syncDetail()
+		end
+	end)
 end
 
 function CraftingController:_ensureRemotes(): boolean
@@ -1141,10 +1377,13 @@ function CraftingController:_recipeMatchesSearch(recipe: any, query: string): bo
 	local yieldLabel, typeLabel = getYieldInfo(recipe)
 	local searchableParts = {
 		tostring(recipe.label or ""),
-		tostring(recipe.description or ""),
+		formatRecipeDescription(recipe, false),
 		yieldLabel,
 		typeLabel,
 	}
+	if recipeRequiresBossLoot(recipe) then
+		table.insert(searchableParts, BOSS_LOOT_MARKER_TEXT)
+	end
 
 	for _, ingredient in ipairs(if typeof(recipe.bodyParts) == "table" then recipe.bodyParts else {}) do
 		table.insert(searchableParts, getBodyPartIngredientLabel(ingredient))
@@ -1239,7 +1478,8 @@ function CraftingController:_syncRecipeRows()
 			nameLabel.Text = tostring(recipe.label or yieldLabel)
 		end
 		if descriptionLabel then
-			descriptionLabel.Text = tostring(recipe.description or "")
+			descriptionLabel.RichText = true
+			descriptionLabel.Text = formatRecipeDescription(recipe, true)
 		end
 		if typeLabelInstance then
 			typeLabelInstance.Text = typeLabel
@@ -1427,7 +1667,15 @@ function CraftingController:_syncDetail()
 	local canCraft = self:_getCraftability(recipe)
 	ui.itemName.Text = yieldLabel
 	if ui.itemDescription then
-		renderRecipeItemStatRows(ui.itemDescription, buildRecipeItemStatRows(recipe))
+		local itemStatRows = buildRecipeItemStatRows(recipe)
+		if recipeRequiresBossLoot(recipe) then
+			table.insert(itemStatRows, {
+				text = string.format("<i>%s</i>", BOSS_LOOT_MARKER_TEXT),
+				richText = true,
+				color = ui.itemDescription.TextColor3,
+			})
+		end
+		renderRecipeItemStatRows(ui.itemDescription, itemStatRows)
 	end
 	self:_setCraftButtonText(recipe)
 	self:_syncRequirements(recipe)
@@ -2179,6 +2427,7 @@ function CraftingController:_openCraftingMenu(prompt: ProximityPrompt)
 		blurSize = 0,
 		backdropTransparency = 0.9,
 		crispContent = true,
+		preserveRootLayout = true,
 	})
 	ObjectiveGuideController.ClearObjective("crafting")
 end

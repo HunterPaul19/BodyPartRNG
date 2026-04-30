@@ -19,6 +19,8 @@ export type BossQueueTeleportPayload = {
 	queueSize: number,
 	enqueuedAtUnix: number,
 	potionEffectsByUserId: BossQueuePotionEffectsByUserId?,
+	sourceFlow: string?,
+	bossHealthMultiplier: number?,
 }
 
 local BossQueueTeleportPayload = {}
@@ -160,6 +162,8 @@ function BossQueueTeleportPayload.Normalize(payload: any): (BossQueueTeleportPay
 
 	local queueSize = #queuedUserIds
 	local potionEffectsByUserId = normalizePotionEffectsByUserId(payload.potionEffectsByUserId, queuedUserIds)
+	local sourceFlow = normalizeString(payload.sourceFlow)
+	local bossHealthMultiplier = tonumber(payload.bossHealthMultiplier)
 
 	return {
 		version = version,
@@ -170,6 +174,8 @@ function BossQueueTeleportPayload.Normalize(payload: any): (BossQueueTeleportPay
 		queueSize = queueSize,
 		enqueuedAtUnix = enqueuedAtUnix,
 		potionEffectsByUserId = potionEffectsByUserId,
+		sourceFlow = if sourceFlow ~= "" then sourceFlow else nil,
+		bossHealthMultiplier = if bossHealthMultiplier ~= nil and bossHealthMultiplier > 0 then bossHealthMultiplier else nil,
 	}, nil
 end
 
@@ -179,7 +185,9 @@ function BossQueueTeleportPayload.Build(
 	portalId: string,
 	queuedUserIds: { number },
 	enqueuedAtUnix: number,
-	potionEffectsByUserId: BossQueuePotionEffectsByUserId?
+	potionEffectsByUserId: BossQueuePotionEffectsByUserId?,
+	sourceFlow: string?,
+	bossHealthMultiplier: number?
 ): (BossQueueTeleportPayload?, string?)
 	return BossQueueTeleportPayload.Normalize({
 		version = BossQueueConstants.PayloadVersion,
@@ -190,6 +198,8 @@ function BossQueueTeleportPayload.Build(
 		queueSize = if typeof(queuedUserIds) == "table" then #queuedUserIds else 0,
 		enqueuedAtUnix = enqueuedAtUnix,
 		potionEffectsByUserId = potionEffectsByUserId,
+		sourceFlow = sourceFlow,
+		bossHealthMultiplier = bossHealthMultiplier,
 	})
 end
 

@@ -8,7 +8,9 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Animation = require(ReplicatedStorage.Shared.Animation)
+local MinionDeathPresentation = require(ReplicatedStorage.Shared.Bosses.MinionDeathPresentation)
 local MinionDisplay = require(ReplicatedStorage.Shared.Bosses.MinionDisplay)
+local MinionHitboxCollider = require(ReplicatedStorage.Shared.Bosses.MinionHitboxCollider)
 local MinionM1Animation = require(ReplicatedStorage.Shared.Bosses.MinionM1Animation)
 local CreateExplicitBossMoveStub = require(ReplicatedStorage.Shared.Bosses.Moves.Common.CreateExplicitBossMoveStub)
 local CombatMoveUtil = require(ReplicatedStorage.Shared.Combat.CombatMoveUtil)
@@ -655,10 +657,8 @@ function WarCall.StartCast(context)
 
 		table.insert(minionConnections, humanoid.Died:Connect(function()
 			removeMinion(minionModel)
-			task.defer(function()
-				if minionModel.Parent ~= nil then
-					minionModel:Destroy()
-				end
+			local destroyDelaySeconds = MinionDeathPresentation.PlayAndDestroy(minionModel)
+			task.delay(destroyDelaySeconds + 0.05, function()
 				destroyMinionsFolderIfEmpty()
 			end)
 		end))
@@ -743,11 +743,13 @@ function WarCall.StartCast(context)
 
 			humanoid.MaxHealth = MINION_MAX_HEALTH
 			humanoid.Health = MINION_MAX_HEALTH
+			humanoid.BreakJointsOnDeath = false
 			humanoid.WalkSpeed = MINION_WALK_SPEED
 			humanoid.AutoRotate = true
 			MinionDisplay.ConfigureHumanoid(humanoid, MINION_DISPLAY_NAME)
 			minionModel:PivotTo(CFrame.lookAt(spawnPosition, lookTarget))
 			minionModel.Parent = minionsFolder
+			MinionHitboxCollider.Attach(minionModel, rootPart)
 			setServerNetworkOwnership(minionModel)
 
 			activeMinions[minionModel] = true

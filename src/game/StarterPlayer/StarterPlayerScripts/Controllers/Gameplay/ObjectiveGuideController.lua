@@ -20,8 +20,10 @@ type ObjectiveOptions = {
 	arrivalRadius: number?,
 	color: Color3?,
 	fallbackTargetPath: string?,
+	fallbackTargetPaths: { string }?,
 	heightOffset: number?,
 	beamWidth: number?,
+	projectTargetToGround: boolean?,
 }
 
 type ActiveObjective = {
@@ -175,6 +177,22 @@ local function getCharacterRoot(): BasePart?
 	return if root and root:IsA("BasePart") then root else nil
 end
 
+local function getCharacterTorso(): BasePart?
+	local character = LOCAL_PLAYER.Character
+	if not (character and character:IsA("Model")) then
+		return nil
+	end
+
+	for _, partName in ipairs({ "UpperTorso", "Torso", "LowerTorso" }) do
+		local part = character:FindFirstChild(partName)
+		if part and part:IsA("BasePart") then
+			return part
+		end
+	end
+
+	return getCharacterRoot()
+end
+
 local function findPositionSource(instance: Instance): Instance?
 	if instance:IsA("BasePart") or instance:IsA("Attachment") then
 		return instance
@@ -249,6 +267,21 @@ local function isTargetEnabled(targetInstance: Instance?): boolean
 
 	local enabled = targetInstance:GetAttribute(ObjectiveGuideConfig.Attributes.Enabled)
 	return enabled ~= false
+end
+
+local function collectFallbackTargetPaths(options: ObjectiveOptions): { string }
+	local paths = {}
+	if typeof(options.fallbackTargetPath) == "string" and options.fallbackTargetPath ~= "" then
+		table.insert(paths, options.fallbackTargetPath)
+	end
+	if typeof(options.fallbackTargetPaths) == "table" then
+		for _, path in ipairs(options.fallbackTargetPaths) do
+			if typeof(path) == "string" and path ~= "" then
+				table.insert(paths, path)
+			end
+		end
+	end
+	return paths
 end
 
 function ObjectiveGuideController:_ensureParts()
@@ -363,8 +396,7 @@ function ObjectiveGuideController:_resolveTargetPosition(objective: ActiveObject
 			return getInstancePosition(resolved), resolved
 		end
 
-		local fallbackPath = objective.options.fallbackTargetPath
-		if typeof(fallbackPath) == "string" and fallbackPath ~= "" then
+		for _, fallbackPath in ipairs(collectFallbackTargetPaths(objective.options)) do
 			local fallback = resolveInstancePath(fallbackPath)
 			if fallback then
 				warnOnce(self, "fallback:" .. target, string.format(
@@ -391,8 +423,8 @@ function ObjectiveGuideController:_render()
 
 	self:_ensureParts()
 
-	local rootPart = getCharacterRoot()
-	if rootPart == nil then
+	local torsoPart = getCharacterTorso()
+	if torsoPart == nil then
 		self:_hideParts()
 		return
 	end
@@ -404,8 +436,9 @@ function ObjectiveGuideController:_render()
 	end
 
 	local heightOffset = readPositiveNumber(objective.options.heightOffset, ObjectiveGuideConfig.DefaultHeightOffset)
-	local startPosition = self:_projectToGround(rootPart.Position, heightOffset)
-	local endPosition = self:_projectToGround(targetPosition, heightOffset)
+	local projectTargetToGround = objective.options.projectTargetToGround ~= false
+	local startPosition = torsoPart.Position
+	local endPosition = if projectTargetToGround then self:_projectToGround(targetPosition, heightOffset) else targetPosition
 	local offset = endPosition - startPosition
 	local planarOffset = Vector3.new(offset.X, 0, offset.Z)
 	local distance = planarOffset.Magnitude
@@ -424,6 +457,15 @@ function ObjectiveGuideController:_render()
 
 	local beamStart = startPosition + forward * 3
 	local beamEnd = beamStart + forward * visibleLength
+	if projectTargetToGround then
+		beamEnd = Vector3.new(beamEnd.X, endPosition.Y, beamEnd.Z)
+	else
+		local targetOffset = endPosition - beamStart
+		local targetPlanarDistance = Vector3.new(targetOffset.X, 0, targetOffset.Z).Magnitude
+		if targetPlanarDistance > 0.1 then
+			beamEnd = beamStart:Lerp(endPosition, math.clamp(visibleLength / targetPlanarDistance, 0, 1))
+		end
+	end
 	local beamLength = (beamEnd - beamStart).Magnitude
 	local color = getObjectiveColor(objective, targetInstance)
 	local requestedBeamWidth = objective.options.beamWidth

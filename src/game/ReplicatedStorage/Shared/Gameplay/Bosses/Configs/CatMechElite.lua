@@ -10,7 +10,7 @@ local RainbowBlast = require(ReplicatedStorage.Shared.Bosses.Moves.CatMechElite.
 return BossConfigFactory.Create({
 	bossId = "Cat Mech Elite",
 	arenaId = "Sakura",
-	recommendedCombatScore = 10000,
+	recommendedCombatScore = 150000,
 	baseHealth = 780000,
 	walkSpeed = 15,
 	aggroRadius = 120,

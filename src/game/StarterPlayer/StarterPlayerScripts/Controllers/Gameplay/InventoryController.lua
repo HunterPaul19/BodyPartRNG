@@ -142,7 +142,6 @@ local MATERIAL_PREVIEW_VISIBLE_LABEL_ORDER = table.freeze({
 	"Part",
 	"Rarity",
 	"Mutation",
-	"Content",
 	"Cash",
 })
 local ACCESSORY_PREVIEW_VISIBLE_LABEL_ORDER = table.freeze({
@@ -3077,12 +3076,12 @@ function InventoryController:_syncSummaryLabels()
 	TranslationHelper.setLiteralText(self._ui.rollSpeedLabel, summaryTexts.rollSpeed)
 	if self._ui.powerLabel and self._ui.powerLabel:IsA("TextLabel") then
 		local basePlayerStats = BodyPartsCatalog.GetBasePlayerStats()
-		local combatPower = CombatPower.Calculate({
+		local combatPower = CombatPower.CalculateAboveBase({
 			damage = math.max(0, tonumber(loadoutBonuses.damage) or tonumber(basePlayerStats.damage) or 20),
 			health = math.max(1, tonumber(loadoutBonuses.health) or tonumber(basePlayerStats.health) or 100),
 			speed = math.max(0, tonumber(loadoutBonuses.speed) or tonumber(basePlayerStats.speed) or 16)
 				* resolvePremiumMovementSpeedMultiplier(),
-		})
+		}, basePlayerStats)
 		local templateText = self._powerLabelNativeText or self._ui.powerLabel.Text
 		TranslationHelper.setLiteralText(
 			self._ui.powerLabel,

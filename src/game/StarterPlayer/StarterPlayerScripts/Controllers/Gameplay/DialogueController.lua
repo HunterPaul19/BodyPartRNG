@@ -17,10 +17,12 @@ local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local DIALOGUE_PANEL_NAME = "Dialogue"
+local APPRAISAL_FRAME_NAME = "AppraisalUI"
 local DEFAULT_SHOP_FRAME_NAME = "ShopUI"
 local FRAME_CLOSE_DELAY = FrameController.CloseTween.Time
 local PANEL_CLOSE_DELAY = 0.12
 local TYPEWRITER_GRAPHEMES_PER_SECOND = 45
+local APPRAISAL_DIALOGUE_OPEN_COLOR = Color3.fromRGB(113, 230, 139)
 
 type DialogueDefinition = DialogueDefinitions.DialogueDefinition
 type DialogueNode = DialogueDefinitions.DialogueNode
@@ -96,6 +98,22 @@ local function getGraphemeCount(text: string): number
 	end
 
 	return string.len(text)
+end
+
+local function isAppraisalOpenChoice(choice: DialogueChoice): boolean
+	local action = choice.action
+	return action ~= nil and action.type == "openFrame" and action.frameName == APPRAISAL_FRAME_NAME
+end
+
+local function styleAppraisalOpenButton(button: ImageButton)
+	button.ImageColor3 = APPRAISAL_DIALOGUE_OPEN_COLOR
+
+	for _, childName in ipairs({ "Cover", "Cover2", "Rays" }) do
+		local child = button:FindFirstChild(childName)
+		if child and child:IsA("ImageLabel") then
+			child.ImageColor3 = APPRAISAL_DIALOGUE_OPEN_COLOR
+		end
+	end
 end
 
 local ConditionPredicates: { [string]: (context: { [string]: any }?) -> boolean } = {
@@ -428,6 +446,11 @@ function DialogueController:_createChoiceButton(choice: DialogueChoice, disabled
 	button.ImageTransparency = 0
 	content.TextTransparency = 0
 	content.Text = choice.text
+
+	if isAppraisalOpenChoice(choice) then
+		styleAppraisalOpenButton(button)
+	end
+
 	button.Parent = ui.scrollingFrame
 
 	if disabled then

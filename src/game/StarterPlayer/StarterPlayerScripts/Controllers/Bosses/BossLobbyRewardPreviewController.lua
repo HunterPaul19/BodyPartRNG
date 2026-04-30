@@ -7,9 +7,10 @@ local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresent
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local BossRewards = require(ReplicatedStorage.Shared.BossArena.BossRewards)
 local BossQueueConstants = require(ReplicatedStorage.Shared.BossQueue.Constants)
+local CraftingMaterialConfig = require(ReplicatedStorage.Shared.Config.CraftingMaterialConfig)
 local GameAssetPaths = require(ReplicatedStorage.Shared.Assets.GameAssetPaths)
 local GameAssetResolver = require(ReplicatedStorage.Shared.Assets.GameAssetResolver)
-local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
+local MaterialPresentation = require(ReplicatedStorage.Shared.UI.MaterialPresentation)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
@@ -20,6 +21,15 @@ local SHOW_RADIUS_STUDS = 67.5
 local HIDE_RADIUS_STUDS = 77.5
 local HITBOX_HIDE_PADDING_STUDS = 10
 local REFRESH_INTERVAL_SECONDS = 0.1
+local DEFAULT_MATERIAL_COLOR = Color3.fromRGB(172, 180, 190)
+local MATERIAL_ICON_NAME = "BossRewardMaterialIcon"
+local DEFAULT_BOSS_PREVIEW_OPTIONS = table.freeze({
+	yawDegrees = 0,
+	distanceScale = 1.05,
+	focusHeightScale = 0.5,
+	sideAngleDegrees = 24,
+})
+local BOSS_PREVIEW_OVERRIDES = table.freeze({})
 
 type PortalRecord = {
 	instance: Model,
@@ -115,6 +125,67 @@ local function findViewport(root: Instance, name: string): ViewportFrame?
 	return if instance and instance:IsA("ViewportFrame") then instance else nil
 end
 
+local function getOrCreateMaterialIcon(viewport: ViewportFrame): ImageLabel
+	local existing = viewport:FindFirstChild(MATERIAL_ICON_NAME)
+	if existing and existing:IsA("ImageLabel") then
+		return existing
+	end
+	if existing then
+		existing:Destroy()
+	end
+
+	local icon = Instance.new("ImageLabel")
+	icon.Name = MATERIAL_ICON_NAME
+	icon.BackgroundTransparency = 1
+	icon.AnchorPoint = Vector2.new(0.5, 0.5)
+	icon.Position = UDim2.fromScale(0.5, 0.5)
+	icon.Size = UDim2.fromScale(0.9, 0.9)
+	icon.ScaleType = Enum.ScaleType.Fit
+	icon.ZIndex = viewport.ZIndex + 1
+	icon.Visible = false
+	icon.Parent = viewport
+	return icon
+end
+
+local function hideMaterialIcon(viewport: ViewportFrame)
+	local existing = viewport:FindFirstChild(MATERIAL_ICON_NAME)
+	if existing and existing:IsA("ImageLabel") then
+		existing.Visible = false
+		existing.Image = ""
+	end
+end
+
+local function formatPercentChance(chance: any): string
+	local percent = math.clamp(tonumber(chance) or 0, 0, 1) * 100
+	local formatted = string.format("%.4f", percent):gsub("0+$", ""):gsub("%.$", "")
+	if formatted == "" then
+		formatted = "0"
+	end
+
+	return formatted .. "%"
+end
+
+local function setTextLabelFlatColor(label: TextLabel, color: Color3)
+	label.TextColor3 = color
+	for _, child in ipairs(label:GetChildren()) do
+		if child:IsA("UIGradient") or child:IsA("UIStroke") then
+			child:Destroy()
+		end
+	end
+end
+
+local function getBossPreviewOptions(bossName: string): ViewportModelRenderer.BossPreviewOptions
+	local options = table.clone(DEFAULT_BOSS_PREVIEW_OPTIONS)
+	local override = BOSS_PREVIEW_OVERRIDES[bossName]
+	if typeof(override) == "table" then
+		for key, value in pairs(override) do
+			options[key] = value
+		end
+	end
+
+	return options
+end
+
 local function clearGeneratedRewardRows(scrollingFrame: ScrollingFrame, template: Frame)
 	for _, child in ipairs(scrollingFrame:GetChildren()) do
 		if child ~= template and child:GetAttribute("BossRewardPreviewGenerated") == true then
@@ -177,11 +248,78 @@ function BossLobbyRewardPreviewController:_renderBossCharacter(billboard: Billbo
 	end
 
 	local bossRig = GameAssetResolver.Find(GameAssetPaths.Models.Bosses, bossName)
-	local baseRig = BodyPartsCatalog.GetDefaultBaseRig()
 	if bossRig and bossRig:IsA("Model") then
-		ViewportModelRenderer.RenderCharacterModelAtFramingPivot(viewport, bossRig, baseRig)
+		ViewportModelRenderer.RenderBossPreview(viewport, bossRig, getBossPreviewOptions(bossName))
 	else
 		ViewportModelRenderer.Clear(viewport)
+	end
+end
+
+function BossLobbyRewardPreviewController:_renderBossPartRewardRow(row: Frame, entry: BossRewards.BossRewardPreviewEntry)
+	local setConfig = if typeof(entry.setId) == "string" then BodyPartsCatalog.GetSet(entry.setId) else nil
+	local displayRarity = if typeof(entry.displayRarity) == "string" then entry.displayRarity else nil
+
+	local itemName = findTextLabel(row, "ItemName")
+	if itemName then
+		itemName.Text = entry.displayName
+		BodyPartPresentation.ApplySetRarityTemplateToLabel(itemName, setConfig, displayRarity)
+	end
+
+	local chanceLabel = findTextLabel(row, "Chance")
+	if chanceLabel then
+		BodyPartPresentation.ApplySetRarityTemplateToLabel(chanceLabel, setConfig, displayRarity)
+		chanceLabel.Text = formatPercentChance(entry.chance)
+	end
+
+	local itemViewport = findViewport(row, "ItemViewport")
+	if itemViewport then
+		hideMaterialIcon(itemViewport)
+		ViewportModelRenderer.RenderBodyPartPreview(itemViewport, entry.bundleModel, nil, nil, nil, nil, nil)
+	end
+end
+
+function BossLobbyRewardPreviewController:_renderMaterialRewardRow(row: Frame, entry: BossRewards.BossRewardPreviewEntry)
+	local materialConfig = if typeof(entry.materialId) == "string" then CraftingMaterialConfig.Get(entry.materialId) else nil
+	local displayColor = if typeof(entry.displayColor) == "Color3"
+		then entry.displayColor
+		elseif materialConfig then materialConfig.displayColor
+		else DEFAULT_MATERIAL_COLOR
+	local displayName = if materialConfig then materialConfig.label else entry.displayName
+
+	local itemName = findTextLabel(row, "ItemName")
+	if itemName then
+		itemName.Text = displayName
+		setTextLabelFlatColor(itemName, displayColor)
+	end
+
+	local chanceLabel = findTextLabel(row, "Chance")
+	if chanceLabel then
+		chanceLabel.Text = formatPercentChance(entry.chance)
+		setTextLabelFlatColor(chanceLabel, displayColor)
+	end
+
+	local itemViewport = findViewport(row, "ItemViewport")
+	if itemViewport then
+		local iconTexture = if typeof(entry.iconTexture) == "string" then entry.iconTexture else nil
+		if (iconTexture == nil or iconTexture == "") and materialConfig then
+			iconTexture = CraftingMaterialConfig.ResolveIconTexture(materialConfig)
+		end
+
+		if typeof(iconTexture) == "string" and iconTexture ~= "" then
+			ViewportModelRenderer.Clear(itemViewport)
+			local icon = getOrCreateMaterialIcon(itemViewport)
+			icon.Image = iconTexture
+			icon.ImageColor3 = Color3.new(1, 1, 1)
+			icon.Visible = true
+		else
+			hideMaterialIcon(itemViewport)
+			local materialModel = if materialConfig then MaterialPresentation.GetPlaceholderModel(materialConfig) else nil
+			if materialModel then
+				ViewportModelRenderer.RenderCenteredBundle(itemViewport, materialModel)
+			else
+				ViewportModelRenderer.Clear(itemViewport)
+			end
+		end
 	end
 end
 
@@ -207,24 +345,10 @@ function BossLobbyRewardPreviewController:_renderRewards(billboard: BillboardGui
 		row.Visible = true
 		row.Parent = scrollingFrame
 
-		local itemName = findTextLabel(row, "ItemName")
-		if itemName then
-			itemName.Text = entry.displayName
-		end
-
-		local chanceLabel = findTextLabel(row, "Chance")
-		if chanceLabel then
-			BodyPartPresentation.ApplySetRarityTemplateToLabel(
-				chanceLabel,
-				BodyPartsCatalog.GetSet(entry.setId),
-				entry.displayRarity
-			)
-			chanceLabel.Text = NumberFormatter.FormatOneInChance(entry.chance)
-		end
-
-		local itemViewport = findViewport(row, "ItemViewport")
-		if itemViewport then
-			ViewportModelRenderer.RenderBodyPartPreview(itemViewport, entry.bundleModel, nil, nil, nil, nil, nil)
+		if entry.kind == "material" then
+			self:_renderMaterialRewardRow(row, entry)
+		else
+			self:_renderBossPartRewardRow(row, entry)
 		end
 	end
 

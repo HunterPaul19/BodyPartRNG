@@ -12,6 +12,7 @@ local RollSelection = require(script.Parent.Parent.Shared.Character.OwnedRollTyp
 local TimeShardState = require(script.Parent.Parent.Shared.Character.TimeShardState)
 local DailyChestState = require(script.Parent.Parent.Shared.Character.DailyChestState)
 local TutorialState = require(script.Parent.Parent.Shared.Character.TutorialState)
+local BossWorldGuideState = require(script.Parent.Parent.Shared.Character.BossWorldGuideState)
 local RollingConfig = require(script.Parent.Parent.Shared.Config.RollingConfig)
 local AchievementState = require(script.Parent.Parent.Shared.Titles.AchievementState)
 local PlayerStats = require(script.Parent.Parent.Shared.Stats.PlayerStats)
@@ -40,6 +41,11 @@ return {
 	Tutorial = {
 		key = "tutorial",
 		value = TutorialState.CreateEmptyState(),
+	},
+
+	BossWorldGuide = {
+		key = "bossWorldGuide",
+		value = BossWorldGuideState.CreateEmptyState(),
 	},
 
 	Diagnostics = {
