@@ -5,7 +5,6 @@ local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
 local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
-local TutorialService = require(script.Parent.TutorialService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local ACCESSORIES_REMOTES_FOLDER_NAME = "Accessories"
@@ -168,11 +167,6 @@ function AccessoryService:EquipOwnedAccessory(player: Player, ownedId: string): 
 
 	BodyPartService.LoadoutChanged:Fire(player)
 	BodyPartService:NotifyClient(player, string.format('Equipped "%s".', config.label))
-	TutorialService:RecordAccessoryEquipped(player, {
-		ownedId = ownedId,
-		accessoryId = config.id,
-		slot = config.slot,
-	})
 	return true, string.format('Equipped "%s".', config.label)
 end
 

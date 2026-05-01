@@ -423,13 +423,11 @@ local function grantChestRewards(
 	player: Player,
 	config: DailyChestConfig.ChestConfig,
 	random: Random,
-	sourcePrefix: string?,
-	options: any?
+	sourcePrefix: string?
 ): ChestPackage
 	local rewards = {}
 	local chestSource = (sourcePrefix or "daily_chest_") .. config.id
 	local sourceBossId = chooseBossIdForChest(random, config)
-	local guaranteedPotionId = if typeof(options) == "table" then PotionConfig.NormalizeId(options.guaranteedPotionId) else nil
 
 	local timeShardAmount = rollInteger(random, config.timeShardRange)
 	if timeShardAmount > 0 then
@@ -468,38 +466,6 @@ local function grantChestRewards(
 				else
 					Logger.Warn(string.format(
 						"[DailyChestService] Failed to grant potion '%s' to %s: %s",
-						potionConfig.id,
-						player.Name,
-						tostring(message)
-					))
-				end
-			end
-		end
-	end
-
-	if guaranteedPotionId ~= nil then
-		local alreadyGranted = false
-		for _, reward in ipairs(rewards) do
-			if typeof(reward) == "table" and reward.kind == "potion" and reward.potionId == guaranteedPotionId then
-				alreadyGranted = true
-				break
-			end
-		end
-		if alreadyGranted ~= true then
-			local potionConfig = PotionConfig.Get(guaranteedPotionId)
-			if potionConfig then
-				local ok, message = PotionService:GrantPotionUses(player, potionConfig.id, 1)
-				if ok then
-					table.insert(rewards, {
-						kind = "potion",
-						displayName = potionConfig.label,
-						amount = 1,
-						potionId = potionConfig.id,
-						tier = potionConfig.tier,
-					})
-				else
-					Logger.Warn(string.format(
-						"[DailyChestService] Failed to grant guaranteed tutorial potion '%s' to %s: %s",
 						potionConfig.id,
 						player.Name,
 						tostring(message)
@@ -582,7 +548,7 @@ function DailyChestService:_claimEligibleChests(player: Player, payload: any)
 	end
 	local TutorialService = require(script.Parent.TutorialService)
 	if TutorialService:IsTutorialIncomplete(player) then
-		return response(true, "Daily chest is deferred until the tutorial chest step.", {})
+		return response(true, "Daily chest is deferred until the tutorial is complete.", {})
 	end
 
 	activeClaimsByPlayer[player] = true
@@ -634,57 +600,6 @@ function DailyChestService:_claimEligibleChests(player: Player, payload: any)
 	if not ok then
 		Logger.Warn(string.format("[DailyChestService] Claim failed for %s: %s", player.Name, tostring(result)))
 		return response(false, "Failed to claim daily chests.")
-	end
-
-	return result
-end
-
-function DailyChestService:ClaimTutorialDailyChest(player: Player, payload: any)
-	if activeClaimsByPlayer[player] == true then
-		return response(false, "A chest claim is already running.")
-	end
-	if not DataService:IsPlayerDataLoaded(player) then
-		return response(false, "Player data is not loaded.")
-	end
-
-	activeClaimsByPlayer[player] = true
-	local ok, result = pcall(function()
-		local state = DataService:GetDailyChestState(player)
-		if state.localUtcOffsetMinutes == nil then
-			local submittedOffset = if typeof(payload) == "table" then payload.localUtcOffsetMinutes else nil
-			state.localUtcOffsetMinutes =
-				DailyChestState.NormalizeOffsetMinutes(submittedOffset) or DailyChestState.NormalizeOffsetMinutes(0)
-			DataService:SetDailyChestState(player, state)
-		end
-
-		local chestId = if typeof(payload) == "table" and typeof(payload.chestId) == "string"
-			then payload.chestId
-			else "DailyFree"
-		local potionId = if typeof(payload) == "table" then payload.potionId else nil
-		local config = DailyChestConfig.Get(chestId)
-		if config == nil then
-			return response(false, string.format("Unknown chest id '%s'.", tostring(chestId)))
-		end
-
-		local ignoreDailyClaimedToday = typeof(payload) == "table" and payload.ignoreDailyClaimedToday == true
-		local localDay = DailyChestState.GetLocalDay(os.time(), state.localUtcOffsetMinutes)
-		if ignoreDailyClaimedToday ~= true and DailyChestState.IsClaimedForLocalDay(state, config.id, localDay) then
-			return response(false, "The daily chest has already been claimed today.")
-		end
-
-		local package = grantChestRewards(player, config, Random.new(), "tutorial_chest_", {
-			guaranteedPotionId = potionId,
-		})
-		state = DailyChestState.MarkClaimedForLocalDay(state, config.id, localDay)
-		DataService:SetDailyChestState(player, state)
-		return response(true, DailyChestConfig.GetReturnMessage(config.id), { package })
-	end)
-
-	activeClaimsByPlayer[player] = nil
-
-	if not ok then
-		Logger.Warn(string.format("[DailyChestService] Tutorial claim failed for %s: %s", player.Name, tostring(result)))
-		return response(false, "Failed to claim tutorial chest.")
 	end
 
 	return result

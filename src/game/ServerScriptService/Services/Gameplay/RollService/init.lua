@@ -544,28 +544,6 @@ local function chooseWeightedSet(randomSource: Random, activeEntries)
 	return activeEntries[lastIndex]
 end
 
-local function findRollEntryBySetId(entries, setId: string)
-	if typeof(setId) ~= "string" or setId == "" then
-		return nil
-	end
-
-	for _, entry in ipairs(entries) do
-		if entry.setId == setId then
-			return entry
-		end
-	end
-
-	return nil
-end
-
-local function findRollEntryForPiece(entries, piece)
-	if typeof(piece) ~= "table" or typeof(piece.setId) ~= "string" then
-		return nil
-	end
-
-	return findRollEntryBySetId(entries, piece.setId)
-end
-
 local function choosePieceFromSet(randomSource: Random, setId: string)
 	local pieces = BodyPartsCatalog.GetPiecesForSet(setId)
 	if not pieces or #pieces == 0 then
@@ -1327,7 +1305,6 @@ function RollService:SelectRollType(player: Player, rollTypeId: string): (boolea
 	if previousRollTypeId ~= rollTypeId then
 		StatsService:RecordSettingChange(player, "roll_type")
 	end
-	TutorialService:RecordRollTypeSelected(player, rollType.id)
 
 	return true, string.format("Selected %s.", rollType.displayName)
 end
@@ -1617,48 +1594,13 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 	end
 
 	rollCooldownUntilByPlayer[player] = now + effectiveRollCooldown
-	local tutorialRollOverride = TutorialService:GetRollOverride(player, {
-		rollTypeId = selectedRollType.id,
-		rollRegion = selectedRollRegion,
-	})
-	if typeof(tutorialRollOverride) == "table" then
-		local rawLuckBonus = math.max(0, tonumber(tutorialRollOverride.rawLuckBonus) or 0)
-		if rawLuckBonus > 0 then
-			luckState.rawLuck += rawLuckBonus
-			luckState.bandLuckInput = luckState.rawLuck * luckState.bandLuckScalar
-		end
-	end
 	local quickRollApplied = quickRollState.enabled == true
 	local triggerSource = if typeof(payload) == "table" and payload.triggerSource == "auto" then "auto" else "manual"
 	local skipPresentation = quickRollApplied and triggerSource == "auto"
 	local skipPreview = quickRollApplied and triggerSource ~= "auto"
-	local allEntries, activeEntries = buildRollListEntries(luckState.bandLuckInput)
+	local _, activeEntries = buildRollListEntries(luckState.bandLuckInput)
 	local randomSource = Random.new()
 	local finalSet = chooseWeightedSet(randomSource, activeEntries)
-	local forcedPiece = nil
-	local forcedSetApplied = false
-	if typeof(tutorialRollOverride) == "table" then
-		if typeof(tutorialRollOverride.forcedPieceId) == "string" then
-			forcedPiece = BodyPartsCatalog.GetPiece(tutorialRollOverride.forcedPieceId)
-			if forcedPiece then
-				local forcedSet = findRollEntryForPiece(activeEntries, forcedPiece) or findRollEntryForPiece(allEntries, forcedPiece)
-				if forcedSet then
-					finalSet = forcedSet
-					forcedSetApplied = true
-				else
-					forcedPiece = nil
-				end
-			end
-		end
-		if not forcedPiece and typeof(tutorialRollOverride.forcedSetId) == "string" then
-			local forcedSet = findRollEntryBySetId(activeEntries, tutorialRollOverride.forcedSetId)
-				or findRollEntryBySetId(allEntries, tutorialRollOverride.forcedSetId)
-			if forcedSet then
-				finalSet = forcedSet
-				forcedSetApplied = true
-			end
-		end
-	end
 	if not finalSet then
 		rollLocks[player] = nil
 		StatsService:RecordRollFailure(player, "missing_config")
@@ -1668,14 +1610,7 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		return false, "No body part sets are configured for rolling.", nil
 	end
 
-	local finalPiece = forcedPiece
-	if not finalPiece then
-		if forcedSetApplied then
-			finalPiece = choosePieceFromSet(randomSource, finalSet.setId)
-		else
-			finalPiece = choosePieceFromSetForRegion(randomSource, finalSet.setId, selectedRollRegion)
-		end
-	end
+	local finalPiece = choosePieceFromSetForRegion(randomSource, finalSet.setId, selectedRollRegion)
 	if not finalPiece then
 		rollLocks[player] = nil
 		StatsService:RecordRollFailure(player, "missing_config")
@@ -1736,29 +1671,18 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		variantMultiplier = variantMultiplier,
 		finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
 	}
-	local tutorialCraftPriority = typeof(tutorialRollOverride) == "table"
-		and typeof(tutorialRollOverride.forceAutoCraftRecipeId) == "string"
-		and typeof(tutorialRollOverride.targetIngredientKey) == "string"
 	local autoCraftCommitResult = nil
-	if tutorialCraftPriority then
-		autoCraftCommitResult = CraftingService:TryAutoCommitRolledBodyPart(player, grantPayload, {
-			targetRecipeId = tutorialRollOverride.forceAutoCraftRecipeId,
-			targetIngredientKey = tutorialRollOverride.targetIngredientKey,
-			waiveCraftCost = tutorialRollOverride.waiveCraftCost == true,
-		})
-	end
-	local autoCraftCommitted = typeof(autoCraftCommitResult) == "table" and autoCraftCommitResult.committed == true
 	local shouldAutoEquipRoll = false
-	if not tutorialCraftPriority and DataService:GetAutoEquipBestEnabled(player) then
+	if DataService:GetAutoEquipBestEnabled(player) then
 		shouldAutoEquipRoll = BodyPartService:IsBodyPartGrantBetterThanEquipped(player, grantPayload)
 	end
 
-	if not tutorialCraftPriority and not shouldAutoEquipRoll then
+	if not shouldAutoEquipRoll then
 		autoCraftCommitResult = CraftingService:TryAutoCommitRolledBodyPart(player, grantPayload)
 	end
-	autoCraftCommitted = typeof(autoCraftCommitResult) == "table" and autoCraftCommitResult.committed == true
-	local pendingAutoSell = (not tutorialCraftPriority) and (not shouldAutoEquipRoll) and (not autoCraftCommitted) and (not skipPresentation) and autoSellEnabledForRarity
-	local shouldUseTransientRecord = (not tutorialCraftPriority) and (not shouldAutoEquipRoll) and (not autoCraftCommitted) and autoSellEnabledForRarity
+	local autoCraftCommitted = typeof(autoCraftCommitResult) == "table" and autoCraftCommitResult.committed == true
+	local pendingAutoSell = (not shouldAutoEquipRoll) and (not autoCraftCommitted) and (not skipPresentation) and autoSellEnabledForRarity
+	local shouldUseTransientRecord = (not shouldAutoEquipRoll) and (not autoCraftCommitted) and autoSellEnabledForRarity
 
 	local ownedRecord, grantError, reservedGrant
 	if autoCraftCommitted then

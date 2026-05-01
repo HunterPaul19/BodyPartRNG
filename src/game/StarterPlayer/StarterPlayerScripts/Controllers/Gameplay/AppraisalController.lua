@@ -15,7 +15,6 @@ local AppraisalConfig = require(ReplicatedStorage.Shared.Config.AppraisalConfig)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
-local TutorialConfig = require(ReplicatedStorage.Shared.Config.TutorialConfig)
 local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
 local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
@@ -282,18 +281,7 @@ function AppraisalController:_getSelectedAppraisalCost(): number
 		return 0
 	end
 
-	if self:_shouldWaiveAppraisalCost() then
-		return 0
-	end
-
 	return AppraisalPricing.GetCost(ownedRecord, piece)
-end
-
-function AppraisalController:_shouldWaiveAppraisalCost(): boolean
-	local state = DataController:Get(TUTORIAL_DATA_KEY)
-	return typeof(state) == "table"
-		and state.completed ~= true
-		and state.stepId == TutorialConfig.Steps.GoAppraise
 end
 
 function AppraisalController:_getSelectedOwnedRecord()

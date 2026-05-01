@@ -13,7 +13,10 @@ local TutorialState = require(ReplicatedStorage.Shared.Character.TutorialState)
 local LOCAL_PLAYER = Players.LocalPlayer
 local CLAIM_REMOTE_TIMEOUT = 30
 
-local DailyChestController = {}
+local DailyChestController = {
+	_started = false,
+	_claimStarted = false,
+}
 
 local function getLocalUtcOffsetMinutes(): number
 	local now = os.time()
@@ -82,6 +85,44 @@ local function openChestPackagesSequentially(chests: { any })
 	end
 end
 
+function DailyChestController:_claimEligibleChests(): boolean
+	if self._claimStarted == true then
+		return true
+	end
+
+	local tutorialState = TutorialState.Normalize(DataController:Get("tutorial"))
+	if tutorialState.completed ~= true then
+		return false
+	end
+
+	self._claimStarted = true
+	TutorialTextGui.Init(LOCAL_PLAYER:WaitForChild("PlayerGui"))
+
+	local claimRemote = resolveClaimRemote()
+	if not claimRemote then
+		self._claimStarted = false
+		Logger.Warn("[DailyChestController] ReplicatedStorage.Remotes.Chests.ClaimDailyChests is missing.")
+		return false
+	end
+
+	local ok, result = pcall(function()
+		return claimRemote:InvokeServer({
+			localUtcOffsetMinutes = getLocalUtcOffsetMinutes(),
+		})
+	end)
+	if not ok then
+		Logger.Warn("[DailyChestController] Daily chest claim failed: " .. tostring(result))
+		return true
+	end
+	if typeof(result) ~= "table" or result.ok ~= true then
+		return true
+	end
+
+	local chests = if typeof(result.chests) == "table" then result.chests else {}
+	openChestPackagesSequentially(chests)
+	return true
+end
+
 function DailyChestController:OnStart()
 	if self._started == true then
 		return
@@ -96,34 +137,17 @@ function DailyChestController:OnStart()
 	task.spawn(function()
 		waitForPlayerData()
 		waitForLoadingScreenDismissed()
-		local tutorialState = TutorialState.Normalize(DataController:Get("tutorial"))
-		if tutorialState.completed ~= true then
+
+		if self:_claimEligibleChests() then
 			return
 		end
 
-		TutorialTextGui.Init(LOCAL_PLAYER:WaitForChild("PlayerGui"))
-
-		local claimRemote = resolveClaimRemote()
-		if not claimRemote then
-			Logger.Warn("[DailyChestController] ReplicatedStorage.Remotes.Chests.ClaimDailyChests is missing.")
-			return
-		end
-
-		local ok, result = pcall(function()
-			return claimRemote:InvokeServer({
-				localUtcOffsetMinutes = getLocalUtcOffsetMinutes(),
-			})
+		DataController.DataUpdated:Connect(function(key: string)
+			if key == "tutorial" then
+				self:_claimEligibleChests()
+			end
 		end)
-		if not ok then
-			Logger.Warn("[DailyChestController] Daily chest claim failed: " .. tostring(result))
-			return
-		end
-		if typeof(result) ~= "table" or result.ok ~= true then
-			return
-		end
-
-		local chests = if typeof(result.chests) == "table" then result.chests else {}
-		openChestPackagesSequentially(chests)
+		self:_claimEligibleChests()
 	end)
 end
 

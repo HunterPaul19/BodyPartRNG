@@ -9,7 +9,6 @@ local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile
 local BossArenaArrivalService = require(script.Parent.BossArenaArrivalService)
 local DataService = require(script.Parent.DataService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
-local TutorialService = require(script.Parent.TutorialService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local POTIONS_FOLDER_NAME = "Potions"
@@ -456,7 +455,6 @@ function PotionService:UsePotion(player: Player, potionId: string): (boolean, st
 	local remainingOwnedAmount = tonumber(updatedRecord and updatedRecord.amount) or 0
 	local message = string.format('Used %s. %d use(s) left.', config.label, remainingOwnedAmount)
 	self:NotifyClient(player, message)
-	TutorialService:RecordPotionUsed(player, config.id)
 	return true, message
 end
 

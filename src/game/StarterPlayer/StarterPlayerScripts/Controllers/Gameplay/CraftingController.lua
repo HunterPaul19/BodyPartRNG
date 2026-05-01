@@ -10,7 +10,6 @@ local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local CraftingMaterialConfig = require(ReplicatedStorage.Shared.Config.CraftingMaterialConfig)
 local CraftingRecipeConfig = require(ReplicatedStorage.Shared.Config.CraftingRecipeConfig)
-local TutorialConfig = require(ReplicatedStorage.Shared.Config.TutorialConfig)
 local BossRewards = require(ReplicatedStorage.Shared.BossArena.BossRewards)
 local CraftingProgress = require(ReplicatedStorage.Shared.Character.CraftingProgress)
 local BodyPartLoadout = require(ReplicatedStorage.Shared.Character.BodyPartLoadout)
@@ -42,7 +41,6 @@ local ACCESSORIES_DATA_KEY = Schema.Accessories and Schema.Accessories.key or "a
 local EQUIPPED_ACCESSORIES_DATA_KEY = Schema.EquippedAccessories and Schema.EquippedAccessories.key or "equippedAccessories"
 local CRAFTING_MATERIALS_DATA_KEY = Schema.CraftingMaterials and Schema.CraftingMaterials.key or "craftingMaterials"
 local CRAFTING_PROGRESS_DATA_KEY = Schema.CraftingProgress and Schema.CraftingProgress.key or "craftingProgress"
-local TUTORIAL_DATA_KEY = Schema.Tutorial and Schema.Tutorial.key or "tutorial"
 local MONEY_DATA_KEY = Schema.Money and Schema.Money.key or "money"
 
 local HEAD_FILTER = "HeadAccessory"
@@ -823,17 +821,6 @@ function CraftingController:_getRecipeProgress(recipeId: string)
 	return CraftingProgress.GetRecipeProgress(self:_getCraftingProgress(), recipeId)
 end
 
-function CraftingController:_shouldWaiveTutorialCraftCost(recipe: any): boolean
-	if typeof(recipe) ~= "table" or recipe.id ~= TutorialConfig.TargetRecipeId then
-		return false
-	end
-
-	local tutorialState = DataController:Get(TUTORIAL_DATA_KEY)
-	return typeof(tutorialState) == "table"
-		and tutorialState.completed ~= true
-		and tutorialState.stepId == TutorialConfig.Steps.CraftHolidayCrown
-end
-
 function CraftingController:_getMoney(): number
 	local state = self._state
 	if typeof(state) == "table" and state.money ~= nil then
@@ -921,9 +908,7 @@ function CraftingController:_getCraftability(recipe: any): (boolean, string)
 		end
 	end
 
-	local moneyCost = if self:_shouldWaiveTutorialCraftCost(recipe)
-		then 0
-		else math.max(0, math.floor(tonumber(recipe.moneyCost) or 0))
+	local moneyCost = math.max(0, math.floor(tonumber(recipe.moneyCost) or 0))
 	if self:_getMoney() < moneyCost then
 		return false, "Not enough money."
 	end
@@ -1621,9 +1606,7 @@ function CraftingController:_setCraftButtonText(recipe: any?)
 		return
 	end
 
-	local moneyCost = if typeof(recipe) == "table" and not self:_shouldWaiveTutorialCraftCost(recipe)
-		then math.max(0, math.floor(tonumber(recipe.moneyCost) or 0))
-		else 0
+	local moneyCost = if typeof(recipe) == "table" then math.max(0, math.floor(tonumber(recipe.moneyCost) or 0)) else 0
 	label.Text = if moneyCost > 0 then string.format("Craft ($%s)", formatWholeNumber(moneyCost)) else "Craft"
 end
 

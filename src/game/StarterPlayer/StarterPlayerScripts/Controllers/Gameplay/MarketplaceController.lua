@@ -775,6 +775,26 @@ function MarketplaceController:_setGiftHeader(displayName: string)
 	end
 end
 
+function MarketplaceController:_syncGiftScrollingCanvas()
+	local ui = self._ui
+	local scrollingFrame = ui.scrollingFrame
+	if not (scrollingFrame and scrollingFrame:IsA("ScrollingFrame")) then
+		return
+	end
+
+	local layout = scrollingFrame:FindFirstChildWhichIsA("UIListLayout")
+	local contentHeight = if layout then layout.AbsoluteContentSize.Y else 0
+	local padding = scrollingFrame:FindFirstChildWhichIsA("UIPadding")
+	if padding then
+		local viewportHeight = scrollingFrame.AbsoluteSize.Y
+		contentHeight += padding.PaddingTop.Offset + padding.PaddingTop.Scale * viewportHeight
+		contentHeight += padding.PaddingBottom.Offset + padding.PaddingBottom.Scale * viewportHeight
+	end
+
+	scrollingFrame.AutomaticCanvasSize = Enum.AutomaticSize.None
+	scrollingFrame.CanvasSize = UDim2.fromOffset(0, math.max(math.ceil(contentHeight), scrollingFrame.AbsoluteSize.Y))
+end
+
 function MarketplaceController:_clearGiftRows()
 	local ui = self._ui
 	local scrollingFrame = ui.scrollingFrame
@@ -862,6 +882,7 @@ function MarketplaceController:_buildGiftPlayerEntries()
 			TranslationHelper.setLiteralText(usernameLabel, "@" .. player.Name)
 		end
 		if imageLabel and imageLabel:IsA("ImageLabel") then
+			imageLabel.Visible = true
 			self:_loadThumbnail(imageLabel, player)
 		end
 		row:SetAttribute(GIFT_RECIPIENT_USER_ID_ATTR, player.UserId)
@@ -875,6 +896,9 @@ function MarketplaceController:_buildGiftPlayerEntries()
 		self._giftRowsByUserId[player.UserId] = row
 	end
 
+	task.defer(function()
+		self:_syncGiftScrollingCanvas()
+	end)
 end
 
 function MarketplaceController:_deriveReturnFrameName(button: GuiButton): string?
@@ -917,6 +941,10 @@ function MarketplaceController:_openGiftingFlow(offerKey: string, sourceButton: 
 	self:_setGiftHeader(
 		tostring(offer.displayName or offer.offerKey or TranslationHelper.formatByKey(LocalizationKeys.Marketplace.Gift.DefaultName))
 	)
+	local scrollingFrame = self._ui.scrollingFrame
+	if scrollingFrame and scrollingFrame:IsA("ScrollingFrame") then
+		scrollingFrame.CanvasPosition = Vector2.zero
+	end
 	self:_buildGiftPlayerEntries()
 	FrameController:OpenFrame(MODAL_NAME)
 end

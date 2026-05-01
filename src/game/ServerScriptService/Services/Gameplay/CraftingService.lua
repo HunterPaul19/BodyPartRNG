@@ -13,7 +13,6 @@ local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
-local TutorialService = require(script.Parent.TutorialService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local CRAFTING_REMOTES_FOLDER_NAME = "Crafting"
@@ -363,7 +362,6 @@ function CraftingService:SetAutoCraftRecipe(player: Player, recipeId: string, en
 	if readyMessage then
 		sendAutoCraftReadyNotification(player, readyMessage)
 	end
-	TutorialService:RecordAutoCraftChanged(player, recipe.id, enabled == true)
 
 	return true, if enabled == true then "Auto craft enabled." else "Auto craft disabled."
 end
@@ -723,7 +721,6 @@ function CraftingService:CraftRecipe(player: Player, recipeId: string, options: 
 	end
 
 	BodyPartService.LoadoutChanged:Fire(player)
-	TutorialService:RecordCraftResult(player, recipe.id, result)
 	return true, string.format('Crafted "%s".', recipe.label), result
 end
 
@@ -899,12 +896,7 @@ local function handleCraftRecipe(player: Player, payload: any)
 		return response(false, "A craft is already processing.", CraftingService:GetCraftingState(player), nil)
 	end
 
-	local craftOptions = if TutorialService:ShouldWaiveCraftCost(player, payload.recipeId)
-		then {
-			waiveMoneyCost = true,
-		}
-		else nil
-	local ok, message, result = CraftingService:CraftRecipe(player, payload.recipeId, craftOptions)
+	local ok, message, result = CraftingService:CraftRecipe(player, payload.recipeId)
 	releaseCraftLock(player)
 
 	return response(ok, message, CraftingService:GetCraftingState(player), result)

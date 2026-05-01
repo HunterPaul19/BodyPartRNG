@@ -13,7 +13,6 @@ local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
 local PotionService = require(script.Parent.PotionService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
-local TutorialService = require(script.Parent.TutorialService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local APPRAISAL_FOLDER_NAME = "Appraisal"
@@ -239,7 +238,7 @@ function AppraisalService:PerformAppraisal(player: Player, payload: any)
 	end
 
 	local regularAppraisalCost = AppraisalPricing.GetCost(ownedRecord, piece)
-	local appraisalCost = if TutorialService:ShouldWaiveAppraisalCost(player) then 0 else regularAppraisalCost
+	local appraisalCost = regularAppraisalCost
 	local currentMoney = DataService:GetMoney(player)
 	if currentMoney < appraisalCost then
 		return response(
@@ -270,23 +269,9 @@ function AppraisalService:PerformAppraisal(player: Player, payload: any)
 	local randomSource = Random.new()
 	local mutationRoll = chooseWeightedEntry(randomSource, getAdjustedMutationWeights(player))
 	local mutationData = MutationConfig.Get(if mutationRoll then mutationRoll.id else nil) or MutationConfig.GetDefault()
-	local tutorialOverride = TutorialService:GetAppraisalOverride(player, {
-		ownedId = ownedId,
-		region = region,
-	})
-	local sizeData = nil
-	local sizeScale = nil
-	if typeof(tutorialOverride) == "table" and typeof(tutorialOverride.sizeId) == "string" then
-		sizeData = SizeConfig.Get(tutorialOverride.sizeId)
-		if sizeData then
-			sizeScale = SizeConfig.GetRepresentativeScale(sizeData.id)
-		end
-	end
-	if not sizeData then
-		local sizeRoll = chooseWeightedEntry(randomSource, getAdjustedSizeWeights(player))
-		sizeData = SizeConfig.Get(if sizeRoll then sizeRoll.id else nil) or SizeConfig.GetDefault()
-		sizeScale = SizeConfig.RollScale(randomSource, sizeData)
-	end
+	local sizeRoll = chooseWeightedEntry(randomSource, getAdjustedSizeWeights(player))
+	local sizeData = SizeConfig.Get(if sizeRoll then sizeRoll.id else nil) or SizeConfig.GetDefault()
+	local sizeScale = SizeConfig.RollScale(randomSource, sizeData)
 	local sizeMoneyMultiplier = SizeConfig.GetMoneyMultiplier(sizeData.id)
 	local variantMultiplier = RollMath.ComputeVariantMultiplier(mutationData.multiplier, sizeMoneyMultiplier)
 	local finalPassiveIncomePerSecond = RollMath.ComputeFinalPassiveIncome(piece.passiveIncomePerSecond, variantMultiplier)
@@ -311,12 +296,6 @@ function AppraisalService:PerformAppraisal(player: Player, payload: any)
 		DataService:AddMoney(player, appraisalCost, "other")
 		return response(false, refreshMessage or "The body part visuals could not be refreshed.", state)
 	end
-
-	TutorialService:RecordAppraisalResult(player, {
-		ownedId = ownedId,
-		region = region,
-		sizeId = sizeData.id,
-	})
 
 	return response(true, "Appraisal complete.", state, {
 		ownedId = ownedId,

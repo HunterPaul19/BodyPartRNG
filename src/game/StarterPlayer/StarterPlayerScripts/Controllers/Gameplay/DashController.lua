@@ -19,8 +19,8 @@ local DASH_START_SPEED = 165
 local DASH_END_SPEED = 45
 local SIDE_DASH_PEAK_SPEED = 90
 local SIDE_DASH_ACCEL_SECONDS = 0.045
-local BODY_VELOCITY_MAX_FORCE = Vector3.one * 8e4
-local HORIZONTAL_FORCE_MASK = Vector3.new(1, 0, 1)
+local BASE_DASH_MAX_FORCE = 8e4
+local BASE_DASH_ASSEMBLY_MASS = 15
 local REMOTES_FOLDER_NAME = "Remotes"
 local DASH_FOLDER_NAME = "Dash"
 local REQUEST_DASH_REMOTE_NAME = "RequestDash"
@@ -152,6 +152,49 @@ local function resolveDashVector(rootPart: BasePart, direction: string): Vector3
 	end
 
 	return lookDirection
+end
+
+local function isFinitePositiveNumber(value: any): boolean
+	return typeof(value) == "number" and value == value and value > 0 and value < math.huge
+end
+
+local function getCharacterPartMass(character: Model): number
+	local totalMass = 0
+
+	for _, descendant in ipairs(character:GetDescendants()) do
+		if not descendant:IsA("BasePart") or descendant.Massless == true then
+			continue
+		end
+
+		local ok, mass = pcall(function()
+			return descendant:GetMass()
+		end)
+		if ok and isFinitePositiveNumber(mass) then
+			totalMass += mass
+		end
+	end
+
+	return totalMass
+end
+
+local function resolveDashAssemblyMass(character: Model, rootPart: BasePart): number
+	local assemblyMass = rootPart.AssemblyMass
+	if isFinitePositiveNumber(assemblyMass) then
+		return assemblyMass
+	end
+
+	local fallbackMass = getCharacterPartMass(character)
+	if isFinitePositiveNumber(fallbackMass) then
+		return fallbackMass
+	end
+
+	return BASE_DASH_ASSEMBLY_MASS
+end
+
+local function resolveDashMaxForce(character: Model, rootPart: BasePart): Vector3
+	local assemblyMass = resolveDashAssemblyMass(character, rootPart)
+	local force = BASE_DASH_MAX_FORCE * math.max(1, assemblyMass / BASE_DASH_ASSEMBLY_MASS)
+	return Vector3.new(force, 0, force)
 end
 
 function DashController:_ensureRemote(): RemoteFunction?
@@ -348,11 +391,10 @@ function DashController:_playDashAnimation(character: Model)
 	self._activeTrack = track
 end
 
-function DashController:_createBodyVelocity(rootPart: BasePart): BodyVelocity
+function DashController:_createBodyVelocity(character: Model, rootPart: BasePart): BodyVelocity
 	local bodyVelocity = Instance.new("BodyVelocity")
 	bodyVelocity.Name = "DashBodyVelocity"
-	bodyVelocity.MaxForce = BODY_VELOCITY_MAX_FORCE
-	bodyVelocity.MaxForce *= HORIZONTAL_FORCE_MASK
+	bodyVelocity.MaxForce = resolveDashMaxForce(character, rootPart)
 	bodyVelocity.Parent = rootPart
 	self._activeBodyVelocity = bodyVelocity
 	return bodyVelocity
@@ -367,6 +409,7 @@ function DashController:_createVelocityValue(initialValue: number): NumberValue
 end
 
 function DashController:_startForwardOrBackMovement(
+	character: Model,
 	rootPart: BasePart,
 	direction: string,
 	dashDirection: Vector3,
@@ -374,7 +417,7 @@ function DashController:_startForwardOrBackMovement(
 	dashToken: number
 )
 	local velocityValue = self:_createVelocityValue(DASH_START_SPEED)
-	local bodyVelocity = self:_createBodyVelocity(rootPart)
+	local bodyVelocity = self:_createBodyVelocity(character, rootPart)
 	local easingStyle = if direction == "Back" then Enum.EasingStyle.Exponential else Enum.EasingStyle.Sine
 
 	local tween = TweenService:Create(
@@ -395,9 +438,15 @@ function DashController:_startForwardOrBackMovement(
 	end)
 end
 
-function DashController:_startSideMovement(rootPart: BasePart, dashDirection: Vector3, durationSeconds: number, dashToken: number)
+function DashController:_startSideMovement(
+	character: Model,
+	rootPart: BasePart,
+	dashDirection: Vector3,
+	durationSeconds: number,
+	dashToken: number
+)
 	local velocityValue = self:_createVelocityValue(0)
-	local bodyVelocity = self:_createBodyVelocity(rootPart)
+	local bodyVelocity = self:_createBodyVelocity(character, rootPart)
 
 	local tween = TweenService:Create(
 		velocityValue,
@@ -417,13 +466,20 @@ function DashController:_startSideMovement(rootPart: BasePart, dashDirection: Ve
 	end)
 end
 
-function DashController:_startMovement(rootPart: BasePart, direction: string, dashDirection: Vector3, durationSeconds: number, dashToken: number)
+function DashController:_startMovement(
+	character: Model,
+	rootPart: BasePart,
+	direction: string,
+	dashDirection: Vector3,
+	durationSeconds: number,
+	dashToken: number
+)
 	if direction == "Left" or direction == "Right" then
-		self:_startSideMovement(rootPart, dashDirection, durationSeconds, dashToken)
+		self:_startSideMovement(character, rootPart, dashDirection, durationSeconds, dashToken)
 		return
 	end
 
-	self:_startForwardOrBackMovement(rootPart, direction, dashDirection, durationSeconds, dashToken)
+	self:_startForwardOrBackMovement(character, rootPart, direction, dashDirection, durationSeconds, dashToken)
 end
 
 function DashController:RequestDash(input: InputObject?)
@@ -485,7 +541,7 @@ function DashController:RequestDash(input: InputObject?)
 	self:_faceDashDirection(parts.humanoid, parts.rootPart, dashDirection)
 	CombatSoundUtil.PlayLocalDash(direction)
 	self:_playDashAnimation(parts.character)
-	self:_startMovement(parts.rootPart, direction, dashDirection, durationSeconds, dashToken)
+	self:_startMovement(parts.character, parts.rootPart, direction, dashDirection, durationSeconds, dashToken)
 
 	task.delay(durationSeconds, function()
 		self:_endDash(dashToken)

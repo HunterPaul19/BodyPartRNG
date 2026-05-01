@@ -861,7 +861,7 @@ local function handleTriggerTutorial(payload: any)
 	end
 
 	local requestedStepId = trimText(payload.stepId)
-	local stepId = if requestedStepId ~= "" then TutorialConfig.NormalizeStepId(requestedStepId) else TutorialConfig.Steps.Welcome
+	local stepId = if requestedStepId ~= "" then requestedStepId else TutorialConfig.Steps.Welcome
 	local state = TutorialService:StartTutorialForAdmin(targetPlayer, stepId)
 	pushRecentEvent("tutorial", string.format("Triggered tutorial replay for %s at %s.", targetPlayer.Name, state.stepId), {
 		userId = targetPlayer.UserId,

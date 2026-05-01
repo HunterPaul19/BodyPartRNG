@@ -19,6 +19,7 @@ end
 
 local PlaceProfile = require(placeProfileModule)
 
+local ENABLE_CUSTOM_LOADING_SCREEN = false
 local MIN_DISPLAY_SECONDS = 1.5
 local GUI_ROOT_TIMEOUT = 10
 local PRELOAD_ROOT_TIMEOUT = 5
@@ -34,7 +35,6 @@ if not player then
 	return
 end
 
-local playerGui = player:WaitForChild("PlayerGui")
 local activeProfile = PlaceProfile.GetActiveProfile()
 local activePlaceId = math.max(0, math.floor(tonumber(game.PlaceId) or 0))
 
@@ -45,6 +45,44 @@ local function formatContextPrefix(): string
 		activePlaceId
 	)
 end
+
+local function markBossArenaLoadingDismissed()
+	if activeProfile.id ~= BOSS_ARENA_PROFILE_ID then
+		return
+	end
+
+	local remotesFolder = ReplicatedStorage:WaitForChild(REMOTES_FOLDER_NAME, 30)
+	if not (remotesFolder and remotesFolder:IsA("Folder")) then
+		Logger.Warn("[LoadingBootstrap] ReplicatedStorage.Remotes is missing; boss loading readiness was not sent.")
+		return
+	end
+
+	local bossArenaFolder = remotesFolder:WaitForChild(BOSS_ARENA_FOLDER_NAME, 30)
+	if not (bossArenaFolder and bossArenaFolder:IsA("Folder")) then
+		Logger.Warn("[LoadingBootstrap] ReplicatedStorage.Remotes.BossArena is missing; boss loading readiness was not sent.")
+		return
+	end
+
+	local markLoadingDismissed = bossArenaFolder:WaitForChild(MARK_LOADING_DISMISSED_REMOTE_NAME, 30)
+	if not (markLoadingDismissed and markLoadingDismissed:IsA("RemoteEvent")) then
+		Logger.Warn("[LoadingBootstrap] BossArena.MarkLoadingScreenDismissed is missing; boss loading readiness was not sent.")
+		return
+	end
+
+	local ok, err = pcall(function()
+		markLoadingDismissed:FireServer()
+	end)
+	if not ok then
+		Logger.Warn(string.format("[LoadingBootstrap] Failed to send boss loading readiness: %s", tostring(err)))
+	end
+end
+
+if not ENABLE_CUSTOM_LOADING_SCREEN then
+	markBossArenaLoadingDismissed()
+	return
+end
+
+local playerGui = player:WaitForChild("PlayerGui")
 
 pcall(function()
 	ReplicatedFirst:RemoveDefaultLoadingScreen()
@@ -392,37 +430,6 @@ local function fadeOutAndDestroy()
 
 	task.wait(FADE_DURATION)
 	loadingScreen:Destroy()
-end
-
-local function markBossArenaLoadingDismissed()
-	if activeProfile.id ~= BOSS_ARENA_PROFILE_ID then
-		return
-	end
-
-	local remotesFolder = ReplicatedStorage:WaitForChild(REMOTES_FOLDER_NAME, 30)
-	if not (remotesFolder and remotesFolder:IsA("Folder")) then
-		Logger.Warn("[LoadingBootstrap] ReplicatedStorage.Remotes is missing; boss loading readiness was not sent.")
-		return
-	end
-
-	local bossArenaFolder = remotesFolder:WaitForChild(BOSS_ARENA_FOLDER_NAME, 30)
-	if not (bossArenaFolder and bossArenaFolder:IsA("Folder")) then
-		Logger.Warn("[LoadingBootstrap] ReplicatedStorage.Remotes.BossArena is missing; boss loading readiness was not sent.")
-		return
-	end
-
-	local markLoadingDismissed = bossArenaFolder:WaitForChild(MARK_LOADING_DISMISSED_REMOTE_NAME, 30)
-	if not (markLoadingDismissed and markLoadingDismissed:IsA("RemoteEvent")) then
-		Logger.Warn("[LoadingBootstrap] BossArena.MarkLoadingScreenDismissed is missing; boss loading readiness was not sent.")
-		return
-	end
-
-	local ok, err = pcall(function()
-		markLoadingDismissed:FireServer()
-	end)
-	if not ok then
-		Logger.Warn(string.format("[LoadingBootstrap] Failed to send boss loading readiness: %s", tostring(err)))
-	end
 end
 
 updateProgress()
