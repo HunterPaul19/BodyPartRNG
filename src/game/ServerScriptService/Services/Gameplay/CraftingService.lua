@@ -12,6 +12,7 @@ local BodyPartLoadout = require(ReplicatedStorage.Shared.Character.BodyPartLoado
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
+local QuestService = require(script.Parent.QuestService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 
 local REMOTES_FOLDER_NAME = "Remotes"
@@ -335,6 +336,11 @@ function CraftingService:GrantCraftingMaterial(player: Player, materialId: strin
 	if errorMessage then
 		return false, errorMessage
 	end
+	QuestService:RecordEvent(player, "material_gained", {
+		materialId = materialId,
+		amount = math.max(1, math.floor(tonumber(amount) or 1)),
+		source = "crafting_service_grant",
+	})
 	return true, "Crafting material granted."
 end
 
@@ -721,6 +727,11 @@ function CraftingService:CraftRecipe(player: Player, recipeId: string, options: 
 	end
 
 	BodyPartService.LoadoutChanged:Fire(player)
+	QuestService:RecordEvent(player, "crafting_completed", {
+		recipeId = recipe.id,
+		yieldKind = recipeYield.kind,
+		amount = 1,
+	})
 	return true, string.format('Crafted "%s".', recipe.label), result
 end
 

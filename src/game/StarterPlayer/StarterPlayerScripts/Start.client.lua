@@ -45,6 +45,7 @@ local CLIENT_STARTUP_PHASE_DEFINITIONS = {
 		label = "Phase2.HUDPanels",
 		names = {
 			"RollController",
+			"DialogueHandlerController",
 			"DialogueController",
 			"LeaderboardController",
 		},

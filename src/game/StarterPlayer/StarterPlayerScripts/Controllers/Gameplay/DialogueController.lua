@@ -5,24 +5,21 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local DialogueDefinitions = require(ReplicatedStorage.Shared.Config.DialogueDefinitions)
-local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
-local Schema = require(ReplicatedStorage.Lists.Schema)
+local DefinitionUtil = require(ReplicatedStorage.Shared.Gameplay.Dialogue.DefinitionUtil)
+local DialogueRegistry = require(ReplicatedStorage.Shared.Gameplay.Dialogue.Registry)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
-local DataController = require(script.Parent.DataController)
-local FrameController = require(script.Parent.FrameController)
 local MainInterfaceController = require(script.Parent.MainInterfaceController)
-local MerchantPresentationController = require(script.Parent.MerchantPresentationController)
 local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local DIALOGUE_PANEL_NAME = "Dialogue"
-local APPRAISAL_FRAME_NAME = "AppraisalUI"
-local DEFAULT_SHOP_FRAME_NAME = "ShopUI"
-local FRAME_CLOSE_DELAY = FrameController.CloseTween.Time
 local PANEL_CLOSE_DELAY = 0.12
 local TYPEWRITER_GRAPHEMES_PER_SECOND = 45
-local APPRAISAL_DIALOGUE_OPEN_COLOR = Color3.fromRGB(113, 230, 139)
+local POSITIVE_CHOICE_COLOR = Color3.fromRGB(113, 230, 139)
+local REMOTES_FOLDER_NAME = "Remotes"
+local DIALOGUE_REMOTES_FOLDER_NAME = "Dialogue"
+local RUN_ACTION_REMOTE_NAME = "RunAction"
 local DIALOGUE_ID_ATTRIBUTE = "DialogueId"
 local DIALOGUE_NODE_ID_ATTRIBUTE = "DialogueNodeId"
 local DIALOGUE_CHOICE_ID_ATTRIBUTE = "DialogueChoiceId"
@@ -58,8 +55,6 @@ type PanelVisibilitySnapshot = {
 	blurSize: number,
 }
 
-local VIP_OWNED_KEY = Schema.VipOwned and Schema.VipOwned.key or nil
-
 local DialogueController = {
 	_started = false,
 	_ui = nil :: DialogueUiRefs?,
@@ -74,14 +69,14 @@ local DialogueController = {
 	_renderedButtons = {} :: { GuiButton },
 	_connections = {} :: { RBXScriptConnection },
 	_typingConnection = nil :: RBXScriptConnection?,
+	_runActionRemote = nil :: RemoteFunction?,
+	_beforeOpenHook = nil :: (() -> number?)?,
+	_portraitResolver = nil :: ((context: { [string]: any }?) -> Model?)?,
+	_refreshSignals = {} :: { any },
 }
 
 local function getPlayerGui(): PlayerGui
 	return LOCAL_PLAYER:WaitForChild("PlayerGui")
-end
-
-local function toBoolean(value: any): boolean
-	return value == true
 end
 
 local function deepCopyContext(context: { [string]: any }?): { [string]: any }
@@ -106,9 +101,13 @@ local function getGraphemeCount(text: string): number
 	return string.len(text)
 end
 
-local function isAppraisalOpenChoice(choice: DialogueChoice): boolean
+local function getActionPayload(choice: DialogueChoice): { [string]: any }?
 	local action = choice.action
-	return action ~= nil and action.type == "openFrame" and action.frameName == APPRAISAL_FRAME_NAME
+	if typeof(action) ~= "table" or typeof(action.payload) ~= "table" then
+		return nil
+	end
+
+	return action.payload
 end
 
 local function getVisibleSizedGuiObject(target: Instance?): GuiObject?
@@ -152,26 +151,16 @@ local function setChoiceAttributes(button: GuiButton, choice: DialogueChoice)
 	button:SetAttribute(DIALOGUE_FRAME_NAME_ATTRIBUTE, if action then action.frameName else nil)
 end
 
-local function styleAppraisalOpenButton(button: ImageButton)
-	button.ImageColor3 = APPRAISAL_DIALOGUE_OPEN_COLOR
+local function stylePositiveChoiceButton(button: ImageButton)
+	button.ImageColor3 = POSITIVE_CHOICE_COLOR
 
 	for _, childName in ipairs({ "Cover", "Cover2", "Rays" }) do
 		local child = button:FindFirstChild(childName)
 		if child and child:IsA("ImageLabel") then
-			child.ImageColor3 = APPRAISAL_DIALOGUE_OPEN_COLOR
+			child.ImageColor3 = POSITIVE_CHOICE_COLOR
 		end
 	end
 end
-
-local ConditionPredicates: { [string]: (context: { [string]: any }?) -> boolean } = {
-	vipOwned = function()
-		if not VIP_OWNED_KEY then
-			return false
-		end
-
-		return toBoolean(DataController:Get(VIP_OWNED_KEY))
-	end,
-}
 
 function DialogueController:_getGuiController()
 	self._guiController = MainInterfaceController
@@ -289,15 +278,15 @@ function DialogueController:_clearPortrait()
 end
 
 function DialogueController:_resolvePortraitModel(): Model?
-	local context = self._context
-	if context then
-		local speakerModel = context.speakerModel
-		if typeof(speakerModel) == "Instance" and speakerModel:IsA("Model") then
-			return speakerModel
+	local resolver = self._portraitResolver
+	if resolver then
+		local ok, result = pcall(resolver, self._context)
+		if ok and typeof(result) == "Instance" and result:IsA("Model") then
+			return result
 		end
 	end
 
-	return BodyPartsCatalog.GetDefaultBaseRig()
+	return nil
 end
 
 function DialogueController:_renderPortrait()
@@ -316,7 +305,7 @@ function DialogueController:_renderPortrait()
 end
 
 function DialogueController:_getDialogueDefinition(dialogueId: string): DialogueDefinition?
-	return DialogueDefinitions.Get(dialogueId)
+	return DefinitionUtil.GetDefinition(dialogueId)
 end
 
 function DialogueController:_getCurrentNode(): DialogueNode?
@@ -335,29 +324,7 @@ function DialogueController:_getCurrentNode(): DialogueNode?
 end
 
 function DialogueController:_evaluateConditions(conditionIds: { string }?): boolean
-	if not conditionIds or #conditionIds == 0 then
-		return true
-	end
-
-	for _, conditionId in ipairs(conditionIds) do
-		local predicate = ConditionPredicates[conditionId]
-		if not predicate then
-			Logger.Warn(string.format("[DialogueController] Unknown condition '%s'.", conditionId))
-			return false
-		end
-
-		local ok, result = pcall(predicate, self._context)
-		if not ok then
-			Logger.Warn(string.format("[DialogueController] Condition '%s' failed: %s", conditionId, tostring(result)))
-			return false
-		end
-
-		if result ~= true then
-			return false
-		end
-	end
-
-	return true
+	return DialogueRegistry.EvaluateConditions(self:_buildSession(), conditionIds)
 end
 
 function DialogueController:_destroyRenderedButtons()
@@ -496,8 +463,9 @@ function DialogueController:_createChoiceButton(choice: DialogueChoice, disabled
 	content.Text = choice.text
 	setChoiceAttributes(button, choice)
 
-	if isAppraisalOpenChoice(choice) then
-		styleAppraisalOpenButton(button)
+	local payload = getActionPayload(choice)
+	if payload and payload.style == "positive" then
+		stylePositiveChoiceButton(button)
 	end
 
 	button.Parent = ui.scrollingFrame
@@ -599,6 +567,129 @@ function DialogueController:_openDialoguePanel()
 	guiController:OpenExclusive(DIALOGUE_PANEL_NAME)
 end
 
+function DialogueController:_ensureRunActionRemote(): RemoteFunction?
+	if self._runActionRemote and self._runActionRemote.Parent then
+		return self._runActionRemote
+	end
+
+	local remotesFolder = ReplicatedStorage:FindFirstChild(REMOTES_FOLDER_NAME) or ReplicatedStorage:WaitForChild(REMOTES_FOLDER_NAME, 5)
+	if not (remotesFolder and remotesFolder:IsA("Folder")) then
+		return nil
+	end
+
+	local dialogueFolder = remotesFolder:FindFirstChild(DIALOGUE_REMOTES_FOLDER_NAME)
+		or remotesFolder:WaitForChild(DIALOGUE_REMOTES_FOLDER_NAME, 5)
+	if not (dialogueFolder and dialogueFolder:IsA("Folder")) then
+		return nil
+	end
+
+	local remote = dialogueFolder:FindFirstChild(RUN_ACTION_REMOTE_NAME)
+	if not (remote and remote:IsA("RemoteFunction")) then
+		return nil
+	end
+
+	self._runActionRemote = remote
+	return remote
+end
+
+function DialogueController:_buildSafeActionContext(): { [string]: any }
+	local context = self._context
+	if typeof(context) ~= "table" then
+		return {}
+	end
+
+	local safeContext = {}
+	if typeof(context.interactionType) == "string" then
+		safeContext.interactionType = context.interactionType
+	end
+	if typeof(context.dialogueFrameName) == "string" then
+		safeContext.dialogueFrameName = context.dialogueFrameName
+	end
+	if typeof(context.sourceInstance) == "Instance" then
+		safeContext.sourcePath = context.sourceInstance:GetFullName()
+	end
+
+	return safeContext
+end
+
+function DialogueController:_runServerAction(choice: DialogueChoice, action: DialogueRegistry.DialogueAction): boolean
+	local dialogueId = self._activeDialogueId
+	local nodeId = self._currentNodeId
+	if not (dialogueId and nodeId) then
+		return false
+	end
+
+	local remote = self:_ensureRunActionRemote()
+	if not remote then
+		Logger.Warn(string.format("[DialogueController] Unsupported action type '%s'.", tostring(action.type)))
+		return false
+	end
+
+	local ok, result = pcall(function()
+		return remote:InvokeServer({
+			dialogueId = dialogueId,
+			nodeId = nodeId,
+			choiceId = choice.id,
+			context = self:_buildSafeActionContext(),
+		})
+	end)
+
+	if not ok then
+		Logger.Warn(string.format("[DialogueController] Server action '%s' failed: %s", tostring(action.type), tostring(result)))
+		return false
+	end
+	if typeof(result) ~= "table" or result.ok ~= true then
+		local message = if typeof(result) == "table" then result.message else nil
+		Logger.Warn(string.format("[DialogueController] Server action '%s' rejected: %s", tostring(action.type), tostring(message)))
+		return false
+	end
+
+	local data = if typeof(result.data) == "table" then result.data else {}
+	if data.closeDialogue == true then
+		self:_closeDialogue()
+		return true
+	end
+	if typeof(data.nextNodeId) == "string" and data.nextNodeId ~= "" then
+		return self:_setCurrentNode(data.nextNodeId)
+	end
+
+	return true
+end
+
+function DialogueController:_buildSession(): DialogueRegistry.DialogueSession
+	return {
+		dialogueId = self._activeDialogueId,
+		nodeId = self._currentNodeId,
+		context = self._context,
+		setCurrentNode = function(nodeId: string)
+			return self:_setCurrentNode(nodeId)
+		end,
+		closeDialogue = function(afterClose: (() -> ())?)
+			self:_closeDialogue(afterClose)
+		end,
+		runServerAction = function(choice: DialogueChoice, action: DialogueRegistry.DialogueAction)
+			return self:_runServerAction(choice, action)
+		end,
+	}
+end
+
+function DialogueController:_rerenderChoicesIfOpen()
+	if not self:IsOpen() then
+		return
+	end
+
+	local currentNode = self:_getCurrentNode()
+	if not currentNode then
+		return
+	end
+	if self._isTyping then
+		return
+	end
+
+	self:_destroyRenderedButtons()
+	self:_renderChoices(currentNode)
+end
+
 function DialogueController:_beginDialogue(dialogueId: string)
 	if not self:_setCurrentNode((self:_getDialogueDefinition(dialogueId) :: DialogueDefinition).rootNodeId) then
 		return false
@@ -620,59 +711,7 @@ function DialogueController:_performAction(choice: DialogueChoice)
 		return false
 	end
 
-	if action.type == "gotoNode" then
-		local nextNodeId = action.nextNodeId or choice.nextNodeId
-		if not nextNodeId then
-			Logger.Warn(string.format("[DialogueController] Choice '%s' is missing a nextNodeId.", choice.id))
-			return false
-		end
-
-		return self:_setCurrentNode(nextNodeId)
-	end
-
-	if action.type == "closeDialogue" then
-		self:_closeDialogue()
-		return true
-	end
-
-	if action.type == "openFrame" or action.type == "openShopFrame" then
-		local context = self._context
-		local frameName = action.frameName
-			or (context and context.dialogueFrameName)
-			or (if action.type == "openShopFrame" then DEFAULT_SHOP_FRAME_NAME else nil)
-
-		if not frameName then
-			Logger.Warn(string.format("[DialogueController] Choice '%s' is missing a frameName.", choice.id))
-			return false
-		end
-
-		self:_closeDialogue(function()
-			local shouldUseMerchantPresentation = context ~= nil
-				and typeof(context.dialogueFrameName) == "string"
-				and context.dialogueFrameName ~= ""
-			if shouldUseMerchantPresentation then
-				local opened = MerchantPresentationController:Open(frameName, {
-					cameraPart = if context and context.dialogueCameraPart and context.dialogueCameraPart:IsA("BasePart")
-						then context.dialogueCameraPart
-						else nil,
-					sourceInstance = if context and typeof(context.sourceInstance) == "Instance" then context.sourceInstance else nil,
-					interactionType = if context and typeof(context.interactionType) == "string" then context.interactionType else nil,
-					speakerModel = if context and typeof(context.speakerModel) == "Instance" and context.speakerModel:IsA("Model")
-						then context.speakerModel
-						else nil,
-				})
-				if opened then
-					return
-				end
-			end
-
-			FrameController:OpenFrame(frameName)
-		end)
-		return true
-	end
-
-	Logger.Warn(string.format("[DialogueController] Unsupported action type '%s'.", tostring(action.type)))
-	return false
+	return DialogueRegistry.RunAction(self:_buildSession(), choice, action)
 end
 
 function DialogueController:OnStart()
@@ -695,22 +734,11 @@ function DialogueController:OnStart()
 	end)
 	table.insert(self._connections, self._typingConnection)
 
-	local function rerenderIfOpen()
-		if self:IsOpen() then
-			local currentNode = self:_getCurrentNode()
-			if currentNode then
-				if self._isTyping then
-					return
-				end
-
-				self:_destroyRenderedButtons()
-				self:_renderChoices(currentNode)
-			end
-		end
+	for _, signal in ipairs(self._refreshSignals) do
+		table.insert(self._connections, signal:Connect(function()
+			self:_rerenderChoicesIfOpen()
+		end))
 	end
-
-	table.insert(self._connections, DataController.DataReceived:Connect(rerenderIfOpen))
-	table.insert(self._connections, DataController.DataUpdated:Connect(rerenderIfOpen))
 end
 
 function DialogueController.StartDialogue(dialogueId: string, context: { [string]: any }?): boolean
@@ -726,10 +754,10 @@ function DialogueController.StartDialogue(dialogueId: string, context: { [string
 	DialogueController._context = deepCopyContext(context)
 	DialogueController:_capturePanelVisibility()
 
-	local openFrameName = FrameController:GetOpenFrame()
-	if openFrameName then
-		FrameController:CloseFrame()
-		task.delay(FRAME_CLOSE_DELAY, function()
+	local beforeOpenHook = DialogueController._beforeOpenHook
+	local openDelay = if beforeOpenHook then beforeOpenHook() else 0
+	if typeof(openDelay) == "number" and openDelay > 0 then
+		task.delay(openDelay, function()
 			if DialogueController._activeDialogueId == dialogueId then
 				DialogueController:_beginDialogue(dialogueId)
 			end
@@ -770,13 +798,43 @@ function DialogueController.IsDialogueOpen(dialogueId: string): boolean
 	return DialogueController._activeDialogueId == dialogueId and DialogueController._currentNodeId ~= nil
 end
 
+function DialogueController.SetBeforeOpenHook(hook: (() -> number?)?)
+	if hook ~= nil and type(hook) ~= "function" then
+		error("DialogueController before-open hook must be a function or nil.", 2)
+	end
+
+	DialogueController._beforeOpenHook = hook
+end
+
+function DialogueController.SetPortraitResolver(resolver: ((context: { [string]: any }?) -> Model?)?)
+	if resolver ~= nil and type(resolver) ~= "function" then
+		error("DialogueController portrait resolver must be a function or nil.", 2)
+	end
+
+	DialogueController._portraitResolver = resolver
+end
+
+function DialogueController.RegisterRefreshSignal(signal: any)
+	if typeof(signal) ~= "RBXScriptSignal" and (typeof(signal) ~= "table" or type(signal.Connect) ~= "function") then
+		error("DialogueController refresh signal must provide Connect.", 2)
+	end
+
+	table.insert(DialogueController._refreshSignals, signal)
+	if DialogueController._started then
+		table.insert(DialogueController._connections, signal:Connect(function()
+			DialogueController:_rerenderChoicesIfOpen()
+		end))
+	end
+end
+
 function DialogueController:GetTutorialTarget(targetId: string): GuiObject?
-	if targetId ~= "appraisalOpenChoice" or not self:IsOpen() then
+	if typeof(targetId) ~= "string" or targetId == "" or not self:IsOpen() then
 		return nil
 	end
 
 	for _, resolved in pairs(self._resolvedChoicesById) do
-		if not resolved.disabled and isAppraisalOpenChoice(resolved.choice) then
+		local payload = getActionPayload(resolved.choice)
+		if not resolved.disabled and payload and payload.tutorialTargetId == targetId then
 			return getChoiceTutorialTarget(resolved.button)
 		end
 	end

@@ -137,6 +137,10 @@ local ACTION_CONFIGS: { [string]: ActionConfig } = {
 		limit = 2,
 		windowSeconds = 1,
 	},
+	["remote.dialogue.run_action"] = {
+		limit = 4,
+		windowSeconds = 1,
+	},
 	["remote.marketplace.offer_info"] = {
 		limit = 4,
 		windowSeconds = 1,
@@ -182,6 +186,22 @@ local ACTION_CONFIGS: { [string]: ActionConfig } = {
 		windowSeconds = 1,
 	},
 	["remote.potions.sell"] = {
+		limit = 3,
+		windowSeconds = 1,
+	},
+	["remote.quests.get_state"] = {
+		limit = 3,
+		windowSeconds = 1,
+	},
+	["remote.quests.accept"] = {
+		limit = 3,
+		windowSeconds = 1,
+	},
+	["remote.quests.abandon"] = {
+		limit = 2,
+		windowSeconds = 1,
+	},
+	["remote.quests.claim"] = {
 		limit = 3,
 		windowSeconds = 1,
 	},

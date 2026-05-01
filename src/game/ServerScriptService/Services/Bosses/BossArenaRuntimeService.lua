@@ -12,6 +12,7 @@ local Workspace = game:GetService("Workspace")
 local BossArenaArrivalService = require(script.Parent.BossArenaArrivalService)
 local BossAnimationController = require(script.Parent.Common.BossAnimationController)
 local BossArenaRewardService = require(script.Parent.BossArenaRewardService)
+local QuestService = require(script.Parent.QuestService)
 local BossPhysicsStabilizer = require(script.Parent.Common.BossPhysicsStabilizer)
 local BossArenas = require(ReplicatedStorage.Shared.BossArenas)
 local BossEncounterScaling = require(ReplicatedStorage.Shared.BossArena.EncounterScaling)
@@ -1108,6 +1109,18 @@ function BossArenaRuntimeService:_beginResults(encounter: EncounterState, outcom
 	self:_notifyBossResultsStateChanged()
 
 	if normalizedOutcome == "victory" and encounter.rewardsGranted ~= true then
+		for userId in pairs(encounter.rosterUserIds) do
+			local player = Players:GetPlayerByUserId(userId)
+			if player then
+				QuestService:RecordEvent(player, "boss_victory", {
+					bossId = encounter.bossId,
+					arenaId = encounter.arenaId,
+					damage = encounter.damageByUserId[userId] or 0,
+					rewardEligibleDamageThreshold = encounter.rewardEligibleDamageThreshold,
+					amount = 1,
+				})
+			end
+		end
 		self:_commitBossRewardsAsync(encounter)
 	end
 end

@@ -24,6 +24,7 @@ local SERVER_STARTUP_PHASE_DEFINITIONS = {
 			"TutorialAnalyticsService",
 			"TutorialService",
 			"PurchaseReceiptService",
+			"QuestService",
 			"ChatNotificationService",
 		},
 	},

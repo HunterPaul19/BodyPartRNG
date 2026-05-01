@@ -22,6 +22,7 @@ local TimeShardState = require(ReplicatedStorage.Shared.Character.TimeShardState
 local DailyChestState = require(ReplicatedStorage.Shared.Character.DailyChestState)
 local TutorialState = require(ReplicatedStorage.Shared.Character.TutorialState)
 local BossWorldGuideState = require(ReplicatedStorage.Shared.Character.BossWorldGuideState)
+local QuestState = require(ReplicatedStorage.Shared.Character.QuestState)
 local PlayerStats = require(ReplicatedStorage.Shared.Stats.PlayerStats)
 local AchievementState = require(ReplicatedStorage.Shared.Titles.AchievementState)
 local AccessoryConfig = require(ReplicatedStorage.Shared.Config.AccessoryConfig)
@@ -59,6 +60,7 @@ local TIME_SHARDS_KEY = Schema.TimeShards and Schema.TimeShards.key or nil
 local DAILY_CHESTS_KEY = Schema.DailyChests and Schema.DailyChests.key or nil
 local TUTORIAL_KEY = Schema.Tutorial and Schema.Tutorial.key or nil
 local BOSS_WORLD_GUIDE_KEY = Schema.BossWorldGuide and Schema.BossWorldGuide.key or nil
+local QUESTS_KEY = Schema.Quests and Schema.Quests.key or nil
 local DIAGNOSTICS_KEY = Schema.Diagnostics and Schema.Diagnostics.key or nil
 local STATS_KEY = Schema.Stats and Schema.Stats.key or nil
 local BODY_PARTS_KEY = Schema.BodyParts and Schema.BodyParts.key or nil
@@ -931,6 +933,9 @@ local function normalizeProfileData(profile: any)
 	if BOSS_WORLD_GUIDE_KEY then
 		data[BOSS_WORLD_GUIDE_KEY] = BossWorldGuideState.Normalize(data[BOSS_WORLD_GUIDE_KEY])
 	end
+	if QUESTS_KEY then
+		data[QUESTS_KEY] = QuestState.Normalize(data[QUESTS_KEY])
+	end
 	if STATS_KEY then
 		data[STATS_KEY] = PlayerStats.Normalize(data[STATS_KEY], {
 			bodyPartsState = if BODY_PARTS_KEY then data[BODY_PARTS_KEY] else nil,
@@ -1424,6 +1429,27 @@ function DataService:SetTutorialState(player: Player, state: any): TutorialState
 	end
 
 	self:Set(player, TUTORIAL_KEY, normalizedState)
+	return normalizedState
+end
+
+function DataService:GetQuestState(player: Player): QuestState.QuestStateValue
+	if not QUESTS_KEY then
+		return QuestState.CreateEmptyState()
+	end
+
+	return QuestState.Normalize(self:Get(player, QUESTS_KEY))
+end
+
+function DataService:SetQuestState(player: Player, state: any): QuestState.QuestStateValue
+	local normalizedState = QuestState.Normalize(state)
+	if not QUESTS_KEY then
+		return normalizedState
+	end
+	if not getActiveReplica(player) then
+		return normalizedState
+	end
+
+	self:Set(player, QUESTS_KEY, normalizedState)
 	return normalizedState
 end
 

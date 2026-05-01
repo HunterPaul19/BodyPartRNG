@@ -8,6 +8,7 @@ local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local BossArenaArrivalService = require(script.Parent.BossArenaArrivalService)
 local DataService = require(script.Parent.DataService)
+local QuestService = require(script.Parent.QuestService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 
 local REMOTES_FOLDER_NAME = "Remotes"
@@ -368,6 +369,11 @@ function PotionService:GrantPotionUses(player: Player, potionId: string, amount:
 	if not updatedRecord then
 		return false, err or "Failed to grant potion uses."
 	end
+	QuestService:RecordEvent(player, "potion_gained", {
+		potionId = config.id,
+		familyId = config.familyId,
+		amount = math.max(1, math.floor(tonumber(amount) or 1)),
+	})
 
 	self:NotifyClient(player, string.format('Granted %d %s use(s).', math.max(1, math.floor(amount)), config.label))
 	return true, string.format('Granted %d %s use(s).', math.max(1, math.floor(amount)), config.label)
@@ -455,6 +461,11 @@ function PotionService:UsePotion(player: Player, potionId: string): (boolean, st
 	local remainingOwnedAmount = tonumber(updatedRecord and updatedRecord.amount) or 0
 	local message = string.format('Used %s. %d use(s) left.', config.label, remainingOwnedAmount)
 	self:NotifyClient(player, message)
+	QuestService:RecordEvent(player, "potion_used", {
+		potionId = config.id,
+		familyId = config.familyId,
+		amount = 1,
+	})
 	return true, message
 end
 

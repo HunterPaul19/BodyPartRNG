@@ -13,6 +13,7 @@ local Schema = require(ReplicatedStorage.Lists.Schema)
 local DataService = require(script.Parent.DataService)
 local PotionService = require(script.Parent.PotionService)
 local PurchaseReceiptService = require(script.Parent.PurchaseReceiptService)
+local QuestService = require(script.Parent.QuestService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 
 local REMOTES_FOLDER_NAME = "Remotes"
@@ -942,6 +943,15 @@ function MerchantShopService:PurchaseShopItem(player: Player, payload: any)
 		entry.shopLabel,
 		Globals.formatNumber(totalPrice)
 	)
+	QuestService:RecordEvent(player, "shop_purchase", {
+		shopId = "merchant",
+		itemId = entry.id,
+		potionId = entry.potionId,
+		quantity = quantity,
+		totalPrice = totalPrice,
+		currency = "time_shards",
+		amount = quantity,
+	})
 	return response(true, successMessage, MerchantShopState.CloneState({
 		windowId = resolvedState.windowId,
 		isActive = true,

@@ -10,6 +10,7 @@ PlayerStats.EARNED_MONEY_SOURCES = {
 	sell_single = true,
 	sell_bulk = true,
 	purchase_reward = true,
+	quest_reward = true,
 	admin = true,
 	other = true,
 }

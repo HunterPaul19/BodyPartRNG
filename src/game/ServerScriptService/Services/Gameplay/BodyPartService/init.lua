@@ -22,6 +22,7 @@ local PotionRuntimeBonuses = require(ReplicatedStorage.Shared.Character.PotionRu
 local PerfStats = require(ReplicatedStorage.Shared.Diagnostics.PerfStats)
 local DataService = require(script.Parent.DataService)
 local PotionService = require(script.Parent.PotionService)
+local QuestService = require(script.Parent.QuestService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 local StatsService = require(script.Parent.StatsService)
 local TutorialService = require(script.Parent.TutorialService)
@@ -2844,6 +2845,15 @@ local function equipOwnedBodyPartInternal(
 		pieceId = piece.id,
 		region = piece.region,
 	})
+	QuestService:RecordEvent(player, "body_part_equipped", {
+		ownedId = ownedId,
+		pieceId = piece.id,
+		region = piece.region,
+		setId = piece.setId,
+		displayRarity = ownedRecord.displayRarity,
+		rarityDenominator = ownedRecord.rarityDenominator,
+		amount = 1,
+	})
 
 	return true, string.format("Equipped %s.", piece.displayName)
 end
@@ -3106,6 +3116,16 @@ function BodyPartService:SellOwnedBodyPart(player: Player, ownedId: string): (bo
 	local payout = getSellValueForRecord(removedRecord)
 	DataService:AddMoney(player, payout, "sell_single")
 	StatsService:RecordBodyPartsSold(player, 1)
+	QuestService:RecordEvent(player, "body_part_sold", {
+		ownedId = ownedId,
+		pieceId = removedRecord.pieceId,
+		region = piece and piece.region or nil,
+		setId = piece and piece.setId or nil,
+		displayRarity = removedRecord.displayRarity,
+		rarityDenominator = removedRecord.rarityDenominator,
+		payout = payout,
+		amount = 1,
+	})
 
 	local message = string.format("Sold %s for $%s.", pieceName, tostring(payout))
 	self:NotifyClient(player, message)
@@ -3167,6 +3187,11 @@ function BodyPartService:SellAllUnfavoritedBodyParts(player: Player): (boolean, 
 
 	DataService:AddMoney(player, totalPayout, "sell_bulk")
 	StatsService:RecordBodyPartsSold(player, soldCount)
+	QuestService:RecordEvent(player, "body_part_sold", {
+		payout = totalPayout,
+		amount = soldCount,
+		bulk = true,
+	})
 
 	local message = string.format("Sold %d body parts for $%s.", soldCount, tostring(totalPayout))
 	self:NotifyClient(player, message)

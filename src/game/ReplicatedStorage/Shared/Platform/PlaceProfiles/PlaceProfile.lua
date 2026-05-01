@@ -22,6 +22,7 @@ local ALL_SERVICE_NAMES = {
 	"DayNightCycleService",
 	"DashService",
 	"DiagnosticsService",
+	"DialogueActionService",
 	"MarketplaceHandlers",
 	"MerchantShopService",
 	"OfflineEarningsService",
@@ -61,6 +62,7 @@ local ALL_CONTROLLER_NAMES = {
 	"DataController",
 	"DashController",
 	"DayNightCycleController",
+	"DialogueHandlerController",
 	"DialogueController",
 	"DialogueInteractionController",
 	"FoliageController",
@@ -152,7 +154,8 @@ local FEATURE_TO_EXCLUSIONS = {
 	},
 	dialogue = {
 		panels = { "Dialogue" },
-		controllers = { "DialogueController", "DialogueInteractionController" },
+		controllers = { "DialogueController", "DialogueHandlerController", "DialogueInteractionController" },
+		services = { "DialogueActionService" },
 	},
 	appraisal = {
 		frames = { "AppraisalUI" },

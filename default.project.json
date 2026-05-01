@@ -63,6 +63,12 @@
         "Diagnostics": {
           "$path": "src/game/ReplicatedStorage/Shared/Platform/Diagnostics"
         },
+        "Gameplay": {
+          "$className": "Folder",
+          "Dialogue": {
+            "$path": "src/game/ReplicatedStorage/Shared/Gameplay/Dialogue"
+          }
+        },
         "Effects": {
           "$path": "src/game/ReplicatedStorage/Shared/Presentation/Effects"
         },
@@ -206,6 +212,9 @@
         "DiagnosticsService": {
           "$path": "src/game/ServerScriptService/Services/Core/DiagnosticsService.lua"
         },
+        "DialogueActionService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/DialogueActionService.lua"
+        },
         "EnterBossLobbyPortalService": {
           "$path": "src/game/ServerScriptService/Services/Bosses/EnterBossLobbyPortalService.lua"
         },
@@ -235,6 +244,9 @@
         },
         "PurchaseReceiptService": {
           "$path": "src/game/ServerScriptService/Services/Economy/PurchaseReceiptService.lua"
+        },
+        "QuestService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/QuestService.lua"
         },
         "PvpService": {
           "$path": "src/game/ServerScriptService/Services/Gameplay/PvpService.lua"
@@ -364,6 +376,12 @@
           },
           "DialogueController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/DialogueController.lua"
+          },
+          "DialogueClientHandlers": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/DialogueClientHandlers.lua"
+          },
+          "DialogueHandlerController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/DialogueHandlerController.lua"
           },
           "DialogueInteractionController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/DialogueInteractionController.lua"

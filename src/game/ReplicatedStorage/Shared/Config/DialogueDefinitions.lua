@@ -1,7 +1,8 @@
 export type DialogueAction = {
-	type: "gotoNode" | "closeDialogue" | "openShopFrame" | "openFrame",
+	type: string,
 	nextNodeId: string?,
 	frameName: string?,
+	payload: { [string]: any }?,
 }
 
 export type DialogueChoice = {
@@ -71,6 +72,10 @@ local definitionsById: { [string]: DialogueDefinition } = {
 						action = {
 							type = "openFrame",
 							frameName = "AppraisalUI",
+							payload = {
+								style = "positive",
+								tutorialTargetId = "appraisalOpenChoice",
+							},
 						},
 					},
 					{

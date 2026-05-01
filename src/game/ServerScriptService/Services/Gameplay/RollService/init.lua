@@ -22,6 +22,7 @@ local CraftingService = require(script.Parent.CraftingService)
 local DataService = require(script.Parent.DataService)
 local PotionService = require(script.Parent.PotionService)
 local PurchaseReceiptService = require(script.Parent.PurchaseReceiptService)
+local QuestService = require(script.Parent.QuestService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
 local StatsService = require(script.Parent.StatsService)
 local TutorialService = require(script.Parent.TutorialService)
@@ -1304,6 +1305,13 @@ function RollService:SelectRollType(player: Player, rollTypeId: string): (boolea
 	end
 	if previousRollTypeId ~= rollTypeId then
 		StatsService:RecordSettingChange(player, "roll_type")
+		QuestService:RecordEvent(player, "roll_type_selected", {
+			previousRollTypeId = previousRollTypeId,
+			rollTypeId = rollTypeId,
+			moneyCost = rollType.moneyCost,
+			luckMultiplier = rollType.luckMultiplier,
+			amount = 1,
+		})
 	end
 
 	return true, string.format("Selected %s.", rollType.displayName)
@@ -1321,6 +1329,11 @@ function RollService:SelectRollRegion(player: Player, rollRegion: string): (bool
 	end
 	if previousRollRegion ~= rollRegion then
 		StatsService:RecordSettingChange(player, "roll_region")
+		QuestService:RecordEvent(player, "roll_region_selected", {
+			previousRollRegion = previousRollRegion,
+			rollRegion = rollRegion,
+			amount = 1,
+		})
 	end
 
 	local iconEntry = BodyPartIcons[rollRegion]
@@ -1770,6 +1783,23 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		serialNumber = ownedRecord.serialNumber,
 		didDiscoverPieceFirstTime = didDiscoverPieceFirstTime,
 		pendingAutoSell = pendingAutoSell,
+	})
+	QuestService:RecordEvent(player, "roll_completed", {
+		rollTypeId = selectedRollType.id,
+		rollRegion = selectedRollRegion,
+		displayRarity = autoSellRarity,
+		setId = finalSet.setId,
+		mutationId = mutationData.id,
+		sizeId = sizeData.id,
+		displayedDenominator = finalSet.displayedDenominator,
+		pieceId = finalPiece.id,
+		ownedId = ownedRecord.ownedId,
+		serialNumber = ownedRecord.serialNumber,
+		didDiscoverPieceFirstTime = didDiscoverPieceFirstTime,
+		autoEquipped = autoEquipped,
+		autoCraftCommitted = autoCraftCommitted,
+		autoSoldInstantly = autoSoldInstantly,
+		amount = 1,
 	})
 	local shouldPlayCutscene, cutsceneTier =
 		resolveCutscenePlayback(player, finalSet.setId, finalSet.setConfig.rollDisplay.rarity)
