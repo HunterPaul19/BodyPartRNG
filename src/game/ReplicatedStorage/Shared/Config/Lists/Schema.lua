@@ -20,7 +20,7 @@ local PlayerStats = require(script.Parent.Parent.Shared.Stats.PlayerStats)
 return {
 	Money = {
 		key = "money",
-		value = 200,
+		value = 1000,
 	},
 
 	TimePlayed = {

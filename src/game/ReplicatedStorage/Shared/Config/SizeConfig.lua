@@ -7,6 +7,7 @@ export type SizeEntry = {
 	minScale: number,
 	maxScale: number,
 	moneyMultiplier: number,
+	combatMultiplier: number,
 }
 
 local ORDERED: { SizeEntry } = {
@@ -17,6 +18,7 @@ local ORDERED: { SizeEntry } = {
 		minScale = 0.5,
 		maxScale = 0.74,
 		moneyMultiplier = 0.5,
+		combatMultiplier = 0.95,
 	},
 	{
 		id = "small",
@@ -25,6 +27,7 @@ local ORDERED: { SizeEntry } = {
 		minScale = 0.75,
 		maxScale = 0.99,
 		moneyMultiplier = 0.75,
+		combatMultiplier = 0.98,
 	},
 	{
 		id = "normal",
@@ -33,6 +36,7 @@ local ORDERED: { SizeEntry } = {
 		minScale = 1.0,
 		maxScale = 1.99,
 		moneyMultiplier = 1.0,
+		combatMultiplier = 1.0,
 	},
 	{
 		id = "large",
@@ -41,6 +45,7 @@ local ORDERED: { SizeEntry } = {
 		minScale = 2.0,
 		maxScale = 2.99,
 		moneyMultiplier = 1.5,
+		combatMultiplier = 1.03,
 	},
 	{
 		id = "huge",
@@ -49,6 +54,7 @@ local ORDERED: { SizeEntry } = {
 		minScale = 3.0,
 		maxScale = 3.99,
 		moneyMultiplier = 2.0,
+		combatMultiplier = 1.06,
 	},
 	{
 		id = "titanic",
@@ -57,6 +63,7 @@ local ORDERED: { SizeEntry } = {
 		minScale = 4.0,
 		maxScale = 5.0,
 		moneyMultiplier = 3.0,
+		combatMultiplier = 1.1,
 	},
 }
 
@@ -206,6 +213,20 @@ function SizeConfig.GetMoneyMultiplierForScale(scale: any): number
 	end
 
 	return SizeConfig.GetMoneyMultiplier(nil)
+end
+
+function SizeConfig.GetCombatMultiplier(id: any): number
+	local entry = BY_ID[SizeConfig.NormalizeId(id)] or SizeConfig.GetDefault()
+	return entry.combatMultiplier
+end
+
+function SizeConfig.GetCombatMultiplierForScale(scale: any): number
+	local entry = SizeConfig.GetByScale(scale)
+	if entry then
+		return entry.combatMultiplier
+	end
+
+	return SizeConfig.GetCombatMultiplier(nil)
 end
 
 function SizeConfig.RollScale(randomSource: Random, size: any): number

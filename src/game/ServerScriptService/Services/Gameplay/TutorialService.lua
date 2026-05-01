@@ -475,6 +475,15 @@ function TutorialService:GetAppraisalOverride(player: Player, _context: any?): a
 	}
 end
 
+function TutorialService:ShouldWaiveAppraisalCost(player: Player): boolean
+	if not isActive(player) then
+		return false
+	end
+
+	local state = getState(player)
+	return state.completed ~= true and state.stepId == TutorialConfig.Steps.GoAppraise
+end
+
 function TutorialService:RecordAppraisalResult(player: Player, result: any)
 	if not isActive(player) or typeof(result) ~= "table" then
 		return

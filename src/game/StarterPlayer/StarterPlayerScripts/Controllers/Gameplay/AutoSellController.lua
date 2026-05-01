@@ -197,7 +197,11 @@ function AutoSellController:_cacheUi(playerGui: PlayerGui)
 
 	local autoSellRoot = modalRoot:WaitForChild(WINDOW_NAME, 30)
 	local main = mainInterface:WaitForChild("Main", 30)
-	local openButton = main:WaitForChild("AutoSellButton", 30)
+	local buttonHolder = main:FindFirstChild("ButtonHolder")
+	local openButton = if buttonHolder then buttonHolder:FindFirstChild("AutoSellButton") else nil
+	if openButton == nil then
+		openButton = main:WaitForChild("AutoSellButton", 30)
+	end
 	local scrollingFrame = autoSellRoot:WaitForChild("ScrollingFrame", 30)
 
 	if not (

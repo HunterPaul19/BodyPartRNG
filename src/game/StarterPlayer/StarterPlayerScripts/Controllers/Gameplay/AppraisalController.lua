@@ -15,6 +15,7 @@ local AppraisalConfig = require(ReplicatedStorage.Shared.Config.AppraisalConfig)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
+local TutorialConfig = require(ReplicatedStorage.Shared.Config.TutorialConfig)
 local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
 local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
@@ -36,6 +37,7 @@ local PERFORM_APPRAISAL_REMOTE_NAME = "PerformAppraisal"
 local UPDATED_REMOTE_NAME = "Updated"
 local BODY_PARTS_DATA_KEY = Schema.BodyParts and Schema.BodyParts.key or "bodyParts"
 local EQUIPPED_LOADOUT_KEY = Schema.EquippedLoadout and Schema.EquippedLoadout.key or "equippedLoadout"
+local TUTORIAL_DATA_KEY = Schema.Tutorial and Schema.Tutorial.key or "tutorial"
 local SELECTED_COLOR = Color3.fromRGB(116, 192, 255)
 local EQUIPPED_COLOR = Color3.fromRGB(113, 230, 139)
 local DEFAULT_OUTLINE_COLOR = Color3.fromRGB(255, 255, 255)
@@ -280,7 +282,18 @@ function AppraisalController:_getSelectedAppraisalCost(): number
 		return 0
 	end
 
+	if self:_shouldWaiveAppraisalCost() then
+		return 0
+	end
+
 	return AppraisalPricing.GetCost(ownedRecord, piece)
+end
+
+function AppraisalController:_shouldWaiveAppraisalCost(): boolean
+	local state = DataController:Get(TUTORIAL_DATA_KEY)
+	return typeof(state) == "table"
+		and state.completed ~= true
+		and state.stepId == TutorialConfig.Steps.GoAppraise
 end
 
 function AppraisalController:_getSelectedOwnedRecord()
@@ -1077,7 +1090,7 @@ function AppraisalController:OnStart()
 		if not self._isOpen then
 			return
 		end
-		if key ~= nil and key ~= BODY_PARTS_DATA_KEY and key ~= EQUIPPED_LOADOUT_KEY then
+		if key ~= nil and key ~= BODY_PARTS_DATA_KEY and key ~= EQUIPPED_LOADOUT_KEY and key ~= TUTORIAL_DATA_KEY then
 			return
 		end
 

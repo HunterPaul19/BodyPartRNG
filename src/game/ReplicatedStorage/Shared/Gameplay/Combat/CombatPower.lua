@@ -32,17 +32,26 @@ function CombatPower.CalculateAboveBase(finalStats: Stats?, baseStats: Stats?): 
 end
 
 function CombatPower.GetBodyPartCombatMultiplier(record: any): number
-	local mutationMultiplier = tonumber(record and record.mutationMultiplier)
-	if mutationMultiplier == nil or mutationMultiplier <= 0 then
-		mutationMultiplier = MutationConfig.GetMultiplier(record and (record.mutationId or record.mutation))
+	local mutationCombatMultiplier = MutationConfig.GetCombatMultiplier(nil)
+	if typeof(record) == "table" then
+		if typeof(record.mutationId) == "string" and MutationConfig.Get(record.mutationId) ~= nil then
+			mutationCombatMultiplier = MutationConfig.GetCombatMultiplier(record.mutationId)
+		else
+			mutationCombatMultiplier = MutationConfig.GetCombatMultiplier(record.mutation)
+		end
 	end
 
-	local sizeMultiplier = SizeConfig.GetMoneyMultiplierForScale(record and record.sizeMultiplier)
-	if record and record.sizeMultiplier == nil then
-		sizeMultiplier = SizeConfig.GetMoneyMultiplier(record.sizeId)
+	local sizeCombatMultiplier = SizeConfig.GetCombatMultiplier(nil)
+	if typeof(record) == "table" then
+		local sizeEntry = SizeConfig.GetByScale(record.sizeMultiplier)
+		if sizeEntry then
+			sizeCombatMultiplier = sizeEntry.combatMultiplier
+		else
+			sizeCombatMultiplier = SizeConfig.GetCombatMultiplier(record.sizeId)
+		end
 	end
 
-	return math.max(0, mutationMultiplier) * math.max(0, sizeMultiplier)
+	return math.max(0, mutationCombatMultiplier) * math.max(0, sizeCombatMultiplier)
 end
 
 function CombatPower.GetBodyPartContributionStats(piece: any, record: any): Stats

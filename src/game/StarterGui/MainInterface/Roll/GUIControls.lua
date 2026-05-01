@@ -97,10 +97,12 @@ local Black2 = Main.Parent.Black2
 local DisplayFrame = Main:WaitForChild("DisplayFrame")
 local SubInfoFrame = Main:WaitForChild("SubInfo")
 local MainButtons = Main.Parent.Main
-local RollButton = MainButtons.RollButton
-local QuickRollButton = MainButtons.QuickRoll
-local AutoRollButton = MainButtons.AutoRoll
-local AutoEquipBestButton = MainButtons:WaitForChild("AutoEquipBestButton")
+local ButtonHolder = MainButtons:WaitForChild("ButtonHolder")
+local RollButton = ButtonHolder:WaitForChild("RollButton")
+local QuickRollButton = ButtonHolder:WaitForChild("QuickRoll")
+local AutoRollButton = ButtonHolder:WaitForChild("AutoRoll")
+local AutoEquipBestButton = ButtonHolder:FindFirstChild("AutoEquipBestButton")
+	or MainButtons:WaitForChild("AutoEquipBestButton")
 local AutoEquipBestUsageLabel = AutoEquipBestButton:WaitForChild("Usage")
 local AutoEquipBestSelectionCorners = AutoEquipBestUsageLabel:FindFirstChild("SelectionCorners")
 local RollDropdown = RollButton.RollDropdown
@@ -746,9 +748,9 @@ local function restoreIdleRollUi()
 	Main.SkipButton.Visible = false
 	Main.SubInfo.Visible = false
 	Main.EquipButton.Visible = false
-	MainButtons.RollButton.Visible = true
-	MainButtons.QuickRoll.Visible = true
-	MainButtons.AutoRoll.Visible = true
+	RollButton.Visible = true
+	QuickRollButton.Visible = true
+	AutoRollButton.Visible = true
 	AutoEquipBestButton.Visible = true
 	GUIControls.ActiveRollPreviewSessionId = nil
 end
@@ -1431,7 +1433,7 @@ function GUIControls:PrepareTutorialTarget(targetId)
 		or Main.SubInfo.Visible == true
 		or Main.SkipButton.Visible == true
 		or Main.EquipButton.Visible == true
-		or MainButtons.RollButton.Visible ~= true
+		or RollButton.Visible ~= true
 
 	if resultPresentationVisible then
 		GUIControls.CurrentRollResult = nil
@@ -1484,9 +1486,9 @@ function GUIControls:RollSequence(previewSequence, previewCount)
 	Main.EquipButton.Visible = false
 	Main.SkipButton.Visible = false
 	GUIControls:RefreshEquipButton()
-	MainButtons.RollButton.Visible = false
-	MainButtons.QuickRoll.Visible = false
-	MainButtons.AutoRoll.Visible = false
+	RollButton.Visible = false
+	QuickRollButton.Visible = false
+	AutoRollButton.Visible = false
 	AutoEquipBestButton.Visible = false
 	ShowBlackTween:Play()
 	BlurTween:Play()
@@ -1738,9 +1740,9 @@ function GUIControls:Roll(triggerSource)
 			GUIControls.CurrentlyRolling = false
 			if finalResult and shouldPlayRollCutscene(rollResult) then
 				Main.Visible = true
-				MainButtons.RollButton.Visible = false
-				MainButtons.QuickRoll.Visible = false
-				MainButtons.AutoRoll.Visible = false
+				RollButton.Visible = false
+				QuickRollButton.Visible = false
+				AutoRollButton.Visible = false
 				AutoEquipBestButton.Visible = false
 				GUIControls:BeginRollPreviewSession()
 				revealFinalRollResult(rollResult, finalResult)
@@ -1755,9 +1757,9 @@ function GUIControls:Roll(triggerSource)
 				Main.SkipButton.Visible = false
 				Main.SubInfo.Visible = false
 				Main.EquipButton.Visible = false
-				MainButtons.RollButton.Visible = true
-				MainButtons.QuickRoll.Visible = true
-				MainButtons.AutoRoll.Visible = true
+				RollButton.Visible = true
+				QuickRollButton.Visible = true
+				AutoRollButton.Visible = true
 				AutoEquipBestButton.Visible = true
 				GUIControls.ActiveRollPreviewSessionId = nil
 			else
@@ -1776,9 +1778,9 @@ function GUIControls:Roll(triggerSource)
 
 		GUIControls.CurrentlyRolling = true
 		Main.Visible = true
-		MainButtons.RollButton.Visible = false
-		MainButtons.QuickRoll.Visible = false
-		MainButtons.AutoRoll.Visible = false
+		RollButton.Visible = false
+		QuickRollButton.Visible = false
+		AutoRollButton.Visible = false
 		AutoEquipBestButton.Visible = false
 
 		GUIControls.CurrentRollResult = rollResult

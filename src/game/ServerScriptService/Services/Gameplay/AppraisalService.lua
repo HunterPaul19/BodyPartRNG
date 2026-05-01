@@ -238,7 +238,8 @@ function AppraisalService:PerformAppraisal(player: Player, payload: any)
 		return response(false, "That body part is no longer configured.", state)
 	end
 
-	local appraisalCost = AppraisalPricing.GetCost(ownedRecord, piece)
+	local regularAppraisalCost = AppraisalPricing.GetCost(ownedRecord, piece)
+	local appraisalCost = if TutorialService:ShouldWaiveAppraisalCost(player) then 0 else regularAppraisalCost
 	local currentMoney = DataService:GetMoney(player)
 	if currentMoney < appraisalCost then
 		return response(

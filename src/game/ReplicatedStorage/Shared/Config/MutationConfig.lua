@@ -12,6 +12,7 @@ export type MutationEntry = {
 	displayName: string,
 	weight: number,
 	multiplier: number,
+	combatMultiplier: number,
 	color: Color3,
 	screenEffectPresetName: string?,
 }
@@ -22,6 +23,7 @@ local ORDERED: { MutationEntry } = {
 		displayName = "None",
 		weight = 88,
 		multiplier = 1.0,
+		combatMultiplier = 1.0,
 		color = Color3.fromRGB(170, 170, 170),
 		screenEffectPresetName = nil,
 	},
@@ -30,6 +32,7 @@ local ORDERED: { MutationEntry } = {
 		displayName = "Diamond",
 		weight = 6,
 		multiplier = 1.5,
+		combatMultiplier = 1.05,
 		color = Color3.fromRGB(94, 234, 255),
 		screenEffectPresetName = "Diamond",
 	},
@@ -38,6 +41,7 @@ local ORDERED: { MutationEntry } = {
 		displayName = "Magma",
 		weight = 4,
 		multiplier = 2.0,
+		combatMultiplier = 1.1,
 		color = Color3.fromRGB(255, 122, 54),
 		screenEffectPresetName = "Magma",
 	},
@@ -46,6 +50,7 @@ local ORDERED: { MutationEntry } = {
 		displayName = "Corrupted",
 		weight = 1.5,
 		multiplier = 3.0,
+		combatMultiplier = 1.15,
 		color = Color3.fromRGB(214, 46, 113),
 		screenEffectPresetName = "Corrupted",
 	},
@@ -54,6 +59,7 @@ local ORDERED: { MutationEntry } = {
 		displayName = "Prismatic",
 		weight = 0.5,
 		multiplier = 5.0,
+		combatMultiplier = 1.25,
 		color = Color3.fromRGB(180, 98, 255),
 		screenEffectPresetName = "Prismatic",
 	},
@@ -161,6 +167,11 @@ end
 function MutationConfig.GetMultiplier(id: any): number
 	local entry = BY_ID[MutationConfig.NormalizeId(id)] or MutationConfig.GetDefault()
 	return entry.multiplier
+end
+
+function MutationConfig.GetCombatMultiplier(id: any): number
+	local entry = BY_ID[MutationConfig.NormalizeId(id)] or MutationConfig.GetDefault()
+	return entry.combatMultiplier
 end
 
 function MutationConfig.GetColor(id: any): Color3
