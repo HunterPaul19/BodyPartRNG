@@ -28,7 +28,9 @@ local PASS_OWNERSHIP_CACHE_TTL_SECONDS = 300
 local PASS_OWNERSHIP_RETRY_BACKOFF_SECONDS = 30
 local PASS_VALIDATION_CACHE_TTL_SECONDS = 300
 local MARKETPLACE_ENTITLEMENT_REPAIR_UPDATE_TYPE = "MarketplaceEntitlementRepair"
+local MARKETPLACE_ADMIN_GRANT_UPDATE_TYPE = "MarketplaceAdminGrant"
 local PASS_PROMPT_RETRY_DELAYS_SECONDS = { 1, 3, 8, 15 }
+local MAX_ADMIN_PRODUCT_GRANT_COUNT = 25
 
 local PurchaseReceipt = {}
 
@@ -1119,6 +1121,102 @@ local function makeRepairPayload(adminPlayer: Player, targetUserId: number, offe
 	}
 end
 
+local function makeAdminGrantPayload(adminPlayer: Player, targetUserId: number, offerKey: string, reason: string, count: number, expectedKind: string?)
+	return {
+		grantId = string.format(
+			"admin:%d:%d:%s:%d",
+			adminPlayer.UserId,
+			targetUserId,
+			offerKey,
+			os.time()
+		),
+		offerKey = offerKey,
+		reason = reason,
+		adminUserId = adminPlayer.UserId,
+		createdAt = os.time(),
+		count = count,
+		expectedKind = expectedKind,
+	}
+end
+
+local function resolveAdminGrantCount(offer: any, count: any): number
+	if typeof(offer) ~= "table" or offer.kind ~= "product" or offer.grantMode ~= "repeatable" then
+		return 1
+	end
+
+	local resolvedCount = math.floor(tonumber(count) or 1)
+	return math.clamp(resolvedCount, 1, MAX_ADMIN_PRODUCT_GRANT_COUNT)
+end
+
+local function applyAdminOfferGrant(player: Player, grantPayload: any): (boolean, string?, any?)
+	if typeof(grantPayload) ~= "table" then
+		return false, "Admin grant payload must be a table.", nil
+	end
+	if not isPlayerLoaded(player) then
+		return false, "Player data is not loaded.", nil
+	end
+
+	local offerKey = normalizeString(grantPayload.offerKey)
+	local offer = getOffer(offerKey)
+	if not offer then
+		return false, "That offer does not exist.", nil
+	end
+
+	local expectedKind = normalizeString(grantPayload.expectedKind)
+	if expectedKind ~= "" and offer.kind ~= expectedKind then
+		return false, string.format("%s is not a %s offer.", getOfferDisplayName(offer.offerKey), expectedKind), nil
+	end
+
+	local sale = getSaleDefinition(offer, "self")
+	if typeof(sale) ~= "table" or typeof(sale.robloxId) ~= "number" then
+		return false, string.format("%s is not configured for self purchase.", getOfferDisplayName(offer.offerKey)), nil
+	end
+
+	if offer.grantMode ~= "repeatable" and hasPermanentOwnershipInState(getMarketplaceState(player), offer) then
+		return true, "already_owned", {
+			offerKey = offer.offerKey,
+			alreadyOwned = true,
+			isNew = false,
+			count = 0,
+		}
+	end
+
+	local grantCount = resolveAdminGrantCount(offer, grantPayload.count)
+	local baseGrantId = normalizeString(grantPayload.grantId)
+	if baseGrantId == "" then
+		baseGrantId = string.format("admin:%d:%s:%d", player.UserId, offer.offerKey, os.time())
+	end
+
+	local appliedCount = 0
+	for index = 1, grantCount do
+		local context = makePurchaseContext(offer, sale, {
+			source = "admin_grant",
+			purchaseKind = "admin",
+			purchaseId = if grantCount > 1 then string.format("%s:%d", baseGrantId, index) else baseGrantId,
+			senderUserId = math.max(0, math.floor(tonumber(grantPayload.adminUserId) or 0)),
+			recipientUserId = player.UserId,
+		})
+		context.reason = normalizeString(grantPayload.reason)
+
+		local granted, err = processEntitlementGrant(player, offer, sale, context)
+		if not granted then
+			return false, err or "Failed to apply admin marketplace grant.", {
+				offerKey = offer.offerKey,
+				count = appliedCount,
+			}
+		end
+		appliedCount += 1
+	end
+
+	emitOwnedEvents(player)
+	return true, nil, {
+		offerKey = offer.offerKey,
+		alreadyOwned = false,
+		isNew = true,
+		count = appliedCount,
+	}
+end
+
 local function applyEntitlementRepair(player: Player, repairPayload: any): (boolean, string?, any?)
 	if typeof(repairPayload) ~= "table" then
 		return false, "Repair payload must be a table.", nil
@@ -1180,6 +1278,26 @@ local function processMarketplaceEntitlementRepairUpdate(player: Player, data: a
 	if not repaired then
 		Logger.Warn(string.format(
 			"[PurchaseReceipt] Entitlement repair failed for %s(%d): %s",
+			player.Name,
+			player.UserId,
+			tostring(err or "unknown error")
+		))
+	end
+end
+
+local function processMarketplaceAdminGrantUpdate(player: Player, data: any)
+	if
+		typeof(data) ~= "table"
+		or data.updateType ~= MARKETPLACE_ADMIN_GRANT_UPDATE_TYPE
+		or typeof(data.data) ~= "table"
+	then
+		return
+	end
+
+	local granted, err = applyAdminOfferGrant(player, data.data)
+	if not granted then
+		Logger.Warn(string.format(
+			"[PurchaseReceipt] Admin marketplace grant failed for %s(%d): %s",
 			player.Name,
 			player.UserId,
 			tostring(err or "unknown error")
@@ -1421,6 +1539,7 @@ function PurchaseReceipt:OnStart()
 	DataService.GlobalUpdateProcessed:Connect(function(player: Player, _profile: any, data: any)
 		processMarketplaceGiftUpdate(player, data)
 		processMarketplaceEntitlementRepairUpdate(player, data)
+		processMarketplaceAdminGrantUpdate(player, data)
 	end)
 	DataService.PlayerDataLoaded:Connect(function(player: Player)
 		reconcileOwnedOffersOnJoin(player)
@@ -1627,6 +1746,142 @@ function PurchaseReceipt:PromptGiftPurchase(player: Player, offerKey: string, re
 
 	StatsService:RecordPurchasePrompt(player, offerKey)
 	return true, "Gift purchase prompt opened."
+end
+
+function PurchaseReceipt:AdminGrantOfferForUser(adminPlayer: Player, targetUserId: number, offerKey: string?, options: any?)
+	if typeof(adminPlayer) ~= "Instance" or not adminPlayer:IsA("Player") then
+		return {
+			ok = false,
+			code = "BAD_REQUEST",
+			message = "A valid admin player is required.",
+			data = {},
+		}
+	end
+
+	local resolvedTargetUserId = math.floor(tonumber(targetUserId) or 0)
+	if resolvedTargetUserId <= 0 then
+		return {
+			ok = false,
+			code = "BAD_REQUEST",
+			message = "A valid target userId is required.",
+			data = {},
+		}
+	end
+
+	local resolvedOfferKey = normalizeString(offerKey)
+	if resolvedOfferKey == "" then
+		return {
+			ok = false,
+			code = "BAD_REQUEST",
+			message = "An offer key is required.",
+			data = {},
+		}
+	end
+
+	local offer = getOffer(resolvedOfferKey)
+	if not offer then
+		return {
+			ok = false,
+			code = "UNKNOWN_OFFER",
+			message = "That offer does not exist.",
+			data = {
+				offerKey = resolvedOfferKey,
+			},
+		}
+	end
+
+	local expectedKind = normalizeString(typeof(options) == "table" and options.expectedKind or nil)
+	if expectedKind ~= "" and offer.kind ~= expectedKind then
+		return {
+			ok = false,
+			code = "WRONG_OFFER_KIND",
+			message = string.format("%s is not a %s offer.", getOfferDisplayName(offer.offerKey), expectedKind),
+			data = {
+				offerKey = offer.offerKey,
+				kind = offer.kind,
+			},
+		}
+	end
+
+	local sale = getSaleDefinition(offer, "self")
+	if typeof(sale) ~= "table" or typeof(sale.robloxId) ~= "number" then
+		return {
+			ok = false,
+			code = "OFFER_NOT_CONFIGURED",
+			message = string.format("%s is not configured for self purchase.", getOfferDisplayName(offer.offerKey)),
+			data = {
+				offerKey = offer.offerKey,
+			},
+		}
+	end
+
+	local grantCount = resolveAdminGrantCount(offer, typeof(options) == "table" and options.count or 1)
+	local grantPayload = makeAdminGrantPayload(
+		adminPlayer,
+		resolvedTargetUserId,
+		offer.offerKey,
+		normalizeString(typeof(options) == "table" and options.reason or nil) ~= "" and normalizeString(options.reason) or "admin_grant",
+		grantCount,
+		expectedKind
+	)
+	local targetPlayer = Players:GetPlayerByUserId(resolvedTargetUserId)
+	if targetPlayer and isPlayerLoaded(targetPlayer) then
+		local granted, grantError, grantData = applyAdminOfferGrant(targetPlayer, grantPayload)
+		if not granted then
+			return {
+				ok = false,
+				code = "GRANT_FAILED",
+				message = grantError or "Failed to apply admin marketplace grant.",
+				data = {
+					offerKey = offer.offerKey,
+					userId = resolvedTargetUserId,
+				},
+			}
+		end
+
+		if grantData and grantData.alreadyOwned == true then
+			return {
+				ok = true,
+				code = "ALREADY_OWNED",
+				message = string.format("%s already owns %s.", targetPlayer.Name, getOfferDisplayName(offer.offerKey)),
+				data = grantData,
+			}
+		end
+
+		return {
+			ok = true,
+			code = "OK",
+			message = string.format("Granted %s to %s.", getOfferDisplayName(offer.offerKey), targetPlayer.Name),
+			data = grantData or {},
+		}
+	end
+
+	local queued, queueError = pcall(function()
+		DataService:SendGlobalUpdate(adminPlayer, resolvedTargetUserId, MARKETPLACE_ADMIN_GRANT_UPDATE_TYPE, grantPayload)
+	end)
+	if not queued then
+		return {
+			ok = false,
+			code = "QUEUE_FAILED",
+			message = tostring(queueError),
+			data = {
+				offerKey = offer.offerKey,
+				userId = resolvedTargetUserId,
+			},
+		}
+	end
+
+	return {
+		ok = true,
+		code = "QUEUED",
+		message = string.format("Queued %s admin grant for user %d.", getOfferDisplayName(offer.offerKey), resolvedTargetUserId),
+		data = {
+			offerKey = offer.offerKey,
+			userId = resolvedTargetUserId,
+			grantId = grantPayload.grantId,
+			count = grantCount,
+		},
+	}
 end
 
 function PurchaseReceipt:RepairEntitlementForUser(adminPlayer: Player, targetUserId: number, offerKey: string?, reason: string?)

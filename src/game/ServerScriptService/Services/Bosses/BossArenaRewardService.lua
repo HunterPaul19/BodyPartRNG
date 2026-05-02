@@ -10,6 +10,7 @@ local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local RollMath = require(ReplicatedStorage.Shared.Rolling.RollMath)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
+local BodyPartAcquisitionService = require(script.Parent.BodyPartAcquisitionService)
 local DataService = require(script.Parent.DataService)
 
 type BodyPartRewardGrantEntry = {
@@ -22,6 +23,12 @@ type BodyPartRewardGrantEntry = {
 	isBossPart: boolean,
 	record: { [string]: any }?,
 	sourceBossId: string?,
+	acquisitionStatus: string?,
+	autoSold: boolean?,
+	autoCrafted: boolean?,
+	autoEquipped: boolean?,
+	payout: number?,
+	outcomeMessage: string?,
 }
 
 type MaterialRewardGrantEntry = {
@@ -216,13 +223,22 @@ end
 
 local function buildCommittedBodyPartEntry(
 	entry: BodyPartRewardGrantEntry,
-	grantedRecord: any,
+	acquisitionResult: any,
 	bossId: string
 ): BodyPartRewardGrantEntry
-	local committedEntry = table.clone(entry)
+	local committedEntry = if typeof(acquisitionResult) == "table" and typeof(acquisitionResult.rewardEntry) == "table"
+		then table.clone(acquisitionResult.rewardEntry)
+		else table.clone(entry)
+	committedEntry.kind = "bodyPart"
+	committedEntry.pieceId = entry.pieceId
+	committedEntry.displayName = entry.displayName
+	committedEntry.setId = entry.setId
+	committedEntry.displayRarity = entry.displayRarity
+	committedEntry.displayOddsDenominator = entry.displayOddsDenominator
+	committedEntry.isBossPart = entry.isBossPart
 	committedEntry.sourceBossId = bossId
-	if typeof(grantedRecord) == "table" then
-		committedEntry.record = grantedRecord
+	if typeof(acquisitionResult) == "table" and typeof(acquisitionResult.record) == "table" then
+		committedEntry.record = acquisitionResult.record
 	end
 
 	return committedEntry
@@ -274,6 +290,12 @@ local function formatRewardNames(grants: { RewardGrantEntry }): string
 	for _, grant in ipairs(grants) do
 		if grant.kind == "material" then
 			table.insert(names, string.format("%s x%d", grant.displayName, grant.amount))
+		elseif grant.autoSold == true and tonumber(grant.payout) ~= nil then
+			table.insert(names, string.format("%s (auto-sold for $%s)", grant.displayName, tostring(grant.payout)))
+		elseif grant.autoCrafted == true then
+			table.insert(names, string.format("%s (added to crafting)", grant.displayName))
+		elseif grant.autoEquipped == true then
+			table.insert(names, string.format("%s (equipped)", grant.displayName))
 		else
 			table.insert(names, grant.displayName)
 		end
@@ -634,12 +656,15 @@ local function commitPreparedPlayerRewards(
 			continue
 		end
 
-		local grantedRecord, grantError = DataService:AddOwnedBodyPart(
-			player,
-			preparedReward.payload,
-			buildBossBodyPartGrantOptions(preparedReward.reservation)
-		)
-		if grantedRecord == nil then
+		local acquisitionResult = BodyPartAcquisitionService:Acquire(player, preparedReward.payload, {
+			source = "boss_reward",
+			presentation = "immediate_reward",
+			reservation = buildBossBodyPartGrantOptions(preparedReward.reservation),
+			ignoreInventoryLimit = true,
+			isBossPart = preparedReward.grant.isBossPart,
+			sourceBossId = bossId,
+		})
+		if acquisitionResult.status == "failed" then
 			summary.skippedCount += 1
 			summary.stoppedReason = "grant_failed"
 			collectPreparedRewardRelease(preparedReward, releaseSerials)
@@ -648,14 +673,17 @@ local function commitPreparedPlayerRewards(
 				"Failed to commit prepared boss reward to %s for boss '%s': %s",
 				player.Name,
 				bossId,
-				tostring(grantError)
+				tostring(acquisitionResult.error)
 			))
 			continue
 		end
 
+		if acquisitionResult.reservationConsumed ~= true then
+			collectPreparedRewardRelease(preparedReward, releaseSerials)
+		end
 		preparedReward.committed = true
 		summary.grantedCount += 1
-		table.insert(summary.grants, buildCommittedBodyPartEntry(preparedReward.grant, grantedRecord, bossId))
+		table.insert(summary.grants, buildCommittedBodyPartEntry(preparedReward.grant, acquisitionResult, bossId))
 	end
 
 	for _, preparedReward in ipairs(preparedPlayerRewards.rewards) do
@@ -711,12 +739,14 @@ local function grantRewardsToPlayer(
 			continue
 		end
 
-		local grantedRecord, grantError = DataService:AddOwnedBodyPart(
-			player,
-			buildGrantPayload(rewardEntry),
-			buildBossBodyPartGrantOptions(nil)
-		)
-		if grantedRecord == nil then
+		local acquisitionResult = BodyPartAcquisitionService:Acquire(player, buildGrantPayload(rewardEntry), {
+			source = "boss_reward",
+			presentation = "immediate_reward",
+			ignoreInventoryLimit = true,
+			isBossPart = rewardEntry.isBossPart,
+			sourceBossId = bossId,
+		})
+		if acquisitionResult.status == "failed" then
 			local remainingSlots = math.max(0, profile.slotCount - slotIndex + 1)
 			summary.skippedCount += remainingSlots
 			summary.stoppedReason = "grant_failed"
@@ -724,13 +754,13 @@ local function grantRewardsToPlayer(
 				"Failed to grant boss reward to %s for boss '%s': %s",
 				player.Name,
 				bossId,
-				tostring(grantError)
+				tostring(acquisitionResult.error)
 			))
 			break
 		end
 
 		summary.grantedCount += 1
-		table.insert(summary.grants, buildCommittedBodyPartEntry(rewardEntry, grantedRecord, bossId))
+		table.insert(summary.grants, buildCommittedBodyPartEntry(rewardEntry, acquisitionResult, bossId))
 	end
 
 	for _, materialEntry in ipairs(rollMaterialRewardEntries(randomSource, bossId)) do

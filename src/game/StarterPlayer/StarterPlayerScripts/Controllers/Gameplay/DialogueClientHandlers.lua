@@ -1,3 +1,5 @@
+local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Diagnostics"):WaitForChild("Logger"))
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
@@ -8,9 +10,16 @@ local DataController = require(script.Parent.DataController)
 local DialogueController = require(script.Parent.DialogueController)
 local FrameController = require(script.Parent.FrameController)
 local MerchantPresentationController = require(script.Parent.MerchantPresentationController)
+local ObjectiveGuideController = require(script.Parent.ObjectiveGuideController)
 
 local DEFAULT_SHOP_FRAME_NAME = "ShopUI"
+local APPRAISAL_FRAME_NAME = "AppraisalUI"
 local VIP_OWNED_KEY = Schema.VipOwned and Schema.VipOwned.key or nil
+local QUESTS_KEY = Schema.Quests and Schema.Quests.key or "quests"
+local STAN_PAID_ROLL_INTRO_QUEST_ID = "stan_paid_roll_intro"
+local STAN_APPRAISAL_INTRO_QUEST_ID = "stan_appraisal_intro"
+local STAN_CRAFTING_INTRO_QUEST_ID = "stan_crafting_intro"
+local STAN_BOSS_INTRO_QUEST_ID = "stan_boss_intro"
 
 local registered = false
 
@@ -58,11 +67,142 @@ local function openFrameWithPresentation(session, frameName: string, context: { 
 	end)
 end
 
+local function getQuestStatus(questId: string): string
+	local questState = DataController:Get(QUESTS_KEY)
+	if typeof(questState) ~= "table" then
+		return "available"
+	end
+
+	local activeByQuestId = questState.activeByQuestId
+	local activeQuest = if typeof(activeByQuestId) == "table" then activeByQuestId[questId] else nil
+	if typeof(activeQuest) == "table" then
+		return if activeQuest.status == "readyToClaim" then "readyToClaim" else "active"
+	end
+
+	local completedByQuestId = questState.completedByQuestId
+	local claimedByQuestId = questState.claimedByQuestId
+	if (typeof(completedByQuestId) == "table" and completedByQuestId[questId] == true)
+		or (typeof(claimedByQuestId) == "table" and claimedByQuestId[questId] == true)
+	then
+		return "completed"
+	end
+
+	return "available"
+end
+
+local function evaluateStanQuestCondition(_session, conditionId: string): boolean
+	if conditionId == "stanPaidRollIntroAvailable" then
+		return getQuestStatus(STAN_PAID_ROLL_INTRO_QUEST_ID) == "available"
+	elseif conditionId == "stanPaidRollIntroActive" then
+		return getQuestStatus(STAN_PAID_ROLL_INTRO_QUEST_ID) == "active"
+	elseif conditionId == "stanPaidRollIntroReady" then
+		return getQuestStatus(STAN_PAID_ROLL_INTRO_QUEST_ID) == "readyToClaim"
+	elseif conditionId == "stanPaidRollIntroCompleted" then
+		return getQuestStatus(STAN_PAID_ROLL_INTRO_QUEST_ID) == "completed"
+	elseif conditionId == "stanAppraisalIntroAvailable" then
+		return getQuestStatus(STAN_PAID_ROLL_INTRO_QUEST_ID) == "completed"
+			and getQuestStatus(STAN_APPRAISAL_INTRO_QUEST_ID) == "available"
+	elseif conditionId == "stanAppraisalIntroActive" then
+		return getQuestStatus(STAN_APPRAISAL_INTRO_QUEST_ID) == "active"
+	elseif conditionId == "stanAppraisalIntroReady" then
+		return getQuestStatus(STAN_APPRAISAL_INTRO_QUEST_ID) == "readyToClaim"
+	elseif conditionId == "stanAppraisalIntroCompleted" then
+		return getQuestStatus(STAN_APPRAISAL_INTRO_QUEST_ID) == "completed"
+	elseif conditionId == "stanCraftingIntroAvailable" then
+		return getQuestStatus(STAN_APPRAISAL_INTRO_QUEST_ID) == "completed"
+			and getQuestStatus(STAN_CRAFTING_INTRO_QUEST_ID) == "available"
+	elseif conditionId == "stanCraftingIntroActive" then
+		return getQuestStatus(STAN_CRAFTING_INTRO_QUEST_ID) == "active"
+	elseif conditionId == "stanCraftingIntroReady" then
+		return getQuestStatus(STAN_CRAFTING_INTRO_QUEST_ID) == "readyToClaim"
+	elseif conditionId == "stanCraftingIntroCompleted" then
+		return getQuestStatus(STAN_CRAFTING_INTRO_QUEST_ID) == "completed"
+	elseif conditionId == "stanBossIntroAvailable" then
+		return getQuestStatus(STAN_CRAFTING_INTRO_QUEST_ID) == "completed"
+			and getQuestStatus(STAN_BOSS_INTRO_QUEST_ID) == "available"
+	elseif conditionId == "stanBossIntroActive" then
+		return getQuestStatus(STAN_BOSS_INTRO_QUEST_ID) == "active"
+	elseif conditionId == "stanBossIntroReady" then
+		return getQuestStatus(STAN_BOSS_INTRO_QUEST_ID) == "readyToClaim"
+	elseif conditionId == "stanBossIntroCompleted" then
+		return getQuestStatus(STAN_BOSS_INTRO_QUEST_ID) == "completed"
+	end
+
+	return false
+end
+
 function DialogueClientHandlers.Register()
 	if registered then
 		return
 	end
-	registered = true
+
+	Registry.RegisterAction("gotoNode", function(session, choice, action)
+		local nextNodeId = action.nextNodeId or choice.nextNodeId
+		if typeof(nextNodeId) ~= "string" or nextNodeId == "" then
+			return false
+		end
+
+		return session.setCurrentNode(nextNodeId)
+	end)
+
+	Registry.RegisterAction("closeDialogue", function(session)
+		session.closeDialogue()
+		return true
+	end)
+
+	Registry.RegisterAction("openFrame", function(session, _choice, action)
+		local context = session.context
+		local frameName = action.frameName or (context and context.dialogueFrameName)
+		if typeof(frameName) ~= "string" or frameName == "" then
+			return false
+		end
+
+		openFrameWithPresentation(session, frameName, context)
+		if frameName == APPRAISAL_FRAME_NAME then
+			ObjectiveGuideController.ClearObjective("stan_appraisal_intro_guide")
+		end
+		return true
+	end)
+
+	Registry.RegisterAction("openShopFrame", function(session, _choice, action)
+		local context = session.context
+		local frameName = action.frameName or (context and context.dialogueFrameName) or DEFAULT_SHOP_FRAME_NAME
+		if typeof(frameName) ~= "string" or frameName == "" then
+			return false
+		end
+
+		openFrameWithPresentation(session, frameName, context)
+		return true
+	end)
+
+	Registry.RegisterCondition("vipOwned", function()
+		if not VIP_OWNED_KEY then
+			return false
+		end
+
+		return toBoolean(DataController:Get(VIP_OWNED_KEY))
+	end)
+
+	for _, conditionId in ipairs({
+		"stanPaidRollIntroAvailable",
+		"stanPaidRollIntroActive",
+		"stanPaidRollIntroReady",
+		"stanPaidRollIntroCompleted",
+		"stanAppraisalIntroAvailable",
+		"stanAppraisalIntroActive",
+		"stanAppraisalIntroReady",
+		"stanAppraisalIntroCompleted",
+		"stanCraftingIntroAvailable",
+		"stanCraftingIntroActive",
+		"stanCraftingIntroReady",
+		"stanCraftingIntroCompleted",
+		"stanBossIntroAvailable",
+		"stanBossIntroActive",
+		"stanBossIntroReady",
+		"stanBossIntroCompleted",
+	}) do
+		Registry.RegisterCondition(conditionId, evaluateStanQuestCondition)
+	end
 
 	DialogueController.SetBeforeOpenHook(function()
 		local openFrameName = FrameController:GetOpenFrame()
@@ -88,49 +228,8 @@ function DialogueClientHandlers.Register()
 	DialogueController.RegisterRefreshSignal(DataController.DataReceived)
 	DialogueController.RegisterRefreshSignal(DataController.DataUpdated)
 
-	Registry.RegisterAction("gotoNode", function(session, choice, action)
-		local nextNodeId = action.nextNodeId or choice.nextNodeId
-		if typeof(nextNodeId) ~= "string" or nextNodeId == "" then
-			return false
-		end
-
-		return session.setCurrentNode(nextNodeId)
-	end)
-
-	Registry.RegisterAction("closeDialogue", function(session)
-		session.closeDialogue()
-		return true
-	end)
-
-	Registry.RegisterAction("openFrame", function(session, _choice, action)
-		local context = session.context
-		local frameName = action.frameName or (context and context.dialogueFrameName)
-		if typeof(frameName) ~= "string" or frameName == "" then
-			return false
-		end
-
-		openFrameWithPresentation(session, frameName, context)
-		return true
-	end)
-
-	Registry.RegisterAction("openShopFrame", function(session, _choice, action)
-		local context = session.context
-		local frameName = action.frameName or (context and context.dialogueFrameName) or DEFAULT_SHOP_FRAME_NAME
-		if typeof(frameName) ~= "string" or frameName == "" then
-			return false
-		end
-
-		openFrameWithPresentation(session, frameName, context)
-		return true
-	end)
-
-	Registry.RegisterCondition("vipOwned", function()
-		if not VIP_OWNED_KEY then
-			return false
-		end
-
-		return toBoolean(DataController:Get(VIP_OWNED_KEY))
-	end)
+	registered = true
+	Logger.Print("[DialogueClientHandlers] Registered client dialogue handlers.")
 end
 
 return DialogueClientHandlers

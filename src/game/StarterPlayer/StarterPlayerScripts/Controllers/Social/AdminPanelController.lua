@@ -11,6 +11,7 @@ local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catal
 local CraftingMaterialConfig = require(ReplicatedStorage.Shared.Config.CraftingMaterialConfig)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local BodyPartRegions = require(ReplicatedStorage.Shared.Character.BodyPartRegions)
+local MarketplaceCatalog = require(ReplicatedStorage.Lists.RobuxPurchases)
 local AdminPanelDefinitions = require(ReplicatedStorage.Shared.UI.AdminPanelDefinitions)
 local ChestOpeningSequence = require(ReplicatedStorage.Shared.UI.ChestOpeningSequence)
 local PlayerStatsPresentation = require(ReplicatedStorage.Shared.UI.PlayerStatsPresentation)
@@ -23,6 +24,7 @@ local LOCAL_PLAYER = Players.LocalPlayer
 local ACCESS_ATTRIBUTE = "CanUseAdminPanel"
 local OVERVIEW_TAB_ID = "overview"
 local PLAYERS_TAB_ID = "players"
+local PURCHASES_TAB_ID = "purchases"
 local PROGRESSION_TAB_ID = "progression"
 local BODY_PARTS_TAB_ID = "bodyParts"
 local ROLL_SOURCES_TAB_ID = "cases"
@@ -36,12 +38,24 @@ local DEFAULT_STATUS_COLOR = Color3.fromRGB(178, 187, 211)
 local NOTIFICATION_DEFAULT_DURATION = "4"
 local NOTIFICATION_MIN_DURATION = 1
 local NOTIFICATION_MAX_DURATION = 10
-local SANDBOX_CARD_COLOR = Color3.fromRGB(19, 25, 45)
-local SANDBOX_STROKE_COLOR = Color3.fromRGB(62, 74, 111)
-local SANDBOX_FIELD_COLOR = Color3.fromRGB(24, 31, 55)
-local SANDBOX_BUTTON_COLOR = Color3.fromRGB(45, 59, 103)
+local PANEL_BACKGROUND_COLOR = Color3.fromRGB(12, 15, 23)
+local PANEL_SURFACE_COLOR = Color3.fromRGB(16, 20, 30)
+local PANEL_SURFACE_ALT_COLOR = Color3.fromRGB(21, 26, 38)
+local PANEL_STROKE_COLOR = Color3.fromRGB(61, 72, 97)
+local PANEL_ACCENT_COLOR = Color3.fromRGB(111, 159, 255)
+local SANDBOX_CARD_COLOR = PANEL_SURFACE_COLOR
+local SANDBOX_STROKE_COLOR = PANEL_STROKE_COLOR
+local SANDBOX_FIELD_COLOR = PANEL_SURFACE_ALT_COLOR
+local SANDBOX_BUTTON_COLOR = Color3.fromRGB(42, 53, 76)
 local SANDBOX_BUTTON_TEXT_COLOR = Color3.fromRGB(235, 240, 255)
+local DESTRUCTIVE_STROKE_COLOR = Color3.fromRGB(201, 91, 91)
+local MUTATING_BADGE_COLOR = Color3.fromRGB(196, 148, 69)
+local SAFE_BADGE_COLOR = Color3.fromRGB(84, 162, 116)
+local COMPACT_CORNER_RADIUS = UDim.new(0, 6)
+local PANEL_CORNER_RADIUS = UDim.new(0, 8)
+local COMPACT_BUTTON_HEIGHT = 36
 local DEFAULT_CRAFTING_MATERIAL_GRANT_AMOUNT = "25"
+local PURCHASE_SELECTOR_BUTTON_COUNT = 6
 local ADMIN_CHEST_TRIGGER_ACTION_IDS = table.freeze({
 	trigger_daily_free_chest = true,
 	trigger_vip_chest = true,
@@ -97,6 +111,13 @@ function AdminPanelController:_ensureState()
 	self._luckOverrideInputText = ""
 	self._luckOverrideState = nil
 	self._luckOverrideUi = {}
+	self._purchaseTargetUserIdText = tostring(LOCAL_PLAYER.UserId)
+	self._purchaseSelectedGamepassKey = nil :: string?
+	self._purchaseSelectedDevProductKey = nil :: string?
+	self._purchaseGamepassSearchText = ""
+	self._purchaseDevProductSearchText = ""
+	self._purchaseDevProductCountText = "1"
+	self._purchasesUi = {}
 	self._actionFormInputs = {}
 end
 
@@ -109,6 +130,68 @@ end
 
 local function setGenerated(instance: Instance)
 	instance:SetAttribute("GeneratedAdminPanel", true)
+end
+
+local function getOrCreateChild(parent: Instance, className: string, name: string): Instance
+	local existing = parent:FindFirstChild(name)
+	if existing and existing.ClassName == className then
+		return existing
+	end
+
+	local child = Instance.new(className)
+	child.Name = name
+	child.Parent = parent
+	return child
+end
+
+local function getOrCreateFirstChildOfClass(parent: Instance, className: string, name: string): Instance
+	local existing = parent:FindFirstChildWhichIsA(className)
+	if existing then
+		return existing
+	end
+
+	local child = Instance.new(className)
+	child.Name = name
+	child.Parent = parent
+	return child
+end
+
+local function getRiskBadgeText(action: any): string
+	if action.risk == "destructive" then
+		return "Live gated"
+	end
+	if action.risk == "mutating" then
+		return "Mutating"
+	end
+	return "Safe"
+end
+
+local function getRiskBadgeColor(action: any): Color3
+	if action.risk == "destructive" then
+		return DESTRUCTIVE_STROKE_COLOR
+	end
+	if action.risk == "mutating" then
+		return MUTATING_BADGE_COLOR
+	end
+	return SAFE_BADGE_COLOR
+end
+
+local function compactHeight(height: number): number
+	if height >= 38 and height <= 44 then
+		return 34
+	end
+	return height
+end
+
+local function firstLine(value: string): string
+	return (string.match(value, "^[^\n]+") or value)
+end
+
+local function normalizeSearchText(value: any): string
+	local normalized = tostring(value or "")
+	normalized = string.gsub(normalized, "\r\n", "\n")
+	normalized = string.gsub(normalized, "\r", "\n")
+	return string.lower(string.match(normalized, "^%s*(.-)%s*$") or "")
 end
 
 function AdminPanelController:_setStatus(message: string, color: Color3?)
@@ -302,31 +385,465 @@ function AdminPanelController:_handlePostAdminAction(tabId: string, actionId: st
 	end
 end
 
+function AdminPanelController:_styleCompactCard(card: GuiObject, risk: string?)
+	card.BackgroundColor3 = SANDBOX_CARD_COLOR
+	card.BackgroundTransparency = 0
+	card.BorderSizePixel = 0
+	card.AutomaticSize = Enum.AutomaticSize.Y
+	card.Size = UDim2.new(1, -2, 0, 0)
+
+	local corner = getOrCreateFirstChildOfClass(card, "UICorner", "CompactCorner") :: UICorner
+	corner.CornerRadius = COMPACT_CORNER_RADIUS
+
+	local stroke = getOrCreateFirstChildOfClass(card, "UIStroke", "CompactStroke") :: UIStroke
+	stroke.Color = if risk == "destructive" then DESTRUCTIVE_STROKE_COLOR else SANDBOX_STROKE_COLOR
+	stroke.Transparency = if risk == "destructive" then 0.08 else 0.28
+	stroke.Thickness = 1
+
+	local padding = getOrCreateFirstChildOfClass(card, "UIPadding", "CompactPadding") :: UIPadding
+	padding.PaddingTop = UDim.new(0, 10)
+	padding.PaddingBottom = UDim.new(0, 10)
+	padding.PaddingLeft = UDim.new(0, 12)
+	padding.PaddingRight = UDim.new(0, 12)
+
+	local layout = getOrCreateFirstChildOfClass(card, "UIListLayout", "CompactLayout") :: UIListLayout
+	layout.FillDirection = Enum.FillDirection.Vertical
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, 7)
+end
+
+function AdminPanelController:_styleActionCard(card: GuiButton, action: any)
+	self:_styleCompactCard(card, action.risk)
+	card.AutoButtonColor = false
+	if card:IsA("TextButton") then
+		card.Text = ""
+	end
+
+	local titleLabel = card:FindFirstChild("TitleLabel")
+	if titleLabel and titleLabel:IsA("TextLabel") then
+		titleLabel.BackgroundTransparency = 1
+		titleLabel.Font = Enum.Font.GothamBold
+		titleLabel.TextSize = 15
+		titleLabel.TextColor3 = Color3.fromRGB(242, 246, 255)
+		titleLabel.TextWrapped = true
+		titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+		titleLabel.AutomaticSize = Enum.AutomaticSize.Y
+		titleLabel.Size = UDim2.new(1, 0, 0, 0)
+		titleLabel.LayoutOrder = 1
+	end
+
+	local descriptionLabel = card:FindFirstChild("DescriptionLabel")
+	if descriptionLabel and descriptionLabel:IsA("TextLabel") then
+		descriptionLabel.BackgroundTransparency = 1
+		descriptionLabel.Font = Enum.Font.Gotham
+		descriptionLabel.TextSize = 13
+		descriptionLabel.TextColor3 = Color3.fromRGB(168, 179, 207)
+		descriptionLabel.TextWrapped = true
+		descriptionLabel.TextXAlignment = Enum.TextXAlignment.Left
+		descriptionLabel.TextYAlignment = Enum.TextYAlignment.Top
+		descriptionLabel.AutomaticSize = Enum.AutomaticSize.Y
+		descriptionLabel.Size = UDim2.new(1, 0, 0, 0)
+		descriptionLabel.LayoutOrder = 3
+	end
+
+	local badgeLabel = card:FindFirstChild("ActionBadge")
+	if badgeLabel and badgeLabel:IsA("TextLabel") then
+		badgeLabel.BackgroundColor3 = getRiskBadgeColor(action)
+		badgeLabel.BackgroundTransparency = 0.82
+		badgeLabel.BorderSizePixel = 0
+		badgeLabel.Font = Enum.Font.GothamBold
+		badgeLabel.TextColor3 = getRiskBadgeColor(action)
+		badgeLabel.TextSize = 11
+		badgeLabel.TextXAlignment = Enum.TextXAlignment.Left
+		badgeLabel.AutomaticSize = Enum.AutomaticSize.XY
+		badgeLabel.Size = UDim2.fromOffset(0, 20)
+		badgeLabel.LayoutOrder = 2
+
+		local badgeCorner = getOrCreateFirstChildOfClass(badgeLabel, "UICorner", "BadgeCorner") :: UICorner
+		badgeCorner.CornerRadius = UDim.new(0, 5)
+
+		local badgePadding = getOrCreateFirstChildOfClass(badgeLabel, "UIPadding", "BadgePadding") :: UIPadding
+		badgePadding.PaddingLeft = UDim.new(0, 7)
+		badgePadding.PaddingRight = UDim.new(0, 7)
+		badgePadding.PaddingTop = UDim.new(0, 2)
+		badgePadding.PaddingBottom = UDim.new(0, 2)
+	end
+end
+
+function AdminPanelController:_applyCompactPanelLayout(panel: Frame)
+	panel.AnchorPoint = Vector2.new(0.5, 0.5)
+	panel.Position = UDim2.fromScale(0.5, 0.5)
+	panel.Size = UDim2.fromScale(0.86, 0.82)
+	panel.BackgroundColor3 = PANEL_BACKGROUND_COLOR
+	panel.BackgroundTransparency = 0
+	panel.BorderSizePixel = 0
+	panel.ClipsDescendants = true
+
+	local sizeConstraint = getOrCreateChild(panel, "UISizeConstraint", "CompactModalSize") :: UISizeConstraint
+	sizeConstraint.MinSize = Vector2.new(680, 500)
+	sizeConstraint.MaxSize = Vector2.new(1180, 760)
+
+	local panelCorner = getOrCreateFirstChildOfClass(panel, "UICorner", "PanelCorner") :: UICorner
+	panelCorner.CornerRadius = PANEL_CORNER_RADIUS
+
+	local panelStroke = getOrCreateFirstChildOfClass(panel, "UIStroke", "PanelStroke") :: UIStroke
+	panelStroke.Color = Color3.fromRGB(80, 92, 124)
+	panelStroke.Transparency = 0.2
+	panelStroke.Thickness = 1
+
+	local header = panel:FindFirstChild("Header")
+	if header and header:IsA("GuiObject") then
+		header.BackgroundColor3 = Color3.fromRGB(15, 18, 27)
+		header.BackgroundTransparency = 0
+		header.BorderSizePixel = 0
+		header.Position = UDim2.fromOffset(0, 0)
+		header.Size = UDim2.new(1, 0, 0, 48)
+
+		for _, descendant in ipairs(header:GetDescendants()) do
+			if descendant:IsA("TextLabel") or descendant:IsA("TextButton") then
+				descendant.TextSize = math.min(descendant.TextSize, 18)
+			end
+		end
+	end
+
+	local footer = panel:FindFirstChild("Footer")
+	if footer and footer:IsA("GuiObject") then
+		footer.BackgroundColor3 = Color3.fromRGB(13, 16, 24)
+		footer.BackgroundTransparency = 0
+		footer.BorderSizePixel = 0
+		footer.Position = UDim2.new(0, 0, 1, -34)
+		footer.Size = UDim2.new(1, 0, 0, 34)
+	end
+
+	local body = panel:FindFirstChild("Body")
+	if not (body and body:IsA("GuiObject")) then
+		return
+	end
+
+	body.BackgroundTransparency = 1
+	body.Position = UDim2.fromOffset(0, 48)
+	body.Size = UDim2.new(1, 0, 1, -82)
+
+	local bodyPadding = getOrCreateFirstChildOfClass(body, "UIPadding", "BodyPadding") :: UIPadding
+	bodyPadding.PaddingTop = UDim.new(0, 10)
+	bodyPadding.PaddingBottom = UDim.new(0, 10)
+	bodyPadding.PaddingLeft = UDim.new(0, 12)
+	bodyPadding.PaddingRight = UDim.new(0, 12)
+
+	local bodyLayout = getOrCreateFirstChildOfClass(body, "UIListLayout", "BodyLayout") :: UIListLayout
+	bodyLayout.FillDirection = Enum.FillDirection.Vertical
+	bodyLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+	bodyLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	bodyLayout.Padding = UDim.new(0, 10)
+
+	local tabRail = body:FindFirstChild("TabRail")
+	if tabRail and tabRail:IsA("GuiObject") then
+		tabRail.BackgroundTransparency = 1
+		tabRail.BorderSizePixel = 0
+		tabRail.Size = UDim2.new(1, 0, 0, 44)
+		tabRail.LayoutOrder = 1
+	end
+
+	local tabList = tabRail and tabRail:FindFirstChild("TabList")
+	if tabList and tabList:IsA("GuiObject") then
+		tabList.BackgroundTransparency = 1
+		tabList.BorderSizePixel = 0
+		tabList.Size = UDim2.fromScale(1, 1)
+		tabList.ClipsDescendants = true
+
+		local tabPadding = getOrCreateFirstChildOfClass(tabList, "UIPadding", "TabListPadding") :: UIPadding
+		tabPadding.PaddingTop = UDim.new(0, 1)
+		tabPadding.PaddingBottom = UDim.new(0, 1)
+		tabPadding.PaddingLeft = UDim.new(0, 1)
+		tabPadding.PaddingRight = UDim.new(0, 1)
+
+		local tabLayout = getOrCreateFirstChildOfClass(tabList, "UIListLayout", "TabListLayout") :: UIListLayout
+		tabLayout.FillDirection = Enum.FillDirection.Horizontal
+		tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+		tabLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+		tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+		tabLayout.Padding = UDim.new(0, 6)
+	end
+
+	local content = body:FindFirstChild("Content")
+	if content and content:IsA("GuiObject") then
+		content.BackgroundColor3 = Color3.fromRGB(13, 16, 24)
+		content.BackgroundTransparency = 0
+		content.BorderSizePixel = 0
+		content.Size = UDim2.new(1, 0, 1, -54)
+		content.LayoutOrder = 2
+
+		local contentCorner = getOrCreateFirstChildOfClass(content, "UICorner", "ContentCorner") :: UICorner
+		contentCorner.CornerRadius = COMPACT_CORNER_RADIUS
+
+		local contentStroke = getOrCreateFirstChildOfClass(content, "UIStroke", "ContentStroke") :: UIStroke
+		contentStroke.Color = SANDBOX_STROKE_COLOR
+		contentStroke.Transparency = 0.42
+		contentStroke.Thickness = 1
+
+		local contentPadding = getOrCreateFirstChildOfClass(content, "UIPadding", "ContentPadding") :: UIPadding
+		contentPadding.PaddingTop = UDim.new(0, 10)
+		contentPadding.PaddingBottom = UDim.new(0, 10)
+		contentPadding.PaddingLeft = UDim.new(0, 10)
+		contentPadding.PaddingRight = UDim.new(0, 10)
+
+		local contentLayout = getOrCreateFirstChildOfClass(content, "UIListLayout", "ContentLayout") :: UIListLayout
+		contentLayout.FillDirection = Enum.FillDirection.Vertical
+		contentLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+		contentLayout.SortOrder = Enum.SortOrder.LayoutOrder
+		contentLayout.Padding = UDim.new(0, 4)
+	end
+end
+
+function AdminPanelController:_createSimpleMenuLayout(panel: Frame): any
+	local oldCompactSize = panel:FindFirstChild("CompactModalSize")
+	if oldCompactSize then
+		oldCompactSize:Destroy()
+	end
+
+	for _, child in ipairs(panel:GetChildren()) do
+		if child.Name ~= "Templates" and child.Name ~= "SimpleMenuRoot" and child:IsA("GuiObject") then
+			child.Visible = false
+		end
+	end
+
+	local existingRoot = panel:FindFirstChild("SimpleMenuRoot")
+	if existingRoot then
+		existingRoot:Destroy()
+	end
+
+	panel.AnchorPoint = Vector2.new(0.5, 0.5)
+	panel.Position = UDim2.fromScale(0.5, 0.5)
+	panel.Size = UDim2.fromScale(0.86, 0.82)
+	panel.BackgroundColor3 = Color3.fromRGB(13, 16, 24)
+	panel.BackgroundTransparency = 0
+	panel.BorderSizePixel = 0
+	panel.ClipsDescendants = true
+
+	local sizeConstraint = getOrCreateChild(panel, "UISizeConstraint", "SimpleMenuSize") :: UISizeConstraint
+	sizeConstraint.MinSize = Vector2.new(560, 420)
+	sizeConstraint.MaxSize = Vector2.new(1120, 720)
+
+	local panelCorner = getOrCreateFirstChildOfClass(panel, "UICorner", "SimpleMenuCorner") :: UICorner
+	panelCorner.CornerRadius = UDim.new(0, 6)
+
+	local panelStroke = getOrCreateFirstChildOfClass(panel, "UIStroke", "SimpleMenuStroke") :: UIStroke
+	panelStroke.Color = Color3.fromRGB(70, 80, 105)
+	panelStroke.Transparency = 0.24
+	panelStroke.Thickness = 1
+
+	local root = Instance.new("Frame")
+	root.Name = "SimpleMenuRoot"
+	root.BackgroundTransparency = 1
+	root.Size = UDim2.fromScale(1, 1)
+	root.Parent = panel
+	setGenerated(root)
+
+	local header = Instance.new("Frame")
+	header.Name = "Header"
+	header.BackgroundColor3 = Color3.fromRGB(17, 21, 31)
+	header.BorderSizePixel = 0
+	header.Size = UDim2.new(1, 0, 0, 42)
+	header.Parent = root
+	setGenerated(header)
+
+	local headerPadding = Instance.new("UIPadding")
+	headerPadding.PaddingLeft = UDim.new(0, 14)
+	headerPadding.PaddingRight = UDim.new(0, 8)
+	headerPadding.Parent = header
+	setGenerated(headerPadding)
+
+	local title = Instance.new("TextLabel")
+	title.Name = "TitleLabel"
+	title.BackgroundTransparency = 1
+	title.Size = UDim2.new(1, -44, 1, 0)
+	title.Font = Enum.Font.GothamBold
+	title.Text = "Admin"
+	title.TextColor3 = Color3.fromRGB(242, 245, 252)
+	title.TextSize = 17
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.Parent = header
+	setGenerated(title)
+
+	local closeButton = Instance.new("TextButton")
+	closeButton.Name = "CloseButton"
+	closeButton.AnchorPoint = Vector2.new(1, 0.5)
+	closeButton.Position = UDim2.new(1, 0, 0.5, 0)
+	closeButton.Size = UDim2.fromOffset(32, 28)
+	closeButton.BackgroundColor3 = Color3.fromRGB(28, 34, 48)
+	closeButton.BorderSizePixel = 0
+	closeButton.Font = Enum.Font.GothamBold
+	closeButton.Text = "X"
+	closeButton.TextColor3 = Color3.fromRGB(220, 226, 240)
+	closeButton.TextSize = 13
+	closeButton.Parent = header
+	setGenerated(closeButton)
+
+	local closeCorner = Instance.new("UICorner")
+	closeCorner.CornerRadius = UDim.new(0, 5)
+	closeCorner.Parent = closeButton
+	setGenerated(closeCorner)
+
+	UIController:CreateButton(closeButton, function()
+		HUDWindowController:CloseWindow(WINDOW_NAME)
+	end)
+
+	local tabList = Instance.new("Frame")
+	tabList.Name = "TabList"
+	tabList.BackgroundColor3 = Color3.fromRGB(12, 15, 22)
+	tabList.BorderSizePixel = 0
+	tabList.Position = UDim2.fromOffset(0, 42)
+	tabList.Size = UDim2.new(1, 0, 0, 38)
+	tabList.Parent = root
+	setGenerated(tabList)
+
+	local tabPadding = Instance.new("UIPadding")
+	tabPadding.PaddingTop = UDim.new(0, 6)
+	tabPadding.PaddingBottom = UDim.new(0, 6)
+	tabPadding.PaddingLeft = UDim.new(0, 10)
+	tabPadding.PaddingRight = UDim.new(0, 10)
+	tabPadding.Parent = tabList
+	setGenerated(tabPadding)
+
+	local tabLayout = Instance.new("UIGridLayout")
+	tabLayout.CellPadding = UDim2.fromOffset(6, 0)
+	tabLayout.CellSize = UDim2.new(1 / #AdminPanelDefinitions.Tabs, -5, 1, 0)
+	tabLayout.FillDirection = Enum.FillDirection.Horizontal
+	tabLayout.FillDirectionMaxCells = #AdminPanelDefinitions.Tabs
+	tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+	tabLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+	tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	tabLayout.Parent = tabList
+	setGenerated(tabLayout)
+
+	local content = Instance.new("Frame")
+	content.Name = "Content"
+	content.BackgroundTransparency = 1
+	content.Position = UDim2.fromOffset(0, 80)
+	content.Size = UDim2.new(1, 0, 1, -110)
+	content.Parent = root
+	setGenerated(content)
+
+	local contentPadding = Instance.new("UIPadding")
+	contentPadding.PaddingTop = UDim.new(0, 10)
+	contentPadding.PaddingLeft = UDim.new(0, 12)
+	contentPadding.PaddingRight = UDim.new(0, 12)
+	contentPadding.PaddingBottom = UDim.new(0, 8)
+	contentPadding.Parent = content
+	setGenerated(contentPadding)
+
+	local contentLayout = Instance.new("UIListLayout")
+	contentLayout.FillDirection = Enum.FillDirection.Vertical
+	contentLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+	contentLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	contentLayout.Padding = UDim.new(0, 4)
+	contentLayout.Parent = content
+	setGenerated(contentLayout)
+
+	local pageTitle = Instance.new("TextLabel")
+	pageTitle.Name = "PageTitleLabel"
+	pageTitle.BackgroundTransparency = 1
+	pageTitle.Size = UDim2.new(1, 0, 0, 24)
+	pageTitle.Font = Enum.Font.GothamBold
+	pageTitle.TextColor3 = Color3.fromRGB(242, 245, 252)
+	pageTitle.TextSize = 18
+	pageTitle.TextXAlignment = Enum.TextXAlignment.Left
+	pageTitle.LayoutOrder = 1
+	pageTitle.Parent = content
+	setGenerated(pageTitle)
+
+	local pageSubtitle = Instance.new("TextLabel")
+	pageSubtitle.Name = "PageSubtitleLabel"
+	pageSubtitle.BackgroundTransparency = 1
+	pageSubtitle.Size = UDim2.new(1, 0, 0, 18)
+	pageSubtitle.Font = Enum.Font.Gotham
+	pageSubtitle.TextColor3 = Color3.fromRGB(145, 156, 185)
+	pageSubtitle.TextSize = 12
+	pageSubtitle.TextXAlignment = Enum.TextXAlignment.Left
+	pageSubtitle.TextTruncate = Enum.TextTruncate.AtEnd
+	pageSubtitle.LayoutOrder = 2
+	pageSubtitle.Parent = content
+	setGenerated(pageSubtitle)
+
+	local pages = Instance.new("Frame")
+	pages.Name = "Pages"
+	pages.BackgroundTransparency = 1
+	pages.Size = UDim2.new(1, 0, 1, -50)
+	pages.LayoutOrder = 3
+	pages.Parent = content
+	setGenerated(pages)
+
+	local footer = Instance.new("Frame")
+	footer.Name = "Footer"
+	footer.BackgroundColor3 = Color3.fromRGB(12, 15, 22)
+	footer.BorderSizePixel = 0
+	footer.Position = UDim2.new(0, 0, 1, -30)
+	footer.Size = UDim2.new(1, 0, 0, 30)
+	footer.Parent = root
+	setGenerated(footer)
+
+	local status = Instance.new("TextLabel")
+	status.Name = "StatusLabel"
+	status.BackgroundTransparency = 1
+	status.Size = UDim2.new(1, -24, 1, 0)
+	status.Position = UDim2.fromOffset(12, 0)
+	status.Font = Enum.Font.Gotham
+	status.TextColor3 = DEFAULT_STATUS_COLOR
+	status.TextSize = 12
+	status.TextXAlignment = Enum.TextXAlignment.Left
+	status.TextTruncate = Enum.TextTruncate.AtEnd
+	status.Parent = footer
+	setGenerated(status)
+
+	return {
+		tabList = tabList,
+		content = content,
+		pages = pages,
+		pageTitle = pageTitle,
+		pageSubtitle = pageSubtitle,
+		status = status,
+	}
+end
+
 function AdminPanelController:_styleTabButton(button: GuiButton, selected: boolean)
-	local indicator = button:FindFirstChild("SelectedIndicator")
 	local titleLabel = button:FindFirstChild("TitleLabel")
 	local subtitleLabel = button:FindFirstChild("SubtitleLabel")
 	local stroke = button:FindFirstChildWhichIsA("UIStroke")
 
-	button.BackgroundColor3 = if selected then Color3.fromRGB(45, 59, 103) else Color3.fromRGB(25, 31, 54)
-	button.BackgroundTransparency = if selected then 0 else 0.08
-
-	if indicator and indicator:IsA("Frame") then
-		indicator.Visible = selected
+	button.BackgroundColor3 = if selected then Color3.fromRGB(34, 44, 64) else Color3.fromRGB(20, 25, 36)
+	button.BackgroundTransparency = 0
+	button.BorderSizePixel = 0
+	button.Size = UDim2.fromScale(1, 1)
+	button.AutoButtonColor = false
+	if button:IsA("TextButton") then
+		button.Text = ""
 	end
 
+	local corner = getOrCreateFirstChildOfClass(button, "UICorner", "TabCorner") :: UICorner
+	corner.CornerRadius = UDim.new(0, 5)
+
 	if stroke then
-		stroke.Color = if selected then Color3.fromRGB(145, 179, 255) else Color3.fromRGB(62, 74, 111)
-		stroke.Transparency = if selected then 0 else 0.2
+		stroke.Color = if selected then PANEL_ACCENT_COLOR else SANDBOX_STROKE_COLOR
+		stroke.Transparency = if selected then 0.18 else 0.7
+		stroke.Thickness = 1
 	end
 
 	if titleLabel and titleLabel:IsA("TextLabel") then
-		titleLabel.TextColor3 = if selected then Color3.fromRGB(255, 255, 255) else Color3.fromRGB(219, 226, 255)
-		setTextStroke(titleLabel, if selected then 0.45 else 0.65)
+		titleLabel.BackgroundTransparency = 1
+		titleLabel.Font = Enum.Font.GothamBold
+		titleLabel.TextSize = 13
+		titleLabel.TextColor3 = if selected then Color3.fromRGB(246, 249, 255) else Color3.fromRGB(178, 188, 214)
+		titleLabel.TextXAlignment = Enum.TextXAlignment.Center
+		titleLabel.TextYAlignment = Enum.TextYAlignment.Center
+		titleLabel.Size = UDim2.fromScale(1, 1)
+		titleLabel.Position = UDim2.fromScale(0, 0)
+		titleLabel.LayoutOrder = 1
+		setTextStroke(titleLabel, 1)
 	end
 
 	if subtitleLabel and subtitleLabel:IsA("TextLabel") then
-		subtitleLabel.TextColor3 = if selected then Color3.fromRGB(214, 226, 255) else Color3.fromRGB(151, 162, 198)
+		subtitleLabel.Visible = false
 	end
 end
 
@@ -361,6 +878,8 @@ function AdminPanelController:_setTab(tabId: string)
 	elseif tabId == PROGRESSION_TAB_ID then
 		self:_syncLuckOverrideUi()
 		self:_loadLuckOverrideState(true)
+	elseif tabId == PURCHASES_TAB_ID then
+		self:_syncPurchasesUi()
 	elseif tabId == OVERVIEW_TAB_ID then
 		self:_syncNotificationUi()
 	end
@@ -370,18 +889,17 @@ function AdminPanelController:_createSectionHeader(parent: Instance, title: stri
 	local container = Instance.new("Frame")
 	container.Name = title:gsub("%s+", "") .. "Section"
 	container.BackgroundTransparency = 1
-	container.AutomaticSize = Enum.AutomaticSize.Y
-	container.Size = UDim2.new(1, 0, 0, 0)
+	container.Size = UDim2.new(1, 0, 0, 22)
 	container.Parent = parent
 	setGenerated(container)
 
 	local titleLabel = Instance.new("TextLabel")
 	titleLabel.Name = "TitleLabel"
 	titleLabel.BackgroundTransparency = 1
-	titleLabel.Size = UDim2.new(1, 0, 0, 24)
+	titleLabel.Size = UDim2.new(1, 0, 0, 20)
 	titleLabel.Font = Enum.Font.GothamBold
 	titleLabel.Text = title
-	titleLabel.TextSize = 18
+	titleLabel.TextSize = 16
 	titleLabel.TextXAlignment = Enum.TextXAlignment.Left
 	titleLabel.TextColor3 = Color3.fromRGB(247, 249, 255)
 	titleLabel.Parent = container
@@ -390,16 +908,17 @@ function AdminPanelController:_createSectionHeader(parent: Instance, title: stri
 	local descriptionLabel = Instance.new("TextLabel")
 	descriptionLabel.Name = "DescriptionLabel"
 	descriptionLabel.BackgroundTransparency = 1
-	descriptionLabel.Position = UDim2.fromOffset(0, 26)
-	descriptionLabel.Size = UDim2.new(1, 0, 0, 32)
+	descriptionLabel.Visible = false
+	descriptionLabel.Position = UDim2.fromOffset(0, 21)
+	descriptionLabel.Size = UDim2.new(1, 0, 0, 26)
 	descriptionLabel.AutomaticSize = Enum.AutomaticSize.Y
 	descriptionLabel.Font = Enum.Font.Gotham
 	descriptionLabel.Text = description
 	descriptionLabel.TextWrapped = true
-	descriptionLabel.TextSize = 14
+	descriptionLabel.TextSize = 13
 	descriptionLabel.TextXAlignment = Enum.TextXAlignment.Left
 	descriptionLabel.TextYAlignment = Enum.TextYAlignment.Top
-	descriptionLabel.TextColor3 = Color3.fromRGB(159, 170, 201)
+	descriptionLabel.TextColor3 = Color3.fromRGB(145, 156, 185)
 	descriptionLabel.Parent = container
 	setGenerated(descriptionLabel)
 end
@@ -433,18 +952,21 @@ end
 function AdminPanelController:_styleSandboxButton(button: GuiButton, callback: () -> ())
 	button.AutoButtonColor = false
 	button.BackgroundColor3 = SANDBOX_BUTTON_COLOR
+	button.BackgroundTransparency = 0
+	button.BorderSizePixel = 0
 	button.TextColor3 = SANDBOX_BUTTON_TEXT_COLOR
 	button.Font = Enum.Font.GothamSemibold
-	button.TextSize = 14
+	button.TextSize = 13
 
 	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 10)
+	corner.CornerRadius = COMPACT_CORNER_RADIUS
 	corner.Parent = button
 	setGenerated(corner)
 
 	local stroke = Instance.new("UIStroke")
-	stroke.Color = Color3.fromRGB(92, 110, 165)
-	stroke.Transparency = 0.18
+	stroke.Color = Color3.fromRGB(78, 91, 124)
+	stroke.Transparency = 0.32
+	stroke.Thickness = 1
 	stroke.Parent = button
 	setGenerated(stroke)
 
@@ -454,7 +976,7 @@ end
 function AdminPanelController:_createSandboxButton(parent: Instance, name: string, text: string, size: UDim2, callback: () -> ()): TextButton
 	local button = Instance.new("TextButton")
 	button.Name = name
-	button.Size = size
+	button.Size = UDim2.new(size.X.Scale, size.X.Offset, size.Y.Scale, compactHeight(size.Y.Offset))
 	button.Text = text
 	button.Parent = parent
 	setGenerated(button)
@@ -473,21 +995,22 @@ function AdminPanelController:_createSandboxField(parent: Instance, labelText: s
 	setGenerated(field)
 
 	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 10)
+	corner.CornerRadius = COMPACT_CORNER_RADIUS
 	corner.Parent = field
 	setGenerated(corner)
 
 	local stroke = Instance.new("UIStroke")
 	stroke.Color = SANDBOX_STROKE_COLOR
-	stroke.Transparency = 0.22
+	stroke.Transparency = 0.42
+	stroke.Thickness = 1
 	stroke.Parent = field
 	setGenerated(stroke)
 
 	local padding = Instance.new("UIPadding")
-	padding.PaddingTop = UDim.new(0, 10)
-	padding.PaddingBottom = UDim.new(0, 10)
-	padding.PaddingLeft = UDim.new(0, 12)
-	padding.PaddingRight = UDim.new(0, 12)
+	padding.PaddingTop = UDim.new(0, 8)
+	padding.PaddingBottom = UDim.new(0, 8)
+	padding.PaddingLeft = UDim.new(0, 10)
+	padding.PaddingRight = UDim.new(0, 10)
 	padding.Parent = field
 	setGenerated(padding)
 
@@ -501,11 +1024,11 @@ function AdminPanelController:_createSandboxField(parent: Instance, labelText: s
 	local label = Instance.new("TextLabel")
 	label.Name = "Label"
 	label.BackgroundTransparency = 1
-	label.Size = UDim2.new(1, 0, 0, 18)
+	label.Size = UDim2.new(1, 0, 0, 16)
 	label.Font = Enum.Font.GothamBold
 	label.Text = labelText
-	label.TextColor3 = Color3.fromRGB(232, 238, 255)
-	label.TextSize = 14
+	label.TextColor3 = Color3.fromRGB(218, 226, 246)
+	label.TextSize = 13
 	label.TextXAlignment = Enum.TextXAlignment.Left
 	label.Parent = field
 	setGenerated(label)
@@ -521,8 +1044,8 @@ function AdminPanelController:_createSandboxValueLabel(parent: Instance): TextLa
 	valueLabel.Size = UDim2.new(1, 0, 0, 0)
 	valueLabel.Font = Enum.Font.GothamSemibold
 	valueLabel.Text = ""
-	valueLabel.TextColor3 = Color3.fromRGB(244, 247, 255)
-	valueLabel.TextSize = 14
+	valueLabel.TextColor3 = Color3.fromRGB(232, 237, 250)
+	valueLabel.TextSize = 13
 	valueLabel.TextWrapped = true
 	valueLabel.TextXAlignment = Enum.TextXAlignment.Left
 	valueLabel.TextYAlignment = Enum.TextYAlignment.Top
@@ -542,15 +1065,16 @@ function AdminPanelController:_createSandboxTextInput(
 ): TextBox
 	local input = Instance.new("TextBox")
 	input.Name = name
-	input.BackgroundColor3 = Color3.fromRGB(15, 20, 39)
+	input.BackgroundColor3 = Color3.fromRGB(11, 14, 23)
+	input.BorderSizePixel = 0
 	input.ClearTextOnFocus = false
 	input.MultiLine = isMultiLine == true
 	input.PlaceholderText = placeholderText
-	input.Size = UDim2.new(1, 0, 0, height)
+	input.Size = UDim2.new(1, 0, 0, compactHeight(height))
 	input.Font = Enum.Font.GothamSemibold
 	input.Text = initialText
 	input.TextColor3 = Color3.fromRGB(245, 248, 255)
-	input.TextSize = if isMultiLine == true then 14 else 16
+	input.TextSize = if isMultiLine == true then 13 else 14
 	input.TextWrapped = isMultiLine == true
 	input.TextXAlignment = Enum.TextXAlignment.Left
 	input.TextYAlignment = if isMultiLine == true then Enum.TextYAlignment.Top else Enum.TextYAlignment.Center
@@ -558,13 +1082,14 @@ function AdminPanelController:_createSandboxTextInput(
 	setGenerated(input)
 
 	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 10)
+	corner.CornerRadius = COMPACT_CORNER_RADIUS
 	corner.Parent = input
 	setGenerated(corner)
 
 	local stroke = Instance.new("UIStroke")
 	stroke.Color = SANDBOX_STROKE_COLOR
-	stroke.Transparency = 0.2
+	stroke.Transparency = 0.34
+	stroke.Thickness = 1
 	stroke.Parent = input
 	setGenerated(stroke)
 
@@ -632,37 +1157,9 @@ end
 function AdminPanelController:_createActionFormCard(parent: Instance, tabId: string, action: any)
 	local card = Instance.new("Frame")
 	card.Name = string.format("%sFormCard", action.id)
-	card.BackgroundColor3 = SANDBOX_CARD_COLOR
-	card.AutomaticSize = Enum.AutomaticSize.Y
-	card.Size = UDim2.new(1, -4, 0, 0)
 	card.Parent = parent
 	setGenerated(card)
-
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 14)
-	corner.Parent = card
-	setGenerated(corner)
-
-	local stroke = Instance.new("UIStroke")
-	stroke.Color = if action.risk == "destructive" then Color3.fromRGB(180, 91, 91) else SANDBOX_STROKE_COLOR
-	stroke.Transparency = 0.14
-	stroke.Parent = card
-	setGenerated(stroke)
-
-	local padding = Instance.new("UIPadding")
-	padding.PaddingTop = UDim.new(0, 14)
-	padding.PaddingBottom = UDim.new(0, 14)
-	padding.PaddingLeft = UDim.new(0, 14)
-	padding.PaddingRight = UDim.new(0, 14)
-	padding.Parent = card
-	setGenerated(padding)
-
-	local layout = Instance.new("UIListLayout")
-	layout.FillDirection = Enum.FillDirection.Vertical
-	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
-	layout.Padding = UDim.new(0, 10)
-	layout.Parent = card
-	setGenerated(layout)
+	self:_styleCompactCard(card, action.risk)
 
 	local title = Instance.new("TextLabel")
 	title.Name = "TitleLabel"
@@ -672,32 +1169,65 @@ function AdminPanelController:_createActionFormCard(parent: Instance, tabId: str
 	title.Font = Enum.Font.GothamBold
 	title.Text = action.title
 	title.TextColor3 = Color3.fromRGB(247, 249, 255)
-	title.TextSize = 17
+	title.TextSize = 15
 	title.TextWrapped = true
 	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.LayoutOrder = 1
 	title.Parent = card
 	setGenerated(title)
+
+	local badge = Instance.new("TextLabel")
+	badge.Name = "RiskBadge"
+	badge.BackgroundColor3 = getRiskBadgeColor(action)
+	badge.BackgroundTransparency = 0.82
+	badge.BorderSizePixel = 0
+	badge.AutomaticSize = Enum.AutomaticSize.XY
+	badge.Size = UDim2.fromOffset(0, 20)
+	badge.Font = Enum.Font.GothamBold
+	badge.Text = getRiskBadgeText(action)
+	badge.TextColor3 = getRiskBadgeColor(action)
+	badge.TextSize = 11
+	badge.TextXAlignment = Enum.TextXAlignment.Left
+	badge.LayoutOrder = 2
+	badge.Parent = card
+	setGenerated(badge)
+
+	local badgeCorner = Instance.new("UICorner")
+	badgeCorner.CornerRadius = UDim.new(0, 5)
+	badgeCorner.Parent = badge
+	setGenerated(badgeCorner)
+
+	local badgePadding = Instance.new("UIPadding")
+	badgePadding.PaddingLeft = UDim.new(0, 7)
+	badgePadding.PaddingRight = UDim.new(0, 7)
+	badgePadding.PaddingTop = UDim.new(0, 2)
+	badgePadding.PaddingBottom = UDim.new(0, 2)
+	badgePadding.Parent = badge
+	setGenerated(badgePadding)
 
 	local description = Instance.new("TextLabel")
 	description.Name = "DescriptionLabel"
 	description.BackgroundTransparency = 1
+	description.Visible = false
 	description.AutomaticSize = Enum.AutomaticSize.Y
 	description.Size = UDim2.new(1, 0, 0, 0)
 	description.Font = Enum.Font.Gotham
 	description.Text = action.description
 	description.TextColor3 = Color3.fromRGB(184, 196, 227)
-	description.TextSize = 14
+	description.TextSize = 13
 	description.TextWrapped = true
 	description.TextXAlignment = Enum.TextXAlignment.Left
 	description.TextYAlignment = Enum.TextYAlignment.Top
+	description.LayoutOrder = 3
 	description.Parent = card
 	setGenerated(description)
 
 	local actionKey = string.format("%s:%s", tabId, action.id)
 	self._actionFormInputs[actionKey] = {}
 
-	for _, field in ipairs(action.fields or {}) do
+	for fieldIndex, field in ipairs(action.fields or {}) do
 		local fieldContainer = self:_createSandboxField(card, field.label or field.id)
+		fieldContainer.LayoutOrder = fieldIndex + 3
 		local input = self:_createSandboxTextInput(
 			fieldContainer,
 			string.format("%sInput", tostring(field.id)),
@@ -710,7 +1240,7 @@ function AdminPanelController:_createActionFormCard(parent: Instance, tabId: str
 	end
 
 	local buttonText = if action.risk == "destructive" then "Run Destructive Action" else "Run Action"
-	self:_createSandboxButton(card, "RunButton", buttonText, UDim2.new(1, 0, 0, 40), function()
+	local runButton = self:_createSandboxButton(card, "RunButton", buttonText, UDim2.new(1, 0, 0, 40), function()
 		local payload = self:_collectActionPayload(actionKey, action)
 		local ok, result = self:_invokeAdminRequest(tabId, action.id, string.format("Running %s", action.title), payload)
 		if not ok or not result then
@@ -720,6 +1250,7 @@ function AdminPanelController:_createActionFormCard(parent: Instance, tabId: str
 		self:_handlePostAdminAction(tabId, action.id, result)
 		self:_setStatus(tostring(result.message or "No response message provided."), if result.ok then SUCCESS_COLOR else ERROR_COLOR)
 	end)
+	runButton.LayoutOrder = 100
 end
 
 function AdminPanelController:_getPlayerStatsTargets(): { Player }
@@ -1066,7 +1597,7 @@ function AdminPanelController:_createNotificationSection(parent: ScrollingFrame)
 	setGenerated(card)
 
 	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 14)
+	corner.CornerRadius = COMPACT_CORNER_RADIUS
 	corner.Parent = card
 	setGenerated(corner)
 
@@ -1077,17 +1608,17 @@ function AdminPanelController:_createNotificationSection(parent: ScrollingFrame)
 	setGenerated(stroke)
 
 	local padding = Instance.new("UIPadding")
-	padding.PaddingTop = UDim.new(0, 14)
-	padding.PaddingBottom = UDim.new(0, 14)
-	padding.PaddingLeft = UDim.new(0, 14)
-	padding.PaddingRight = UDim.new(0, 14)
+	padding.PaddingTop = UDim.new(0, 10)
+	padding.PaddingBottom = UDim.new(0, 10)
+	padding.PaddingLeft = UDim.new(0, 12)
+	padding.PaddingRight = UDim.new(0, 12)
 	padding.Parent = card
 	setGenerated(padding)
 
 	local layout = Instance.new("UIListLayout")
 	layout.FillDirection = Enum.FillDirection.Vertical
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
-	layout.Padding = UDim.new(0, 10)
+	layout.Padding = UDim.new(0, 8)
 	layout.Parent = card
 	setGenerated(layout)
 
@@ -1099,7 +1630,7 @@ function AdminPanelController:_createNotificationSection(parent: ScrollingFrame)
 	description.Font = Enum.Font.Gotham
 	description.Text = "This sends the same in-game toast used by unlocks, receipts, and shared admin notices. Toasts show the message only and use the admin notification color."
 	description.TextWrapped = true
-	description.TextSize = 14
+	description.TextSize = 13
 	description.TextXAlignment = Enum.TextXAlignment.Left
 	description.TextYAlignment = Enum.TextYAlignment.Top
 	description.TextColor3 = Color3.fromRGB(184, 196, 227)
@@ -1125,7 +1656,7 @@ function AdminPanelController:_createNotificationSection(parent: ScrollingFrame)
 	targetValue.Size = UDim2.new(1, -96, 1, 0)
 	targetValue.Font = Enum.Font.GothamSemibold
 	targetValue.TextColor3 = Color3.fromRGB(244, 247, 255)
-	targetValue.TextSize = 14
+	targetValue.TextSize = 13
 	targetValue.TextWrapped = true
 	targetValue.TextXAlignment = Enum.TextXAlignment.Left
 	targetValue.TextYAlignment = Enum.TextYAlignment.Top
@@ -1352,7 +1883,7 @@ function AdminPanelController:_createLuckOverrideSection(parent: ScrollingFrame)
 	setGenerated(card)
 
 	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 14)
+	corner.CornerRadius = COMPACT_CORNER_RADIUS
 	corner.Parent = card
 	setGenerated(corner)
 
@@ -1363,17 +1894,17 @@ function AdminPanelController:_createLuckOverrideSection(parent: ScrollingFrame)
 	setGenerated(stroke)
 
 	local padding = Instance.new("UIPadding")
-	padding.PaddingTop = UDim.new(0, 14)
-	padding.PaddingBottom = UDim.new(0, 14)
-	padding.PaddingLeft = UDim.new(0, 14)
-	padding.PaddingRight = UDim.new(0, 14)
+	padding.PaddingTop = UDim.new(0, 10)
+	padding.PaddingBottom = UDim.new(0, 10)
+	padding.PaddingLeft = UDim.new(0, 12)
+	padding.PaddingRight = UDim.new(0, 12)
 	padding.Parent = card
 	setGenerated(padding)
 
 	local layout = Instance.new("UIListLayout")
 	layout.FillDirection = Enum.FillDirection.Vertical
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
-	layout.Padding = UDim.new(0, 10)
+	layout.Padding = UDim.new(0, 8)
 	layout.Parent = card
 	setGenerated(layout)
 
@@ -1385,7 +1916,7 @@ function AdminPanelController:_createLuckOverrideSection(parent: ScrollingFrame)
 	description.Font = Enum.Font.Gotham
 	description.Text = "Use whole numbers or decimals like 25 or 25.5. Leaving the override off returns your luck to the normal machine, gear, potion, pity, and VIP calculation."
 	description.TextWrapped = true
-	description.TextSize = 14
+	description.TextSize = 13
 	description.TextXAlignment = Enum.TextXAlignment.Left
 	description.TextYAlignment = Enum.TextYAlignment.Top
 	description.TextColor3 = Color3.fromRGB(184, 196, 227)
@@ -1424,7 +1955,7 @@ function AdminPanelController:_createLuckOverrideSection(parent: ScrollingFrame)
 	setGenerated(actionRow)
 
 	local actionLayout = Instance.new("UIGridLayout")
-	actionLayout.CellPadding = UDim2.fromOffset(10, 10)
+	actionLayout.CellPadding = UDim2.fromOffset(8, 8)
 	actionLayout.CellSize = UDim2.new(1 / 3, -7, 0, 40)
 	actionLayout.FillDirectionMaxCells = 3
 	actionLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
@@ -1594,6 +2125,94 @@ function AdminPanelController:_getGrantCraftingMaterialOptions()
 	end
 
 	return materials
+end
+
+function AdminPanelController:_findGrantOption(options: { any }, query: string, getSearchText: (any) -> string): any?
+	if #options == 0 then
+		return nil
+	end
+
+	local normalizedQuery = normalizeSearchText(query)
+	if normalizedQuery == "" then
+		return options[1]
+	end
+
+	for _, option in ipairs(options) do
+		if normalizeSearchText(option.id) == normalizedQuery then
+			return option
+		end
+	end
+
+	for _, option in ipairs(options) do
+		if string.find(normalizeSearchText(getSearchText(option)), normalizedQuery, 1, true) then
+			return option
+		end
+	end
+
+	return nil
+end
+
+function AdminPanelController:_selectGrantBodyPartByQuery(query: string)
+	local piece = self:_findGrantOption(self:_getGrantBodyPartOptions(), query, function(option)
+		local setConfig = BodyPartsCatalog.GetSetForPiece(option.id)
+		return table.concat({
+			option.id,
+			option.displayName or "",
+			option.region or "",
+			if setConfig then setConfig.displayName else "",
+			if setConfig then setConfig.rollDisplay.rarity else "",
+		}, " ")
+	end)
+
+	if not piece then
+		self:_setStatus("No body part matched that search.", ERROR_COLOR)
+		return
+	end
+
+	self._grantSelectedPieceId = piece.id
+	self:_syncGrantUi()
+end
+
+function AdminPanelController:_selectGrantAuraByQuery(query: string)
+	local auraConfig = self:_findGrantOption(self:_getGrantAuraOptions(), query, function(option)
+		return table.concat({ option.id, option.label or "", option.setId or "", option.tierLabel or "" }, " ")
+	end)
+
+	if not auraConfig then
+		self:_setStatus("No aura matched that search.", ERROR_COLOR)
+		return
+	end
+
+	self._grantSelectedAuraId = auraConfig.id
+	self:_syncGrantUi()
+end
+
+function AdminPanelController:_selectGrantAccessoryByQuery(slot: string, query: string)
+	local accessoryConfig = self:_findGrantOption(self:_getGrantAccessoryOptions(slot), query, function(option)
+		return table.concat({ option.id, option.label or "", option.tierLabel or "", option.bossId or "" }, " ")
+	end)
+
+	if not accessoryConfig then
+		self:_setStatus("No accessory matched that search.", ERROR_COLOR)
+		return
+	end
+
+	self:_setSelectedGrantAccessoryId(slot, accessoryConfig.id)
+	self:_syncGrantUi()
+end
+
+function AdminPanelController:_selectGrantCraftingMaterialByQuery(query: string)
+	local materialConfig = self:_findGrantOption(self:_getGrantCraftingMaterialOptions(), query, function(option)
+		return table.concat({ option.id, option.label or "", option.description or "" }, " ")
+	end)
+
+	if not materialConfig then
+		self:_setStatus("No material matched that search.", ERROR_COLOR)
+		return
+	end
+
+	self._grantSelectedCraftingMaterialId = materialConfig.id
+	self:_syncGrantUi()
 end
 
 function AdminPanelController:_getSelectedGrantAura()
@@ -1815,16 +2434,48 @@ function AdminPanelController:_syncGrantUi()
 		ui.bodyPartValue.Text = self:_formatGrantBodyPart(selectedPiece)
 	end
 
+	if ui.smartBodyPartValue and ui.smartBodyPartValue:IsA("TextLabel") then
+		ui.smartBodyPartValue.Text = firstLine(self:_formatGrantBodyPart(selectedPiece))
+	end
+	if ui.smartBodyPartInput and ui.smartBodyPartInput:IsA("TextBox") and not ui.smartBodyPartInput:IsFocused() then
+		ui.smartBodyPartInput.Text = if selectedPiece then selectedPiece.id else ""
+	end
+
 	if ui.headAccessoryValue and ui.headAccessoryValue:IsA("TextLabel") then
 		ui.headAccessoryValue.Text = self:_formatGrantAccessory(selectedHeadAccessory)
+	end
+
+	if ui.smartHeadAccessoryValue and ui.smartHeadAccessoryValue:IsA("TextLabel") then
+		ui.smartHeadAccessoryValue.Text = firstLine(self:_formatGrantAccessory(selectedHeadAccessory))
+	end
+	if ui.smartHeadAccessoryInput and ui.smartHeadAccessoryInput:IsA("TextBox") and not ui.smartHeadAccessoryInput:IsFocused() then
+		ui.smartHeadAccessoryInput.Text = if selectedHeadAccessory then selectedHeadAccessory.id else ""
 	end
 
 	if ui.gearAccessoryValue and ui.gearAccessoryValue:IsA("TextLabel") then
 		ui.gearAccessoryValue.Text = self:_formatGrantAccessory(selectedGearAccessory)
 	end
 
+	if ui.smartGearAccessoryValue and ui.smartGearAccessoryValue:IsA("TextLabel") then
+		ui.smartGearAccessoryValue.Text = firstLine(self:_formatGrantAccessory(selectedGearAccessory))
+	end
+	if ui.smartGearAccessoryInput and ui.smartGearAccessoryInput:IsA("TextBox") and not ui.smartGearAccessoryInput:IsFocused() then
+		ui.smartGearAccessoryInput.Text = if selectedGearAccessory then selectedGearAccessory.id else ""
+	end
+
 	if ui.craftingMaterialValue and ui.craftingMaterialValue:IsA("TextLabel") then
 		ui.craftingMaterialValue.Text = self:_formatGrantCraftingMaterial(selectedCraftingMaterial)
+	end
+
+	if ui.smartCraftingMaterialValue and ui.smartCraftingMaterialValue:IsA("TextLabel") then
+		ui.smartCraftingMaterialValue.Text = firstLine(self:_formatGrantCraftingMaterial(selectedCraftingMaterial))
+	end
+	if
+		ui.smartCraftingMaterialInput
+		and ui.smartCraftingMaterialInput:IsA("TextBox")
+		and not ui.smartCraftingMaterialInput:IsFocused()
+	then
+		ui.smartCraftingMaterialInput.Text = if selectedCraftingMaterial then selectedCraftingMaterial.id else ""
 	end
 
 	if ui.craftingMaterialAmountInput and ui.craftingMaterialAmountInput:IsA("TextBox") and not ui.craftingMaterialAmountInput:IsFocused() then
@@ -1833,6 +2484,13 @@ function AdminPanelController:_syncGrantUi()
 
 	if ui.auraValue and ui.auraValue:IsA("TextLabel") then
 		ui.auraValue.Text = self:_formatGrantAura(selectedAura)
+	end
+
+	if ui.smartAuraValue and ui.smartAuraValue:IsA("TextLabel") then
+		ui.smartAuraValue.Text = firstLine(self:_formatGrantAura(selectedAura))
+	end
+	if ui.smartAuraInput and ui.smartAuraInput:IsA("TextBox") and not ui.smartAuraInput:IsFocused() then
+		ui.smartAuraInput.Text = if selectedAura then selectedAura.id else ""
 	end
 
 	local hasBodyPartOptions = #bodyPartOptions > 0
@@ -1844,14 +2502,17 @@ function AdminPanelController:_syncGrantUi()
 	for _, button in ipairs({ ui.bodyPartPrevButton, ui.bodyPartNextButton, ui.grantBodyPartButton }) do
 		setSandboxButtonEnabled(button, hasBodyPartOptions)
 	end
+	setSandboxButtonEnabled(ui.smartGrantBodyPartButton, hasBodyPartOptions)
 
 	for _, button in ipairs({ ui.headAccessoryPrevButton, ui.headAccessoryNextButton, ui.grantHeadAccessoryButton }) do
 		setSandboxButtonEnabled(button, hasHeadAccessoryOptions)
 	end
+	setSandboxButtonEnabled(ui.smartGrantHeadAccessoryButton, hasHeadAccessoryOptions)
 
 	for _, button in ipairs({ ui.gearAccessoryPrevButton, ui.gearAccessoryNextButton, ui.grantGearAccessoryButton }) do
 		setSandboxButtonEnabled(button, hasGearAccessoryOptions)
 	end
+	setSandboxButtonEnabled(ui.smartGrantGearAccessoryButton, hasGearAccessoryOptions)
 
 	for _, button in ipairs({
 		ui.craftingMaterialPrevButton,
@@ -1861,10 +2522,13 @@ function AdminPanelController:_syncGrantUi()
 	}) do
 		setSandboxButtonEnabled(button, hasCraftingMaterialOptions)
 	end
+	setSandboxButtonEnabled(ui.smartGrantCraftingMaterialButton, hasCraftingMaterialOptions)
+	setSandboxButtonEnabled(ui.smartGrantAllCraftingMaterialsButton, hasCraftingMaterialOptions)
 
 	for _, button in ipairs({ ui.auraPrevButton, ui.auraNextButton, ui.grantAuraButton }) do
 		setSandboxButtonEnabled(button, hasAuraOptions)
 	end
+	setSandboxButtonEnabled(ui.smartGrantAuraButton, hasAuraOptions)
 end
 
 function AdminPanelController:_cycleGrantBodyPart(direction: number)
@@ -2513,7 +3177,7 @@ function AdminPanelController:_createVisualSandboxSection(parent: ScrollingFrame
 	setGenerated(card)
 
 	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 14)
+	corner.CornerRadius = COMPACT_CORNER_RADIUS
 	corner.Parent = card
 	setGenerated(corner)
 
@@ -2524,17 +3188,17 @@ function AdminPanelController:_createVisualSandboxSection(parent: ScrollingFrame
 	setGenerated(stroke)
 
 	local padding = Instance.new("UIPadding")
-	padding.PaddingTop = UDim.new(0, 14)
-	padding.PaddingBottom = UDim.new(0, 14)
-	padding.PaddingLeft = UDim.new(0, 14)
-	padding.PaddingRight = UDim.new(0, 14)
+	padding.PaddingTop = UDim.new(0, 10)
+	padding.PaddingBottom = UDim.new(0, 10)
+	padding.PaddingLeft = UDim.new(0, 12)
+	padding.PaddingRight = UDim.new(0, 12)
 	padding.Parent = card
 	setGenerated(padding)
 
 	local layout = Instance.new("UIListLayout")
 	layout.FillDirection = Enum.FillDirection.Vertical
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
-	layout.Padding = UDim.new(0, 10)
+	layout.Padding = UDim.new(0, 8)
 	layout.Parent = card
 	setGenerated(layout)
 
@@ -2546,7 +3210,7 @@ function AdminPanelController:_createVisualSandboxSection(parent: ScrollingFrame
 	description.Font = Enum.Font.Gotham
 	description.Text = "Cycle through the example bundles in GameAssets, set a scale, and apply them to the selected region of your current R15 character."
 	description.TextWrapped = true
-	description.TextSize = 14
+	description.TextSize = 13
 	description.TextXAlignment = Enum.TextXAlignment.Left
 	description.TextYAlignment = Enum.TextYAlignment.Top
 	description.TextColor3 = Color3.fromRGB(184, 196, 227)
@@ -2691,6 +3355,101 @@ function AdminPanelController:_createVisualSandboxSection(parent: ScrollingFrame
 	self:_syncVisualSandboxUi()
 end
 
+function AdminPanelController:_createGrantSmartRow(
+	parent: Instance,
+	name: string,
+	labelText: string,
+	placeholderText: string,
+	onSearch: (string) -> (),
+	onGrant: () -> ()
+): (TextBox, TextLabel, TextButton)
+	local row = Instance.new("Frame")
+	row.Name = name
+	row.BackgroundColor3 = SANDBOX_FIELD_COLOR
+	row.BorderSizePixel = 0
+	row.Size = UDim2.new(1, 0, 0, 44)
+	row.Parent = parent
+	setGenerated(row)
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = COMPACT_CORNER_RADIUS
+	corner.Parent = row
+	setGenerated(corner)
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = SANDBOX_STROKE_COLOR
+	stroke.Transparency = 0.46
+	stroke.Thickness = 1
+	stroke.Parent = row
+	setGenerated(stroke)
+
+	local label = Instance.new("TextLabel")
+	label.Name = "Label"
+	label.BackgroundTransparency = 1
+	label.Position = UDim2.fromOffset(10, 0)
+	label.Size = UDim2.new(0, 130, 1, 0)
+	label.Font = Enum.Font.GothamBold
+	label.Text = labelText
+	label.TextColor3 = Color3.fromRGB(218, 226, 246)
+	label.TextSize = 12
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextTruncate = Enum.TextTruncate.AtEnd
+	label.Parent = row
+	setGenerated(label)
+
+	local input = Instance.new("TextBox")
+	input.Name = "SearchInput"
+	input.BackgroundColor3 = Color3.fromRGB(11, 14, 23)
+	input.BorderSizePixel = 0
+	input.ClearTextOnFocus = false
+	input.PlaceholderText = placeholderText
+	input.Position = UDim2.fromOffset(142, 7)
+	input.Size = UDim2.new(0.34, -10, 0, 30)
+	input.Font = Enum.Font.GothamSemibold
+	input.Text = ""
+	input.TextColor3 = Color3.fromRGB(245, 248, 255)
+	input.TextSize = 13
+	input.TextXAlignment = Enum.TextXAlignment.Left
+	input.Parent = row
+	setGenerated(input)
+
+	local inputCorner = Instance.new("UICorner")
+	inputCorner.CornerRadius = UDim.new(0, 5)
+	inputCorner.Parent = input
+	setGenerated(inputCorner)
+
+	local inputPadding = Instance.new("UIPadding")
+	inputPadding.PaddingLeft = UDim.new(0, 8)
+	inputPadding.PaddingRight = UDim.new(0, 8)
+	inputPadding.Parent = input
+	setGenerated(inputPadding)
+
+	local valueLabel = Instance.new("TextLabel")
+	valueLabel.Name = "ValueLabel"
+	valueLabel.BackgroundTransparency = 1
+	valueLabel.Position = UDim2.new(0.34, 146, 0, 0)
+	valueLabel.Size = UDim2.new(0.66, -270, 1, 0)
+	valueLabel.Font = Enum.Font.Gotham
+	valueLabel.TextColor3 = Color3.fromRGB(186, 196, 222)
+	valueLabel.TextSize = 12
+	valueLabel.TextXAlignment = Enum.TextXAlignment.Left
+	valueLabel.TextTruncate = Enum.TextTruncate.AtEnd
+	valueLabel.Parent = row
+	setGenerated(valueLabel)
+
+	local grantButton = self:_createSandboxButton(row, "GrantButton", "Grant", UDim2.fromOffset(78, 30), onGrant)
+	grantButton.AnchorPoint = Vector2.new(1, 0.5)
+	grantButton.Position = UDim2.new(1, -8, 0.5, 0)
+
+	input.FocusLost:Connect(function(enterPressed: boolean)
+		if enterPressed or trimText(input.Text) ~= "" then
+			onSearch(input.Text)
+		end
+	end)
+
+	return input, valueLabel, grantButton
+end
+
 function AdminPanelController:_createGrantInventorySection(parent: ScrollingFrame)
 	self:_createSectionHeader(parent, "Grant Inventory", "Grant selected body parts, accessories, or auras directly to your own account for testing without leaving the admin panel.")
 
@@ -2703,7 +3462,7 @@ function AdminPanelController:_createGrantInventorySection(parent: ScrollingFram
 	setGenerated(card)
 
 	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 14)
+	corner.CornerRadius = COMPACT_CORNER_RADIUS
 	corner.Parent = card
 	setGenerated(corner)
 
@@ -2714,17 +3473,17 @@ function AdminPanelController:_createGrantInventorySection(parent: ScrollingFram
 	setGenerated(stroke)
 
 	local padding = Instance.new("UIPadding")
-	padding.PaddingTop = UDim.new(0, 14)
-	padding.PaddingBottom = UDim.new(0, 14)
-	padding.PaddingLeft = UDim.new(0, 14)
-	padding.PaddingRight = UDim.new(0, 14)
+	padding.PaddingTop = UDim.new(0, 10)
+	padding.PaddingBottom = UDim.new(0, 10)
+	padding.PaddingLeft = UDim.new(0, 12)
+	padding.PaddingRight = UDim.new(0, 12)
 	padding.Parent = card
 	setGenerated(padding)
 
 	local layout = Instance.new("UIListLayout")
 	layout.FillDirection = Enum.FillDirection.Vertical
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
-	layout.Padding = UDim.new(0, 10)
+	layout.Padding = UDim.new(0, 8)
 	layout.Parent = card
 	setGenerated(layout)
 
@@ -2736,12 +3495,87 @@ function AdminPanelController:_createGrantInventorySection(parent: ScrollingFram
 	description.Font = Enum.Font.Gotham
 	description.Text = "These grants go straight to your live profile data. Body parts use default None/Normal variants, accessories add owned inventory records, materials update crafting amounts, and aura grants reuse the normal unlock path."
 	description.TextWrapped = true
-	description.TextSize = 14
+	description.TextSize = 13
 	description.TextXAlignment = Enum.TextXAlignment.Left
 	description.TextYAlignment = Enum.TextYAlignment.Top
 	description.TextColor3 = Color3.fromRGB(184, 196, 227)
 	description.Parent = card
 	setGenerated(description)
+
+	local smartBodyPartInput, smartBodyPartValue, smartGrantBodyPartButton = self:_createGrantSmartRow(
+		card,
+		"SmartBodyPartRow",
+		"Body Part",
+		"Search id/name",
+		function(text)
+			self:_selectGrantBodyPartByQuery(text)
+		end,
+		function()
+			self:_grantSelectedBodyPart()
+		end
+	)
+
+	local smartHeadAccessoryInput, smartHeadAccessoryValue, smartGrantHeadAccessoryButton = self:_createGrantSmartRow(
+		card,
+		"SmartHeadAccessoryRow",
+		"Head",
+		"Search accessory",
+		function(text)
+			self:_selectGrantAccessoryByQuery(HEAD_ACCESSORY_SLOT, text)
+		end,
+		function()
+			self:_grantSelectedAccessory(HEAD_ACCESSORY_SLOT)
+		end
+	)
+
+	local smartGearAccessoryInput, smartGearAccessoryValue, smartGrantGearAccessoryButton = self:_createGrantSmartRow(
+		card,
+		"SmartGearAccessoryRow",
+		"Gear",
+		"Search accessory",
+		function(text)
+			self:_selectGrantAccessoryByQuery(GEAR_ACCESSORY_SLOT, text)
+		end,
+		function()
+			self:_grantSelectedAccessory(GEAR_ACCESSORY_SLOT)
+		end
+	)
+
+	local smartCraftingMaterialInput, smartCraftingMaterialValue, smartGrantCraftingMaterialButton = self:_createGrantSmartRow(
+		card,
+		"SmartCraftingMaterialRow",
+		"Material",
+		"Search material",
+		function(text)
+			self:_selectGrantCraftingMaterialByQuery(text)
+		end,
+		function()
+			self:_grantSelectedCraftingMaterial()
+		end
+	)
+
+	local smartAuraInput, smartAuraValue, smartGrantAuraButton = self:_createGrantSmartRow(
+		card,
+		"SmartAuraRow",
+		"Aura",
+		"Search aura",
+		function(text)
+			self:_selectGrantAuraByQuery(text)
+		end,
+		function()
+			self:_grantSelectedAura()
+		end
+	)
+
+	local smartGrantAllCraftingMaterialsButton = self:_createSandboxButton(
+		card,
+		"SmartGrantAllCraftingMaterialsButton",
+		"Grant All Materials",
+		UDim2.new(1, 0, 0, 34),
+		function()
+			self:_grantAllCraftingMaterials()
+		end
+	)
 
 	local bodyPartField = self:_createSandboxField(card, "Grant Body Part")
 	local bodyPartRow = Instance.new("Frame")
@@ -2762,7 +3596,7 @@ function AdminPanelController:_createGrantInventorySection(parent: ScrollingFram
 	bodyPartValue.Size = UDim2.new(1, -96, 1, 0)
 	bodyPartValue.Font = Enum.Font.GothamSemibold
 	bodyPartValue.TextColor3 = Color3.fromRGB(244, 247, 255)
-	bodyPartValue.TextSize = 14
+	bodyPartValue.TextSize = 13
 	bodyPartValue.TextWrapped = true
 	bodyPartValue.TextXAlignment = Enum.TextXAlignment.Left
 	bodyPartValue.TextYAlignment = Enum.TextYAlignment.Top
@@ -2797,7 +3631,7 @@ function AdminPanelController:_createGrantInventorySection(parent: ScrollingFram
 	headAccessoryValue.Size = UDim2.new(1, -96, 1, 0)
 	headAccessoryValue.Font = Enum.Font.GothamSemibold
 	headAccessoryValue.TextColor3 = Color3.fromRGB(244, 247, 255)
-	headAccessoryValue.TextSize = 14
+	headAccessoryValue.TextSize = 13
 	headAccessoryValue.TextWrapped = true
 	headAccessoryValue.TextXAlignment = Enum.TextXAlignment.Left
 	headAccessoryValue.TextYAlignment = Enum.TextYAlignment.Top
@@ -2832,7 +3666,7 @@ function AdminPanelController:_createGrantInventorySection(parent: ScrollingFram
 	gearAccessoryValue.Size = UDim2.new(1, -96, 1, 0)
 	gearAccessoryValue.Font = Enum.Font.GothamSemibold
 	gearAccessoryValue.TextColor3 = Color3.fromRGB(244, 247, 255)
-	gearAccessoryValue.TextSize = 14
+	gearAccessoryValue.TextSize = 13
 	gearAccessoryValue.TextWrapped = true
 	gearAccessoryValue.TextXAlignment = Enum.TextXAlignment.Left
 	gearAccessoryValue.TextYAlignment = Enum.TextYAlignment.Top
@@ -2867,7 +3701,7 @@ function AdminPanelController:_createGrantInventorySection(parent: ScrollingFram
 	craftingMaterialValue.Size = UDim2.new(1, -96, 1, 0)
 	craftingMaterialValue.Font = Enum.Font.GothamSemibold
 	craftingMaterialValue.TextColor3 = Color3.fromRGB(244, 247, 255)
-	craftingMaterialValue.TextSize = 14
+	craftingMaterialValue.TextSize = 13
 	craftingMaterialValue.TextWrapped = true
 	craftingMaterialValue.TextXAlignment = Enum.TextXAlignment.Left
 	craftingMaterialValue.TextYAlignment = Enum.TextYAlignment.Top
@@ -2900,7 +3734,7 @@ function AdminPanelController:_createGrantInventorySection(parent: ScrollingFram
 
 	local materialActionLayout = Instance.new("UIListLayout")
 	materialActionLayout.FillDirection = Enum.FillDirection.Horizontal
-	materialActionLayout.Padding = UDim.new(0, 10)
+	materialActionLayout.Padding = UDim.new(0, 8)
 	materialActionLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
 	materialActionLayout.Parent = materialActionRow
 	setGenerated(materialActionLayout)
@@ -2933,7 +3767,7 @@ function AdminPanelController:_createGrantInventorySection(parent: ScrollingFram
 	auraValue.Size = UDim2.new(1, -96, 1, 0)
 	auraValue.Font = Enum.Font.GothamSemibold
 	auraValue.TextColor3 = Color3.fromRGB(244, 247, 255)
-	auraValue.TextSize = 14
+	auraValue.TextSize = 13
 	auraValue.TextWrapped = true
 	auraValue.TextXAlignment = Enum.TextXAlignment.Left
 	auraValue.TextYAlignment = Enum.TextYAlignment.Top
@@ -2950,6 +3784,22 @@ function AdminPanelController:_createGrantInventorySection(parent: ScrollingFram
 	end)
 
 	self._grantUi = {
+		smartBodyPartInput = smartBodyPartInput,
+		smartBodyPartValue = smartBodyPartValue,
+		smartGrantBodyPartButton = smartGrantBodyPartButton,
+		smartHeadAccessoryInput = smartHeadAccessoryInput,
+		smartHeadAccessoryValue = smartHeadAccessoryValue,
+		smartGrantHeadAccessoryButton = smartGrantHeadAccessoryButton,
+		smartGearAccessoryInput = smartGearAccessoryInput,
+		smartGearAccessoryValue = smartGearAccessoryValue,
+		smartGrantGearAccessoryButton = smartGrantGearAccessoryButton,
+		smartCraftingMaterialInput = smartCraftingMaterialInput,
+		smartCraftingMaterialValue = smartCraftingMaterialValue,
+		smartGrantCraftingMaterialButton = smartGrantCraftingMaterialButton,
+		smartGrantAllCraftingMaterialsButton = smartGrantAllCraftingMaterialsButton,
+		smartAuraInput = smartAuraInput,
+		smartAuraValue = smartAuraValue,
+		smartGrantAuraButton = smartGrantAuraButton,
 		bodyPartPrevButton = bodyPartPrevButton,
 		bodyPartNextButton = bodyPartNextButton,
 		bodyPartValue = bodyPartValue,
@@ -2989,7 +3839,7 @@ function AdminPanelController:_createRuntimeInspectorSection(parent: ScrollingFr
 	setGenerated(card)
 
 	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 14)
+	corner.CornerRadius = COMPACT_CORNER_RADIUS
 	corner.Parent = card
 	setGenerated(corner)
 
@@ -3000,17 +3850,17 @@ function AdminPanelController:_createRuntimeInspectorSection(parent: ScrollingFr
 	setGenerated(stroke)
 
 	local padding = Instance.new("UIPadding")
-	padding.PaddingTop = UDim.new(0, 14)
-	padding.PaddingBottom = UDim.new(0, 14)
-	padding.PaddingLeft = UDim.new(0, 14)
-	padding.PaddingRight = UDim.new(0, 14)
+	padding.PaddingTop = UDim.new(0, 10)
+	padding.PaddingBottom = UDim.new(0, 10)
+	padding.PaddingLeft = UDim.new(0, 12)
+	padding.PaddingRight = UDim.new(0, 12)
 	padding.Parent = card
 	setGenerated(padding)
 
 	local layout = Instance.new("UIListLayout")
 	layout.FillDirection = Enum.FillDirection.Vertical
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
-	layout.Padding = UDim.new(0, 10)
+	layout.Padding = UDim.new(0, 8)
 	layout.Parent = card
 	setGenerated(layout)
 
@@ -3033,7 +3883,7 @@ function AdminPanelController:_createRuntimeInspectorSection(parent: ScrollingFr
 	ownedValue.Size = UDim2.new(1, -96, 1, 0)
 	ownedValue.Font = Enum.Font.GothamSemibold
 	ownedValue.TextColor3 = Color3.fromRGB(244, 247, 255)
-	ownedValue.TextSize = 14
+	ownedValue.TextSize = 13
 	ownedValue.TextWrapped = true
 	ownedValue.TextXAlignment = Enum.TextXAlignment.Left
 	ownedValue.TextYAlignment = Enum.TextYAlignment.Top
@@ -3117,7 +3967,7 @@ function AdminPanelController:_createRuntimeInspectorSection(parent: ScrollingFr
 	equippedValue.Size = UDim2.new(1, 0, 0, 118)
 	equippedValue.Font = Enum.Font.GothamSemibold
 	equippedValue.TextColor3 = Color3.fromRGB(244, 247, 255)
-	equippedValue.TextSize = 14
+	equippedValue.TextSize = 13
 	equippedValue.TextWrapped = true
 	equippedValue.TextXAlignment = Enum.TextXAlignment.Left
 	equippedValue.TextYAlignment = Enum.TextYAlignment.Top
@@ -3131,7 +3981,7 @@ function AdminPanelController:_createRuntimeInspectorSection(parent: ScrollingFr
 	bonusesValue.Size = UDim2.new(1, 0, 0, 86)
 	bonusesValue.Font = Enum.Font.GothamSemibold
 	bonusesValue.TextColor3 = Color3.fromRGB(244, 247, 255)
-	bonusesValue.TextSize = 14
+	bonusesValue.TextSize = 13
 	bonusesValue.TextWrapped = true
 	bonusesValue.TextXAlignment = Enum.TextXAlignment.Left
 	bonusesValue.TextYAlignment = Enum.TextYAlignment.Top
@@ -3147,7 +3997,7 @@ function AdminPanelController:_createRuntimeInspectorSection(parent: ScrollingFr
 	setGenerated(actionRow)
 
 	local actionLayout = Instance.new("UIGridLayout")
-	actionLayout.CellPadding = UDim2.fromOffset(10, 10)
+	actionLayout.CellPadding = UDim2.fromOffset(8, 8)
 	actionLayout.CellSize = UDim2.new(0.5, -5, 0, 40)
 	actionLayout.FillDirectionMaxCells = 2
 	actionLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
@@ -3202,7 +4052,7 @@ function AdminPanelController:_createPlayerStatsInspectorSection(parent: Scrolli
 	setGenerated(card)
 
 	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 14)
+	corner.CornerRadius = COMPACT_CORNER_RADIUS
 	corner.Parent = card
 	setGenerated(corner)
 
@@ -3213,17 +4063,17 @@ function AdminPanelController:_createPlayerStatsInspectorSection(parent: Scrolli
 	setGenerated(stroke)
 
 	local padding = Instance.new("UIPadding")
-	padding.PaddingTop = UDim.new(0, 14)
-	padding.PaddingBottom = UDim.new(0, 14)
-	padding.PaddingLeft = UDim.new(0, 14)
-	padding.PaddingRight = UDim.new(0, 14)
+	padding.PaddingTop = UDim.new(0, 10)
+	padding.PaddingBottom = UDim.new(0, 10)
+	padding.PaddingLeft = UDim.new(0, 12)
+	padding.PaddingRight = UDim.new(0, 12)
 	padding.Parent = card
 	setGenerated(padding)
 
 	local layout = Instance.new("UIListLayout")
 	layout.FillDirection = Enum.FillDirection.Vertical
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
-	layout.Padding = UDim.new(0, 10)
+	layout.Padding = UDim.new(0, 8)
 	layout.Parent = card
 	setGenerated(layout)
 
@@ -3235,7 +4085,7 @@ function AdminPanelController:_createPlayerStatsInspectorSection(parent: Scrolli
 	description.Font = Enum.Font.Gotham
 	description.Text = "This reads the same inspect summary used by the in-world player inspect flow, so the admin panel and live inspect modal stay in sync."
 	description.TextWrapped = true
-	description.TextSize = 14
+	description.TextSize = 13
 	description.TextXAlignment = Enum.TextXAlignment.Left
 	description.TextYAlignment = Enum.TextYAlignment.Top
 	description.TextColor3 = Color3.fromRGB(184, 196, 227)
@@ -3311,32 +4161,459 @@ function AdminPanelController:_createPlayerStatsInspectorSection(parent: Scrolli
 	self:_syncPlayerStatsUi()
 end
 
-function AdminPanelController:_createActionCard(parent: Instance, tabId: string, action: any, template: GuiButton)
+function AdminPanelController:_getMarketplaceOfferOptions(kind: string): { any }
+	local offers = {}
+	for _, offer in pairs(MarketplaceCatalog.Offers) do
+		if typeof(offer) == "table" and offer.kind == kind then
+			table.insert(offers, offer)
+		end
+	end
+
+	table.sort(offers, function(a, b)
+		local displayA = string.lower(tostring(a.displayName or a.offerKey or ""))
+		local displayB = string.lower(tostring(b.displayName or b.offerKey or ""))
+		if displayA ~= displayB then
+			return displayA < displayB
+		end
+		return tostring(a.offerKey or "") < tostring(b.offerKey or "")
+	end)
+
+	return offers
+end
+
+function AdminPanelController:_offerMatchesSearch(offer: any, searchText: string): boolean
+	local normalizedSearch = normalizeSearchText(searchText)
+	if normalizedSearch == "" then
+		return true
+	end
+
+	local haystack = normalizeSearchText(string.format(
+		"%s %s %s",
+		tostring(offer.displayName or ""),
+		tostring(offer.offerKey or ""),
+		tostring(offer.handlerKey or "")
+	))
+	return string.find(haystack, normalizedSearch, 1, true) ~= nil
+end
+
+function AdminPanelController:_getFilteredMarketplaceOfferOptions(kind: string, searchText: string): { any }
+	local filtered = {}
+	for _, offer in ipairs(self:_getMarketplaceOfferOptions(kind)) do
+		if self:_offerMatchesSearch(offer, searchText) then
+			table.insert(filtered, offer)
+		end
+	end
+	return filtered
+end
+
+function AdminPanelController:_findMarketplaceOffer(kind: string, offerKey: string?): any?
+	if typeof(offerKey) ~= "string" or offerKey == "" then
+		return nil
+	end
+
+	for _, offer in ipairs(self:_getMarketplaceOfferOptions(kind)) do
+		if offer.offerKey == offerKey then
+			return offer
+		end
+	end
+
+	return nil
+end
+
+function AdminPanelController:_getSelectedMarketplaceOffer(kind: string): any?
+	local selectedKey = if kind == "pass" then self._purchaseSelectedGamepassKey else self._purchaseSelectedDevProductKey
+	local selectedOffer = self:_findMarketplaceOffer(kind, selectedKey)
+	if selectedOffer then
+		return selectedOffer
+	end
+
+	local options = self:_getMarketplaceOfferOptions(kind)
+	local fallbackOffer = options[1]
+	if fallbackOffer then
+		if kind == "pass" then
+			self._purchaseSelectedGamepassKey = fallbackOffer.offerKey
+		else
+			self._purchaseSelectedDevProductKey = fallbackOffer.offerKey
+		end
+	end
+
+	return fallbackOffer
+end
+
+function AdminPanelController:_selectMarketplaceOffer(kind: string, offerKey: string)
+	if kind == "pass" then
+		self._purchaseSelectedGamepassKey = offerKey
+	else
+		self._purchaseSelectedDevProductKey = offerKey
+	end
+	self:_syncPurchasesUi()
+end
+
+function AdminPanelController:_formatMarketplaceOffer(offer: any?): string
+	if not offer then
+		return "No configured offer found."
+	end
+
+	local sale = offer.selfPurchase
+	local saleKind = if typeof(sale) == "table" then tostring(sale.saleKind or "") else ""
+	local robloxId = if typeof(sale) == "table" then tostring(sale.robloxId or "") else ""
+	local amountText = if tonumber(offer.amount) ~= nil then string.format("\nAmount: %s", tostring(offer.amount)) else ""
+	return string.format(
+		"%s\n%s | %s %s | %s%s",
+		tostring(offer.displayName or offer.offerKey),
+		tostring(offer.offerKey),
+		saleKind,
+		robloxId,
+		tostring(offer.grantMode or "grant"),
+		amountText
+	)
+end
+
+function AdminPanelController:_getPurchasesTargetUserId(): number
+	local ui = self._purchasesUi
+	local targetInput = ui and ui.targetInput
+	local rawText = if targetInput and targetInput:IsA("TextBox") then targetInput.Text else self._purchaseTargetUserIdText
+	local resolvedUserId = tonumber(trimText(rawText))
+	if resolvedUserId then
+		self._purchaseTargetUserIdText = tostring(math.floor(resolvedUserId))
+		return math.floor(resolvedUserId)
+	end
+
+	local fallbackUserId = self:_getSelectedAdminTargetUserId()
+	self._purchaseTargetUserIdText = tostring(fallbackUserId)
+	return fallbackUserId
+end
+
+function AdminPanelController:_cyclePurchasesTarget(direction: number)
+	local selectedPlayer, targets = self:_getSelectedPlayerStatsTarget()
+	if #targets == 0 then
+		self:_syncPurchasesUi()
+		self:_setStatus("No live players are available.", ERROR_COLOR)
+		return
+	end
+
+	local currentIndex = 1
+	for index, player in ipairs(targets) do
+		if selectedPlayer and player.UserId == selectedPlayer.UserId then
+			currentIndex = index
+			break
+		end
+	end
+
+	local nextIndex = ((currentIndex - 1 + direction) % #targets) + 1
+	self._playerStatsSelectedUserId = targets[nextIndex].UserId
+	self._purchaseTargetUserIdText = tostring(targets[nextIndex].UserId)
+	self:_syncPurchasesUi()
+end
+
+function AdminPanelController:_syncPurchasesUi()
+	local ui = self._purchasesUi
+	if not ui or next(ui) == nil then
+		return
+	end
+
+	local targetUserId = self:_getPurchasesTargetUserId()
+	local targetPlayer = Players:GetPlayerByUserId(targetUserId)
+	if ui.targetInput and ui.targetInput:IsA("TextBox") and not ui.targetInput:IsFocused() then
+		ui.targetInput.Text = tostring(targetUserId)
+	end
+	if ui.targetValue and ui.targetValue:IsA("TextLabel") then
+		ui.targetValue.Text = if targetPlayer
+			then string.format("%s\n%d", formatPlayerDisplay(targetPlayer), targetUserId)
+			else string.format("Offline or not in this server\n%d", targetUserId)
+	end
+
+	local selectedGamepass = self:_getSelectedMarketplaceOffer("pass")
+	local selectedDevProduct = self:_getSelectedMarketplaceOffer("product")
+	if ui.gamepassValue and ui.gamepassValue:IsA("TextLabel") then
+		ui.gamepassValue.Text = self:_formatMarketplaceOffer(selectedGamepass)
+	end
+	if ui.devProductValue and ui.devProductValue:IsA("TextLabel") then
+		ui.devProductValue.Text = self:_formatMarketplaceOffer(selectedDevProduct)
+	end
+
+	local gamepassSearch = if ui.gamepassSearchInput and ui.gamepassSearchInput:IsA("TextBox") then ui.gamepassSearchInput.Text else self._purchaseGamepassSearchText
+	self._purchaseGamepassSearchText = gamepassSearch
+	local gamepassOptions = self:_getFilteredMarketplaceOfferOptions("pass", gamepassSearch)
+	for index, button in ipairs(ui.gamepassButtons or {}) do
+		local offer = gamepassOptions[index]
+		button.Visible = offer ~= nil
+		button.Text = offer and tostring(offer.displayName or offer.offerKey) or ""
+		button:SetAttribute("OfferKey", offer and offer.offerKey or "")
+	end
+
+	local devProductSearch = if ui.devProductSearchInput and ui.devProductSearchInput:IsA("TextBox") then ui.devProductSearchInput.Text else self._purchaseDevProductSearchText
+	self._purchaseDevProductSearchText = devProductSearch
+	local devProductOptions = self:_getFilteredMarketplaceOfferOptions("product", devProductSearch)
+	for index, button in ipairs(ui.devProductButtons or {}) do
+		local offer = devProductOptions[index]
+		button.Visible = offer ~= nil
+		button.Text = offer and tostring(offer.displayName or offer.offerKey) or ""
+		button:SetAttribute("OfferKey", offer and offer.offerKey or "")
+	end
+
+	if ui.devProductCountInput and ui.devProductCountInput:IsA("TextBox") and not ui.devProductCountInput:IsFocused() then
+		ui.devProductCountInput.Text = self._purchaseDevProductCountText
+	end
+end
+
+function AdminPanelController:_runPurchaseReset()
+	local ui = self._purchasesUi
+	local confirmationInput = ui and ui.resetConfirmationInput
+	local payload = {
+		userId = self:_getPurchasesTargetUserId(),
+		confirmation = if confirmationInput and confirmationInput:IsA("TextBox") then confirmationInput.Text else "",
+	}
+	local ok, result = self:_invokeAdminRequest(PURCHASES_TAB_ID, "reset_player_data", "Resetting player data", payload)
+	if not ok or not result then
+		return
+	end
+
+	self:_setStatus(tostring(result.message or "Reset request completed."), if result.ok then SUCCESS_COLOR else ERROR_COLOR)
+end
+
+function AdminPanelController:_grantSelectedMarketplaceOffer(kind: string)
+	local ui = self._purchasesUi
+	local selectedOffer = self:_getSelectedMarketplaceOffer(kind)
+	if not selectedOffer then
+		self:_setStatus("Select an offer to grant first.", ERROR_COLOR)
+		return
+	end
+
+	local confirmationInput = if kind == "pass" then ui.gamepassConfirmationInput else ui.devProductConfirmationInput
+	local reasonInput = if kind == "pass" then ui.gamepassReasonInput else ui.devProductReasonInput
+	local countInput = ui.devProductCountInput
+	local actionId = if kind == "pass" then "grant_gamepass" else "grant_devproduct"
+	local actionTitle = if kind == "pass" then "Granting gamepass" else "Granting dev product"
+	local payload = {
+		userId = self:_getPurchasesTargetUserId(),
+		offerKey = selectedOffer.offerKey,
+		reason = if reasonInput and reasonInput:IsA("TextBox") then reasonInput.Text else "admin grant",
+		confirmation = if confirmationInput and confirmationInput:IsA("TextBox") then confirmationInput.Text else "",
+	}
+	if kind == "product" then
+		self._purchaseDevProductCountText = if countInput and countInput:IsA("TextBox") then countInput.Text else self._purchaseDevProductCountText
+		payload.count = tonumber(self._purchaseDevProductCountText) or 1
+	end
+
+	local ok, result = self:_invokeAdminRequest(PURCHASES_TAB_ID, actionId, actionTitle, payload)
+	if not ok or not result then
+		return
+	end
+
+	self:_setStatus(tostring(result.message or "Marketplace grant completed."), if result.ok then SUCCESS_COLOR else ERROR_COLOR)
+end
+
+function AdminPanelController:_createPurchasesOfferSelector(
+	parent: Instance,
+	kind: string,
+	title: string,
+	searchPlaceholder: string
+): (TextBox, TextLabel, { TextButton })
+	local field = self:_createSandboxField(parent, title)
+
+	local searchInput = self:_createSandboxTextInput(field, "SearchInput", "", searchPlaceholder, 36, false)
+	searchInput:GetPropertyChangedSignal("Text"):Connect(function()
+		if kind == "pass" then
+			self._purchaseGamepassSearchText = searchInput.Text
+		else
+			self._purchaseDevProductSearchText = searchInput.Text
+		end
+		self:_syncPurchasesUi()
+	end)
+
+	local valueLabel = self:_createSandboxValueLabel(field)
+
+	local buttonGrid = Instance.new("Frame")
+	buttonGrid.Name = "OfferButtonGrid"
+	buttonGrid.BackgroundTransparency = 1
+	buttonGrid.Size = UDim2.new(1, 0, 0, 112)
+	buttonGrid.Parent = field
+	setGenerated(buttonGrid)
+
+	local gridLayout = Instance.new("UIGridLayout")
+	gridLayout.CellPadding = UDim2.fromOffset(6, 6)
+	gridLayout.CellSize = UDim2.new(0.5, -3, 0, 32)
+	gridLayout.FillDirectionMaxCells = 2
+	gridLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	gridLayout.Parent = buttonGrid
+	setGenerated(gridLayout)
+
+	local buttons = {}
+	for index = 1, PURCHASE_SELECTOR_BUTTON_COUNT do
+		local button = self:_createSandboxButton(buttonGrid, string.format("OfferButton%d", index), "", UDim2.fromOffset(0, 32), function()
+			local offerKey = tostring(buttons[index]:GetAttribute("OfferKey") or "")
+			if offerKey ~= "" then
+				self:_selectMarketplaceOffer(kind, offerKey)
+			end
+		end)
+		button.LayoutOrder = index
+		table.insert(buttons, button)
+	end
+
+	return searchInput, valueLabel, buttons
+end
+
+function AdminPanelController:_createPurchasesPanelSection(parent: ScrollingFrame)
+	self:_createSectionHeader(parent, "Purchases", "Reset data and grant configured marketplace offers.")
+
+	local card = Instance.new("Frame")
+	card.Name = "PurchasesPanelCard"
+	card.Parent = parent
+	setGenerated(card)
+	self:_styleCompactCard(card, "mutating")
+
+	local targetField = self:_createSandboxField(card, "Target Player")
+	local targetRow = Instance.new("Frame")
+	targetRow.Name = "TargetRow"
+	targetRow.BackgroundTransparency = 1
+	targetRow.Size = UDim2.new(1, 0, 0, 36)
+	targetRow.Parent = targetField
+	setGenerated(targetRow)
+
+	local targetLayout = Instance.new("UIListLayout")
+	targetLayout.FillDirection = Enum.FillDirection.Horizontal
+	targetLayout.Padding = UDim.new(0, 6)
+	targetLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+	targetLayout.Parent = targetRow
+	setGenerated(targetLayout)
+
+	local targetPrevButton = self:_createSandboxButton(targetRow, "PrevButton", "<", UDim2.fromOffset(34, 36), function()
+		self:_cyclePurchasesTarget(-1)
+	end)
+	local targetNextButton = self:_createSandboxButton(targetRow, "NextButton", ">", UDim2.fromOffset(34, 36), function()
+		self:_cyclePurchasesTarget(1)
+	end)
+	local targetInput = self:_createSandboxTextInput(targetRow, "TargetUserIdInput", self._purchaseTargetUserIdText, "UserId", 36, false)
+	targetInput.Size = UDim2.new(0, 160, 0, 34)
+	targetInput.FocusLost:Connect(function()
+		self._purchaseTargetUserIdText = targetInput.Text
+		self:_syncPurchasesUi()
+	end)
+
+	local targetValue = self:_createSandboxValueLabel(targetField)
+
+	local resetField = self:_createSandboxField(card, "Reset Data")
+	local resetConfirmationInput = self:_createSandboxTextInput(resetField, "ResetConfirmationInput", "", "Type RESET", 36, false)
+	local resetButton = self:_createSandboxButton(resetField, "ResetButton", "Reset Data", UDim2.new(1, 0, 0, 36), function()
+		self:_runPurchaseReset()
+	end)
+	resetButton.BackgroundColor3 = Color3.fromRGB(104, 38, 46)
+
+	local gamepassSearchInput, gamepassValue, gamepassButtons = self:_createPurchasesOfferSelector(
+		card,
+		"pass",
+		"Grant Gamepass",
+		"Search passes"
+	)
+	local gamepassReasonInput = self:_createSandboxTextInput(card, "GamepassReasonInput", "admin grant", "Reason", 36, false)
+	local gamepassConfirmationInput = self:_createSandboxTextInput(card, "GamepassConfirmationInput", "", "Type GRANT", 36, false)
+	local grantGamepassButton = self:_createSandboxButton(card, "GrantGamepassButton", "Grant Selected Gamepass", UDim2.new(1, 0, 0, 36), function()
+		self:_grantSelectedMarketplaceOffer("pass")
+	end)
+
+	local devProductSearchInput, devProductValue, devProductButtons = self:_createPurchasesOfferSelector(
+		card,
+		"product",
+		"Grant Dev Product",
+		"Search products"
+	)
+	local devProductCountInput = self:_createSandboxTextInput(card, "DevProductCountInput", self._purchaseDevProductCountText, "Count (repeatable only)", 36, false)
+	devProductCountInput.FocusLost:Connect(function()
+		self._purchaseDevProductCountText = devProductCountInput.Text
+	end)
+	local devProductReasonInput = self:_createSandboxTextInput(card, "DevProductReasonInput", "admin grant", "Reason", 36, false)
+	local devProductConfirmationInput = self:_createSandboxTextInput(card, "DevProductConfirmationInput", "", "Type GRANT", 36, false)
+	local grantDevProductButton = self:_createSandboxButton(card, "GrantDevProductButton", "Grant Selected Dev Product", UDim2.new(1, 0, 0, 36), function()
+		self:_grantSelectedMarketplaceOffer("product")
+	end)
+
+	self._purchasesUi = {
+		targetPrevButton = targetPrevButton,
+		targetNextButton = targetNextButton,
+		targetInput = targetInput,
+		targetValue = targetValue,
+		resetConfirmationInput = resetConfirmationInput,
+		resetButton = resetButton,
+		gamepassSearchInput = gamepassSearchInput,
+		gamepassValue = gamepassValue,
+		gamepassButtons = gamepassButtons,
+		gamepassReasonInput = gamepassReasonInput,
+		gamepassConfirmationInput = gamepassConfirmationInput,
+		grantGamepassButton = grantGamepassButton,
+		devProductSearchInput = devProductSearchInput,
+		devProductValue = devProductValue,
+		devProductButtons = devProductButtons,
+		devProductCountInput = devProductCountInput,
+		devProductReasonInput = devProductReasonInput,
+		devProductConfirmationInput = devProductConfirmationInput,
+		grantDevProductButton = grantDevProductButton,
+	}
+
+	self:_syncPurchasesUi()
+end
+
+function AdminPanelController:_createActionCard(parent: Instance, tabId: string, action: any, _template: GuiButton)
 	if typeof(action.fields) == "table" and #action.fields > 0 then
 		self:_createActionFormCard(parent, tabId, action)
 		return
 	end
 
-	local card = template:Clone()
+	local card = Instance.new("TextButton")
 	card.Name = string.format("%sCard", action.id)
-	card.Visible = true
+	card.BackgroundColor3 = SANDBOX_CARD_COLOR
+	card.BorderSizePixel = 0
+	card.AutoButtonColor = false
+	card.Text = ""
+	card.Size = UDim2.new(1, -2, 0, 42)
 	card.Parent = parent
 	setGenerated(card)
 
-	local titleLabel = card:FindFirstChild("TitleLabel")
-	if titleLabel and titleLabel:IsA("TextLabel") then
-		titleLabel.Text = action.title
-	end
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 5)
+	corner.Parent = card
+	setGenerated(corner)
 
-	local descriptionLabel = card:FindFirstChild("DescriptionLabel")
-	if descriptionLabel and descriptionLabel:IsA("TextLabel") then
-		descriptionLabel.Text = action.description
-	end
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = if action.risk == "destructive" then DESTRUCTIVE_STROKE_COLOR else SANDBOX_STROKE_COLOR
+	stroke.Transparency = if action.risk == "destructive" then 0.2 else 0.58
+	stroke.Thickness = 1
+	stroke.Parent = card
+	setGenerated(stroke)
 
-	local badgeLabel = card:FindFirstChild("ActionBadge")
-	if badgeLabel and badgeLabel:IsA("TextLabel") then
-		badgeLabel.Text = if action.risk == "destructive" then "Live gated" else "Ready"
-	end
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Name = "TitleLabel"
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Position = UDim2.fromOffset(12, 0)
+	titleLabel.Size = UDim2.new(1, -122, 1, 0)
+	titleLabel.Font = Enum.Font.GothamSemibold
+	titleLabel.Text = action.title
+	titleLabel.TextColor3 = Color3.fromRGB(232, 237, 250)
+	titleLabel.TextSize = 14
+	titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+	titleLabel.TextTruncate = Enum.TextTruncate.AtEnd
+	titleLabel.Parent = card
+	setGenerated(titleLabel)
+
+	local badgeLabel = Instance.new("TextLabel")
+	badgeLabel.Name = "RiskBadge"
+	badgeLabel.AnchorPoint = Vector2.new(1, 0.5)
+	badgeLabel.Position = UDim2.new(1, -10, 0.5, 0)
+	badgeLabel.Size = UDim2.fromOffset(92, 22)
+	badgeLabel.BackgroundColor3 = getRiskBadgeColor(action)
+	badgeLabel.BackgroundTransparency = 0.86
+	badgeLabel.BorderSizePixel = 0
+	badgeLabel.Font = Enum.Font.GothamBold
+	badgeLabel.Text = getRiskBadgeText(action)
+	badgeLabel.TextColor3 = getRiskBadgeColor(action)
+	badgeLabel.TextSize = 11
+	badgeLabel.Parent = card
+	setGenerated(badgeLabel)
+
+	local badgeCorner = Instance.new("UICorner")
+	badgeCorner.CornerRadius = UDim.new(0, 5)
+	badgeCorner.Parent = badgeLabel
+	setGenerated(badgeCorner)
 
 	UIController:CreateButton(card, function()
 		self:_invokeAction(tabId, action.id, action.title)
@@ -3345,7 +4622,7 @@ end
 
 function AdminPanelController:_buildPage(tabDefinition: any, page: ScrollingFrame, actionTemplate: GuiButton)
 	for _, child in ipairs(page:GetChildren()) do
-		if child:GetAttribute("GeneratedAdminPanel") == true then
+		if child:GetAttribute("GeneratedAdminPanel") == true and child:IsA("GuiObject") then
 			child:Destroy()
 		end
 	end
@@ -3367,6 +4644,13 @@ function AdminPanelController:_buildPage(tabDefinition: any, page: ScrollingFram
 	if tabDefinition.id == PLAYERS_TAB_ID then
 		self:_createPlayerStatsInspectorSection(page)
 		self:_createSpacer(page, 8)
+	end
+
+	if tabDefinition.id == PURCHASES_TAB_ID then
+		self:_createPurchasesPanelSection(page)
+		page.Visible = false
+		page.CanvasPosition = Vector2.zero
+		return
 	end
 
 	if tabDefinition.id == PROGRESSION_TAB_ID then
@@ -3401,9 +4685,9 @@ function AdminPanelController:_buildPage(tabDefinition: any, page: ScrollingFram
 	page.CanvasPosition = Vector2.zero
 end
 
-function AdminPanelController:_buildTabs(tabRail: Instance, tabTemplate: GuiButton)
+function AdminPanelController:_buildTabs(tabRail: Instance, _tabTemplate: GuiButton)
 	for _, child in ipairs(tabRail:GetChildren()) do
-		if child:GetAttribute("GeneratedAdminPanel") == true then
+		if child:GetAttribute("GeneratedAdminPanel") == true and child:IsA("GuiButton") then
 			child:Destroy()
 		end
 	end
@@ -3411,27 +4695,67 @@ function AdminPanelController:_buildTabs(tabRail: Instance, tabTemplate: GuiButt
 	self._tabButtons = {}
 
 	for _, tabDefinition in ipairs(AdminPanelDefinitions.Tabs) do
-		local button = tabTemplate:Clone()
+		local button = Instance.new("TextButton")
 		button.Name = string.format("%sTabButton", tabDefinition.pageName)
 		button.Visible = true
+		button.LayoutOrder = table.find(AdminPanelDefinitions.Tabs, tabDefinition) or 0
+		button.Size = UDim2.fromScale(1, 1)
+		button.Text = ""
 		button.Parent = tabRail
 		setGenerated(button)
 
-		local titleLabel = button:FindFirstChild("TitleLabel")
-		if titleLabel and titleLabel:IsA("TextLabel") then
-			titleLabel.Text = tabDefinition.title
-		end
-
-		local subtitleLabel = button:FindFirstChild("SubtitleLabel")
-		if subtitleLabel and subtitleLabel:IsA("TextLabel") then
-			subtitleLabel.Text = tabDefinition.subtitle
-		end
+		local titleLabel = Instance.new("TextLabel")
+		titleLabel.Name = "TitleLabel"
+		titleLabel.BackgroundTransparency = 1
+		titleLabel.Size = UDim2.fromScale(1, 1)
+		titleLabel.Font = Enum.Font.GothamBold
+		titleLabel.Text = tabDefinition.title
+		titleLabel.TextSize = 12
+		titleLabel.TextXAlignment = Enum.TextXAlignment.Center
+		titleLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		titleLabel.Parent = button
+		setGenerated(titleLabel)
 
 		self._tabButtons[tabDefinition.id] = button
 
 		UIController:CreateButton(button, function()
 			self:_setTab(tabDefinition.id)
 		end)
+	end
+end
+
+function AdminPanelController:_simplifyGeneratedPage(page: ScrollingFrame)
+	local hiddenGrantControls = {
+		GrantBodyPartField = true,
+		GrantBodyPartButton = true,
+		GrantHeadAccessoryField = true,
+		GrantHeadAccessoryButton = true,
+		GrantGearAccessoryField = true,
+		GrantGearAccessoryButton = true,
+		GrantCraftingMaterialField = true,
+		CraftingMaterialActionRow = true,
+		GrantAuraField = true,
+		GrantAuraButton = true,
+	}
+
+	for _, descendant in ipairs(page:GetDescendants()) do
+		if descendant:IsA("TextLabel") then
+			if descendant.Name == "DescriptionLabel" then
+				descendant.Visible = false
+			elseif descendant.TextSize > 14 then
+				descendant.TextSize = 14
+			end
+		elseif descendant:IsA("GuiButton") then
+			descendant.AutoButtonColor = false
+		elseif descendant:IsA("Frame") and descendant.Name:find("Card") then
+			descendant.BackgroundColor3 = SANDBOX_CARD_COLOR
+			descendant.BackgroundTransparency = 0
+		end
+
+		if hiddenGrantControls[descendant.Name] and descendant:IsA("GuiObject") then
+			descendant.Visible = false
+			descendant.Size = UDim2.fromOffset(0, 0)
+		end
 	end
 end
 
@@ -3444,26 +4768,47 @@ function AdminPanelController:_buildInterface(panel: Frame)
 		Logger.Error("AdminPanel templates are missing required button types.")
 	end
 
-	local body = panel:WaitForChild("Body")
-	local tabRail = body:WaitForChild("TabRail"):WaitForChild("TabList")
-	local content = body:WaitForChild("Content")
-	local pages = content:WaitForChild("Pages")
+	local simpleLayout = self:_createSimpleMenuLayout(panel)
+	local tabRail = simpleLayout.tabList
+	local pages = simpleLayout.pages
 
-	self._pageTitleLabel = content:WaitForChild("PageTitleLabel") :: TextLabel
-	self._pageSubtitleLabel = content:WaitForChild("PageSubtitleLabel") :: TextLabel
-	self._statusLabel = panel:WaitForChild("Footer"):WaitForChild("StatusLabel") :: TextLabel
+	self._pageTitleLabel = simpleLayout.pageTitle :: TextLabel
+	self._pageSubtitleLabel = simpleLayout.pageSubtitle :: TextLabel
+	self._statusLabel = simpleLayout.status :: TextLabel
 
 	self:_buildTabs(tabRail, tabTemplate)
 	self._pages = {}
 
 	for _, tabDefinition in ipairs(AdminPanelDefinitions.Tabs) do
-		local page = pages:WaitForChild(tabDefinition.pageName)
-		if not page:IsA("ScrollingFrame") then
-			Logger.Error(string.format("AdminPanel page %s must be a ScrollingFrame.", tabDefinition.pageName))
-		end
+		local page = Instance.new("ScrollingFrame")
+		page.Name = tabDefinition.pageName
+		page.Parent = pages
+		setGenerated(page)
+
+		page.BackgroundTransparency = 1
+		page.BorderSizePixel = 0
+		page.ScrollBarThickness = 6
+		page.ScrollBarImageColor3 = Color3.fromRGB(96, 112, 148)
+		page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+		page.CanvasSize = UDim2.fromOffset(0, 0)
+		page.Size = UDim2.fromScale(1, 1)
+		page.ScrollingDirection = Enum.ScrollingDirection.Y
+
+		local pagePadding = getOrCreateFirstChildOfClass(page, "UIPadding", "PagePadding") :: UIPadding
+		pagePadding.PaddingTop = UDim.new(0, 6)
+		pagePadding.PaddingBottom = UDim.new(0, 10)
+		pagePadding.PaddingLeft = UDim.new(0, 2)
+		pagePadding.PaddingRight = UDim.new(0, 8)
+
+		local pageLayout = getOrCreateFirstChildOfClass(page, "UIListLayout", "PageLayout") :: UIListLayout
+		pageLayout.FillDirection = Enum.FillDirection.Vertical
+		pageLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+		pageLayout.SortOrder = Enum.SortOrder.LayoutOrder
+		pageLayout.Padding = UDim.new(0, 6)
 
 		self._pages[tabDefinition.id] = page
 		self:_buildPage(tabDefinition, page, actionTemplate)
+		self:_simplifyGeneratedPage(page)
 	end
 
 	self:_setTab(AdminPanelDefinitions.Tabs[1].id)

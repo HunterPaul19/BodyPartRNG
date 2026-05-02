@@ -51,6 +51,7 @@ local OVERVIEW_TAB_ID = "overview"
 local BODY_PARTS_TAB_ID = "bodyParts"
 local ROLL_SOURCES_TAB_ID = "cases"
 local PLAYERS_TAB_ID = "players"
+local PURCHASES_TAB_ID = "purchases"
 local PROGRESSION_TAB_ID = "progression"
 local DIAGNOSTICS_TAB_ID = "diagnostics"
 local MONEY_KEY = Schema.Money and Schema.Money.key or "money"
@@ -832,6 +833,27 @@ local function handleRepairMarketplaceEntitlement(player: Player, payload: any)
 		result.ok == true,
 		tostring(code),
 		tostring(result.message or "Marketplace entitlement repair completed."),
+		result.data
+	)
+end
+
+local function handleAdminGrantMarketplaceOffer(player: Player, payload: any, expectedKind: string)
+	local targetUserId = tonumber(payload.userId) or player.UserId
+	local offerKey = trimText(payload.offerKey)
+	local result = PurchaseReceiptService:AdminGrantOfferForUser(player, targetUserId, offerKey, {
+		expectedKind = expectedKind,
+		count = payload.count,
+		reason = trimText(payload.reason),
+	})
+	local code = result.code
+	if code == nil then
+		code = if result.ok == true then "OK" else "GRANT_FAILED"
+	end
+
+	return response(
+		result.ok == true,
+		tostring(code),
+		tostring(result.message or "Marketplace admin grant completed."),
 		result.data
 	)
 end
@@ -1940,6 +1962,18 @@ function AdminService:HandleAction(player: Player, request: any)
 
 	if tabId == PLAYERS_TAB_ID and actionId == "reset_player_data" then
 		return handleResetPlayerData(payload)
+	end
+
+	if tabId == PURCHASES_TAB_ID and actionId == "reset_player_data" then
+		return handleResetPlayerData(payload)
+	end
+
+	if tabId == PURCHASES_TAB_ID and actionId == "grant_gamepass" then
+		return handleAdminGrantMarketplaceOffer(player, payload, "pass")
+	end
+
+	if tabId == PURCHASES_TAB_ID and actionId == "grant_devproduct" then
+		return handleAdminGrantMarketplaceOffer(player, payload, "product")
 	end
 
 	if tabId == PROGRESSION_TAB_ID and actionId == "grant_money" then

@@ -10,11 +10,18 @@ local ObjectiveGuideConfig = require(ReplicatedStorage.Shared.Config.ObjectiveGu
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local GUIDE_FOLDER_NAME = "ObjectiveGuide"
+local OBJECTIVE_FOLDER_PREFIX = "Objective_"
 local BEAM_NAME = "Beam"
 local BEAM_VISUAL_NAME = "TutorialBeam"
 local BEAM_START_NAME = "BeamStart"
 local BEAM_END_NAME = "BeamEnd"
 local ATTACHMENT_NAME = "GuideAttachment"
+local LEGACY_DIRECT_CHILD_NAMES = table.freeze({
+	[BEAM_NAME] = true,
+	[BEAM_VISUAL_NAME] = true,
+	[BEAM_START_NAME] = true,
+	[BEAM_END_NAME] = true,
+})
 
 type ObjectiveOptions = {
 	arrivalRadius: number?,
@@ -30,21 +37,22 @@ type ActiveObjective = {
 	id: string,
 	target: any,
 	options: ObjectiveOptions,
+	folder: Folder?,
+	beamPart: Part?,
+	beamStartPart: Part?,
+	beamEndPart: Part?,
+	beamStartAttachment: Attachment?,
+	beamEndAttachment: Attachment?,
+	beam: Beam?,
+	beamDefaultWidth0: number,
+	beamDefaultWidth1: number,
 }
 
 local ObjectiveGuideController = {
 	_started = false,
-	_activeObjective = nil :: ActiveObjective?,
+	_activeObjectives = {} :: { [string]: ActiveObjective },
 	_renderConnection = nil :: RBXScriptConnection?,
 	_folder = nil :: Folder?,
-	_beamPart = nil :: Part?,
-	_beamStartPart = nil :: Part?,
-	_beamEndPart = nil :: Part?,
-	_beamStartAttachment = nil :: Attachment?,
-	_beamEndAttachment = nil :: Attachment?,
-	_beam = nil :: Beam?,
-	_beamDefaultWidth0 = ObjectiveGuideConfig.DefaultBeamWidth,
-	_beamDefaultWidth1 = ObjectiveGuideConfig.DefaultBeamWidth,
 	_warnedKeys = {} :: { [string]: boolean },
 }
 
@@ -67,6 +75,10 @@ local function readPositiveNumber(value: any, fallback: number): number
 	end
 
 	return fallback
+end
+
+local function sanitizeInstanceName(value: string): string
+	return string.gsub(value, "[^%w_]", "_")
 end
 
 local function setPartVisual(part: Part, color: Color3, width: number, length: number, cframe: CFrame)
@@ -197,6 +209,9 @@ local function findPositionSource(instance: Instance): Instance?
 	if instance:IsA("BasePart") or instance:IsA("Attachment") then
 		return instance
 	end
+	if instance:IsA("ProximityPrompt") and instance.Parent and instance.Parent:IsA("BasePart") then
+		return instance.Parent
+	end
 	if instance:IsA("Model") then
 		local root = instance:FindFirstChild("HumanoidRootPart", true)
 		if root and root:IsA("BasePart") then
@@ -284,42 +299,41 @@ local function collectFallbackTargetPaths(options: ObjectiveOptions): { string }
 	return paths
 end
 
-function ObjectiveGuideController:_ensureParts()
+function ObjectiveGuideController:_ensureRootFolder(): Folder
 	if self._folder and self._folder.Parent == Workspace then
-		if self._beam == nil then
-			self:_ensureBeam()
-		end
-		return
+		return self._folder
+	end
+
+	local existing = Workspace:FindFirstChild(GUIDE_FOLDER_NAME)
+	if existing and existing:IsA("Folder") then
+		self._folder = existing
+		return existing
+	elseif existing then
+		existing:Destroy()
 	end
 
 	local folder = Instance.new("Folder")
 	folder.Name = GUIDE_FOLDER_NAME
 	folder.Parent = Workspace
-
-	local beamPart = createGuidePart(BEAM_NAME)
-	beamPart.Parent = folder
-
-	local beamStartPart = createGuidePart(BEAM_START_NAME)
-	beamStartPart.Parent = folder
-
-	local beamEndPart = createGuidePart(BEAM_END_NAME)
-	beamEndPart.Parent = folder
-
 	self._folder = folder
-	self._beamPart = beamPart
-	self._beamStartPart = beamStartPart
-	self._beamEndPart = beamEndPart
-	self._beamStartAttachment = createGuideAttachment(beamStartPart)
-	self._beamEndAttachment = createGuideAttachment(beamEndPart)
-	self:_ensureBeam()
+	return folder
 end
 
-function ObjectiveGuideController:_ensureBeam()
-	if self._beam ~= nil and self._beam.Parent ~= nil then
+function ObjectiveGuideController:_cleanupLegacyDirectChildren()
+	local folder = self:_ensureRootFolder()
+	for _, child in ipairs(folder:GetChildren()) do
+		if LEGACY_DIRECT_CHILD_NAMES[child.Name] == true then
+			child:Destroy()
+		end
+	end
+end
+
+function ObjectiveGuideController:_ensureBeam(objective: ActiveObjective)
+	if objective.beam ~= nil and objective.beam.Parent ~= nil then
 		return
 	end
 
-	if self._folder == nil then
+	if objective.folder == nil then
 		return
 	end
 
@@ -335,22 +349,68 @@ function ObjectiveGuideController:_ensureBeam()
 
 	local beam = template:Clone()
 	beam.Name = BEAM_VISUAL_NAME
-	beam.Attachment0 = self._beamEndAttachment
-	beam.Attachment1 = self._beamStartAttachment
+	beam.Attachment0 = objective.beamEndAttachment
+	beam.Attachment1 = objective.beamStartAttachment
 	beam.Enabled = false
-	beam.Parent = self._folder
+	beam.Parent = objective.folder
 
-	self._beam = beam
-	self._beamDefaultWidth0 = readPositiveNumber(beam.Width0, ObjectiveGuideConfig.DefaultBeamWidth)
-	self._beamDefaultWidth1 = readPositiveNumber(beam.Width1, ObjectiveGuideConfig.DefaultBeamWidth)
+	objective.beam = beam
+	objective.beamDefaultWidth0 = readPositiveNumber(beam.Width0, ObjectiveGuideConfig.DefaultBeamWidth)
+	objective.beamDefaultWidth1 = readPositiveNumber(beam.Width1, ObjectiveGuideConfig.DefaultBeamWidth)
 end
 
-function ObjectiveGuideController:_hideParts()
-	if self._beamPart then
-		self._beamPart.Transparency = 1
+function ObjectiveGuideController:_ensureParts(objective: ActiveObjective)
+	if objective.folder and objective.folder.Parent == self:_ensureRootFolder() then
+		if objective.beam == nil then
+			self:_ensureBeam(objective)
+		end
+		return
 	end
-	if self._beam then
-		self._beam.Enabled = false
+
+	local folder = Instance.new("Folder")
+	folder.Name = OBJECTIVE_FOLDER_PREFIX .. sanitizeInstanceName(objective.id)
+	folder.Parent = self:_ensureRootFolder()
+
+	local beamPart = createGuidePart(BEAM_NAME)
+	beamPart.Parent = folder
+
+	local beamStartPart = createGuidePart(BEAM_START_NAME)
+	beamStartPart.Parent = folder
+
+	local beamEndPart = createGuidePart(BEAM_END_NAME)
+	beamEndPart.Parent = folder
+
+	objective.folder = folder
+	objective.beamPart = beamPart
+	objective.beamStartPart = beamStartPart
+	objective.beamEndPart = beamEndPart
+	objective.beamStartAttachment = createGuideAttachment(beamStartPart)
+	objective.beamEndAttachment = createGuideAttachment(beamEndPart)
+	objective.beamDefaultWidth0 = ObjectiveGuideConfig.DefaultBeamWidth
+	objective.beamDefaultWidth1 = ObjectiveGuideConfig.DefaultBeamWidth
+	self:_ensureBeam(objective)
+end
+
+function ObjectiveGuideController:_hideParts(objective: ActiveObjective?)
+	if objective == nil then
+		for _, activeObjective in pairs(self._activeObjectives) do
+			self:_hideParts(activeObjective)
+		end
+		return
+	end
+
+	if objective.beamPart then
+		objective.beamPart.Transparency = 1
+	end
+	if objective.beam then
+		objective.beam.Enabled = false
+	end
+end
+
+function ObjectiveGuideController:_destroyObjective(objective: ActiveObjective)
+	self:_hideParts(objective)
+	if objective.folder then
+		objective.folder:Destroy()
 	end
 end
 
@@ -414,24 +474,18 @@ function ObjectiveGuideController:_resolveTargetPosition(objective: ActiveObject
 	return nil, nil
 end
 
-function ObjectiveGuideController:_render()
-	local objective = self._activeObjective
-	if objective == nil then
-		self:_hideParts()
-		return
-	end
-
-	self:_ensureParts()
+function ObjectiveGuideController:_renderObjective(objective: ActiveObjective)
+	self:_ensureParts(objective)
 
 	local torsoPart = getCharacterTorso()
 	if torsoPart == nil then
-		self:_hideParts()
+		self:_hideParts(objective)
 		return
 	end
 
 	local targetPosition, targetInstance = self:_resolveTargetPosition(objective)
 	if targetPosition == nil or not isTargetEnabled(targetInstance) then
-		self:_hideParts()
+		self:_hideParts(objective)
 		return
 	end
 
@@ -444,14 +498,14 @@ function ObjectiveGuideController:_render()
 	local distance = planarOffset.Magnitude
 	local arrivalRadius = getObjectiveRadius(objective, targetInstance)
 	if distance <= math.max(arrivalRadius, ObjectiveGuideConfig.MinVisibleDistance) then
-		self:_hideParts()
+		self:_hideParts(objective)
 		return
 	end
 
 	local forward = planarOffset.Unit
 	local visibleLength = math.min(distance - arrivalRadius, ObjectiveGuideConfig.MaxBeamLength)
 	if visibleLength <= ObjectiveGuideConfig.MinVisibleDistance then
-		self:_hideParts()
+		self:_hideParts(objective)
 		return
 	end
 
@@ -469,8 +523,8 @@ function ObjectiveGuideController:_render()
 	local beamLength = (beamEnd - beamStart).Magnitude
 	local color = getObjectiveColor(objective, targetInstance)
 	local requestedBeamWidth = objective.options.beamWidth
-	local beamWidth0 = self._beamDefaultWidth0
-	local beamWidth1 = self._beamDefaultWidth1
+	local beamWidth0 = objective.beamDefaultWidth0
+	local beamWidth1 = objective.beamDefaultWidth1
 	if requestedBeamWidth ~= nil then
 		local beamWidth = readPositiveNumber(requestedBeamWidth, ObjectiveGuideConfig.DefaultBeamWidth)
 		beamWidth0 = beamWidth
@@ -478,21 +532,36 @@ function ObjectiveGuideController:_render()
 	end
 
 	if beamLength <= 0.1 then
-		self:_hideParts()
+		self:_hideParts(objective)
 		return
 	end
 
-	local beam = self._beam
-	if beam ~= nil and self._beamPart ~= nil and self._beamStartPart ~= nil and self._beamEndPart ~= nil then
-		self._beamPart.Transparency = 1
-		self._beamStartPart.CFrame = CFrame.new(beamStart)
-		self._beamEndPart.CFrame = CFrame.new(beamEnd)
+	local beam = objective.beam
+	if beam ~= nil and objective.beamPart ~= nil and objective.beamStartPart ~= nil and objective.beamEndPart ~= nil then
+		objective.beamPart.Transparency = 1
+		objective.beamStartPart.CFrame = CFrame.new(beamStart)
+		objective.beamEndPart.CFrame = CFrame.new(beamEnd)
 		setBeamVisual(beam, color, beamWidth0, beamWidth1)
 		return
 	end
 
+	if objective.beamPart == nil then
+		return
+	end
+
 	local beamCenter = beamStart:Lerp(beamEnd, 0.5)
-	setPartVisual(self._beamPart :: Part, color, beamWidth0, beamLength, CFrame.lookAt(beamCenter, beamEnd))
+	setPartVisual(objective.beamPart, color, beamWidth0, beamLength, CFrame.lookAt(beamCenter, beamEnd))
+end
+
+function ObjectiveGuideController:_render()
+	if next(self._activeObjectives) == nil then
+		self:_hideParts()
+		return
+	end
+
+	for _, objective in pairs(self._activeObjectives) do
+		self:_renderObjective(objective)
+	end
 end
 
 function ObjectiveGuideController:_startRenderLoop()
@@ -515,11 +584,28 @@ function ObjectiveGuideController.ShowObjective(objectiveId: string, targetOrPos
 		return false
 	end
 
-	ObjectiveGuideController._activeObjective = {
-		id = objectiveId,
-		target = targetOrPosition,
-		options = options or {},
-	}
+	local objective = ObjectiveGuideController._activeObjectives[objectiveId]
+	if objective then
+		objective.target = targetOrPosition
+		objective.options = options or {}
+	else
+		objective = {
+			id = objectiveId,
+			target = targetOrPosition,
+			options = options or {},
+			folder = nil,
+			beamPart = nil,
+			beamStartPart = nil,
+			beamEndPart = nil,
+			beamStartAttachment = nil,
+			beamEndAttachment = nil,
+			beam = nil,
+			beamDefaultWidth0 = ObjectiveGuideConfig.DefaultBeamWidth,
+			beamDefaultWidth1 = ObjectiveGuideConfig.DefaultBeamWidth,
+		}
+		ObjectiveGuideController._activeObjectives[objectiveId] = objective
+	end
+
 	ObjectiveGuideController:_startRenderLoop()
 	return true
 end
@@ -541,22 +627,27 @@ function ObjectiveGuideController.ShowTaggedObjective(objectiveId: string, optio
 end
 
 function ObjectiveGuideController.ClearObjective(objectiveId: string?)
-	local activeObjective = ObjectiveGuideController._activeObjective
-	if activeObjective == nil then
-		ObjectiveGuideController:_hideParts()
-		return
-	end
-	if objectiveId ~= nil and activeObjective.id ~= objectiveId then
+	ObjectiveGuideController:_cleanupLegacyDirectChildren()
+
+	if objectiveId == nil then
+		for id, objective in pairs(ObjectiveGuideController._activeObjectives) do
+			ObjectiveGuideController:_destroyObjective(objective)
+			ObjectiveGuideController._activeObjectives[id] = nil
+		end
 		return
 	end
 
-	ObjectiveGuideController._activeObjective = nil
-	ObjectiveGuideController:_hideParts()
+	local objective = ObjectiveGuideController._activeObjectives[objectiveId]
+	if objective == nil then
+		return
+	end
+
+	ObjectiveGuideController:_destroyObjective(objective)
+	ObjectiveGuideController._activeObjectives[objectiveId] = nil
 end
 
 function ObjectiveGuideController.IsObjectiveActive(objectiveId: string): boolean
-	local activeObjective = ObjectiveGuideController._activeObjective
-	return activeObjective ~= nil and activeObjective.id == objectiveId
+	return ObjectiveGuideController._activeObjectives[objectiveId] ~= nil
 end
 
 function ObjectiveGuideController:OnStart()
@@ -565,7 +656,8 @@ function ObjectiveGuideController:OnStart()
 	end
 
 	self._started = true
-	self:_ensureParts()
+	self:_ensureRootFolder()
+	self:_cleanupLegacyDirectChildren()
 	self:_hideParts()
 	self:_startRenderLoop()
 end

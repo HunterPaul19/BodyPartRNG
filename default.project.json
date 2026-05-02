@@ -134,6 +134,9 @@
         "BodyPartService": {
           "$path": "src/game/ServerScriptService/Services/Gameplay/BodyPartService"
         },
+        "BodyPartAcquisitionService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/BodyPartAcquisitionService.lua"
+        },
         "BossArenaAbandonService": {
           "$path": "src/game/ServerScriptService/Services/Bosses/BossArenaAbandonService.lua"
         },
@@ -434,6 +437,9 @@
           "BossWorldGuideController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/BossWorldGuideController.lua"
           },
+          "QuestBoardOnboardingGuideController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/QuestBoardOnboardingGuideController.lua"
+          },
           "TutorialController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/TutorialController.lua"
           },
@@ -448,6 +454,9 @@
           },
           "PotionController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/PotionController.lua"
+          },
+          "QuestController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/QuestController.lua"
           },
           "PvpController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/PvpController.lua"

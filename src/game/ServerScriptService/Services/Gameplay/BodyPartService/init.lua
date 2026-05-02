@@ -17,6 +17,7 @@ local AuraConfig = require(ReplicatedStorage.Shared.Config.AuraConfig)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local BodyPartRuntimeConfig = require(ReplicatedStorage.Shared.Config.BodyParts.Runtime)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
+local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
 local CombatPower = require(ReplicatedStorage.Shared.Combat.CombatPower)
 local PotionRuntimeBonuses = require(ReplicatedStorage.Shared.Character.PotionRuntimeBonuses)
 local PerfStats = require(ReplicatedStorage.Shared.Diagnostics.PerfStats)
@@ -983,6 +984,40 @@ end
 local function getSellValueForRecord(record: OwnedBodyParts.OwnedBodyPartRecord): number
 	local piece = BodyPartsCatalog.GetPiece(record.pieceId)
 	return BodyPartEconomy.GetSellValue(record, piece)
+end
+
+local function resolveOwnedRecordDisplayRarity(record: OwnedBodyParts.OwnedBodyPartRecord): string?
+	local displayRarity = RollingConfig.ResolveDisplayRarity(record.displayRarity)
+	if displayRarity then
+		return displayRarity
+	end
+
+	local setConfig = BodyPartsCatalog.GetSetForPiece(record.pieceId)
+	local rollDisplay = setConfig and setConfig.rollDisplay or nil
+	return RollingConfig.ResolveDisplayRarity(rollDisplay and rollDisplay.rarity or nil)
+end
+
+local function resolveRequestedSellAllRaritySet(payload: any): ({ [string]: boolean }?, number)
+	if payload == nil then
+		return nil, 0
+	end
+	if typeof(payload) ~= "table" or typeof(payload.rarities) ~= "table" then
+		return {}, 0
+	end
+
+	local selectedRarities = {}
+	local selectedCount = 0
+	for rarity, isSelected in pairs(payload.rarities) do
+		if isSelected == true then
+			local displayRarity = RollingConfig.ResolveDisplayRarity(rarity)
+			if displayRarity and selectedRarities[displayRarity] ~= true then
+				selectedRarities[displayRarity] = true
+				selectedCount += 1
+			end
+		end
+	end
+
+	return selectedRarities, selectedCount
 end
 
 local function resolveAutoSizeEnabled(player: Player, overrideEnabled: boolean?): boolean
@@ -3135,11 +3170,21 @@ function BodyPartService:SellOwnedBodyPart(player: Player, ownedId: string): (bo
 	return true, message
 end
 
-function BodyPartService:SellAllUnfavoritedBodyParts(player: Player): (boolean, string)
+function BodyPartService:SellAllUnfavoritedBodyParts(player: Player, payload: any?): (boolean, string)
 	local startedAt = PerfStats.Begin()
 	local ownedBodyParts = DataService:GetOwnedBodyParts(player)
 	local equippedState = SessionStore.GetEquipped(player)
 	local equippedOwnedIds = {}
+	local requestedRarities, requestedRarityCount = resolveRequestedSellAllRaritySet(payload)
+
+	if requestedRarities ~= nil and requestedRarityCount <= 0 then
+		local message = "Select at least one rarity to sell."
+		self:NotifyClient(player, message)
+		PerfStats.Measure("BodyPartSellAll", startedAt, {
+			detail = string.format("%s sold=0 requested=0 filtered=true", player.Name),
+		})
+		return true, message
+	end
 
 	for _, region in ipairs(BodyPartRegions.Order) do
 		local entry = equippedState[region]
@@ -3150,16 +3195,28 @@ function BodyPartService:SellAllUnfavoritedBodyParts(player: Player): (boolean, 
 
 	local ownedIdsToSell = {}
 	for ownedId, record in pairs(ownedBodyParts) do
-		if record.isFavorite ~= true and equippedOwnedIds[ownedId] ~= true then
+		local matchesRequestedRarity = true
+		if requestedRarities ~= nil then
+			local displayRarity = resolveOwnedRecordDisplayRarity(record)
+			matchesRequestedRarity = displayRarity ~= nil and requestedRarities[displayRarity] == true
+		end
+
+		if record.isFavorite ~= true and equippedOwnedIds[ownedId] ~= true and matchesRequestedRarity then
 			table.insert(ownedIdsToSell, ownedId)
 		end
 	end
 
 	if #ownedIdsToSell == 0 then
-		local message = "No unfavorited unequipped body parts were available to sell."
+		local message = if requestedRarities ~= nil
+			then "No matching unfavorited unequipped body parts were available to sell."
+			else "No unfavorited unequipped body parts were available to sell."
 		self:NotifyClient(player, message)
 		PerfStats.Measure("BodyPartSellAll", startedAt, {
-			detail = string.format("%s sold=0 requested=0", player.Name),
+			detail = string.format(
+				"%s sold=0 requested=0 filtered=%s",
+				player.Name,
+				tostring(requestedRarities ~= nil)
+			),
 		})
 		return true, message
 	end
@@ -3196,7 +3253,13 @@ function BodyPartService:SellAllUnfavoritedBodyParts(player: Player): (boolean, 
 	local message = string.format("Sold %d body parts for $%s.", soldCount, tostring(totalPayout))
 	self:NotifyClient(player, message)
 	PerfStats.Measure("BodyPartSellAll", startedAt, {
-		detail = string.format("%s sold=%d requested=%d", player.Name, soldCount, #ownedIdsToSell),
+		detail = string.format(
+			"%s sold=%d requested=%d filtered=%s",
+			player.Name,
+			soldCount,
+			#ownedIdsToSell,
+			tostring(requestedRarities ~= nil)
+		),
 	})
 	return true, message
 end
@@ -3403,8 +3466,8 @@ local function handleSellOwned(player: Player, payload: any)
 	return response(ok, message, BodyPartService:GetClientState(player, message))
 end
 
-local function handleSellAll(player: Player)
-	local ok, message = BodyPartService:SellAllUnfavoritedBodyParts(player)
+local function handleSellAll(player: Player, payload: any)
+	local ok, message = BodyPartService:SellAllUnfavoritedBodyParts(player, payload)
 	return response(ok, message, BodyPartService:GetClientState(player, message))
 end
 
@@ -3520,13 +3583,13 @@ function BodyPartService:OnStart()
 
 		return handleSellOwned(player, payload)
 	end
-	sellAllRemote.OnServerInvoke = function(player: Player)
+	sellAllRemote.OnServerInvoke = function(player: Player, payload: any)
 		local allowed = RequestLimiter:Allow(player, "remote.body_parts.sell_all")
 		if not allowed then
 			return buildRateLimitResponse("You're bulk selling too quickly.", BodyPartService:GetClientState(player))
 		end
 
-		return handleSellAll(player)
+		return handleSellAll(player, payload)
 	end
 
 	DataService.EquippedAuraChanged:Connect(function(player: Player)

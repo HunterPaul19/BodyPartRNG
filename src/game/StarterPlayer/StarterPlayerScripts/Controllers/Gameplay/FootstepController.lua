@@ -25,6 +25,7 @@ local BASE_STEP_DISTANCE_STUDS = 3.8
 local MIN_STEP_INTERVAL_SECONDS = 0.16
 local MAX_STEP_INTERVAL_SECONDS = 0.8
 local TELEPORT_DELTA_RESET_STUDS = 35
+local BOSS_FOOTSTEP_VOLUME_MULTIPLIER = 0.5
 local DEFAULT_CLEANUP_SECONDS = 3
 local DEFAULT_CONCRETE_GROUP_NAME = "Concrete"
 
@@ -378,7 +379,7 @@ local function configureBossSpatialSound(sound: Sound, bossScale: number)
 	})
 
 	local volumeScale = math.clamp(resolvedBossScale ^ 0.55, 3, 6)
-	sound.Volume = math.clamp((tonumber(sound.Volume) or 0.5) * volumeScale, 0, 4)
+	sound.Volume = math.clamp((tonumber(sound.Volume) or 0.5) * volumeScale * BOSS_FOOTSTEP_VOLUME_MULTIPLIER, 0, 4)
 end
 
 local function cleanupEmitterAfterPlayback(emitter: BasePart, sound: Sound)

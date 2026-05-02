@@ -133,6 +133,13 @@ function EnterBossLobbyPortalService:_teleportPlayerToBossTutorial(player: Playe
 	end)
 
 	if teleportOk then
+		BossWorldGuideService:RecordBossWorldEntered(player, {
+			portalId = TUTORIAL_PORTAL_ID,
+			sourceFlow = TUTORIAL_SOURCE_FLOW,
+			bossId = TUTORIAL_BOSS_ID,
+			arenaId = TUTORIAL_ARENA_ID,
+			amount = 1,
+		})
 		BossWorldGuideService:MarkBossTutorialArenaEntered(player)
 		return
 	end

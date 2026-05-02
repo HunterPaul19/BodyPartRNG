@@ -15,6 +15,7 @@ local MaterialPresentation = require(ReplicatedStorage.Shared.UI.MaterialPresent
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
 local PotionPresentation = require(ReplicatedStorage.Shared.UI.PotionPresentation)
+local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local OVERLAY_NAME = "ChestRewardOverlay"
@@ -27,12 +28,18 @@ local CENTER_CARD_SIZE = UDim2.fromScale(0.127, 0.243)
 local MONEY_DISPLAY_COLOR = Color3.fromRGB(255, 200, 0)
 local MONEY_ICON_TEXT = "$"
 local TIME_SHARD_DISPLAY_COLOR = Color3.fromRGB(85, 218, 255)
+local UNKNOWN_BODY_PART_ODDS_DENOMINATOR = math.huge
 
 local ChestOpeningSequence = {
 	_active = false,
 	_tutorialTarget = nil :: GuiObject?,
 	_tutorialText = nil :: string?,
 }
+
+local RARITY_RANKS: { [string]: number } = {}
+for rank, rarity in ipairs(RollingConfig.DisplayRarityOrder) do
+	RARITY_RANKS[rarity] = rank
+end
 
 local function setTutorialTarget(target: GuiObject?, text: string?)
 	ChestOpeningSequence._tutorialTarget = target
@@ -408,11 +415,101 @@ local function buildRewardPresentation(reward: any)
 	end
 
 	local record = if typeof(reward) == "table" and typeof(reward.record) == "table" then reward.record else reward
-	return BodyPartPresentation.BuildPreviewPresentation({
+	local presentation = BodyPartPresentation.BuildPreviewPresentation({
 		record = record,
 		pieceId = record and record.pieceId,
 		appearanceUserId = LOCAL_PLAYER.UserId,
 	})
+	if presentation and typeof(reward) == "table" then
+		if reward.autoSold == true then
+			presentation.cardUsageText = string.format("Sold %s", formatMoney(reward.payout))
+		elseif reward.autoCrafted == true then
+			presentation.cardUsageText = "Added to Crafting"
+		elseif reward.autoEquipped == true then
+			presentation.cardUsageText = "Equipped"
+		end
+	end
+	return presentation
+end
+
+local function isBodyPartReward(reward: any): boolean
+	if typeof(reward) ~= "table" then
+		return false
+	end
+
+	local kind = if typeof(reward.kind) == "string" then reward.kind else "bodyPart"
+	return kind == "bodyPart"
+end
+
+local function getBodyPartRewardRecord(reward: any): any
+	if typeof(reward) ~= "table" then
+		return nil
+	end
+	if typeof(reward.record) == "table" then
+		return reward.record
+	end
+	return reward
+end
+
+local function getBodyPartRewardSortData(reward: any): (number, number)
+	local record = getBodyPartRewardRecord(reward)
+	local displayRarity = if typeof(record) == "table" and typeof(record.displayRarity) == "string"
+		then record.displayRarity
+		elseif typeof(reward) == "table" and typeof(reward.displayRarity) == "string" then reward.displayRarity
+		else "Basic"
+	local normalizedRarity = RollingConfig.NormalizeDisplayRarity(displayRarity)
+	local rarityRank = RARITY_RANKS[normalizedRarity] or math.huge
+	local oddsDenominator = UNKNOWN_BODY_PART_ODDS_DENOMINATOR
+
+	if typeof(record) == "table" then
+		oddsDenominator = tonumber(record.displayOddsDenominator or record.rarityDenominator) or oddsDenominator
+	end
+	if oddsDenominator == UNKNOWN_BODY_PART_ODDS_DENOMINATOR and typeof(reward) == "table" then
+		oddsDenominator = tonumber(reward.displayOddsDenominator or reward.rarityDenominator) or oddsDenominator
+	end
+
+	return rarityRank, math.max(1, oddsDenominator)
+end
+
+local function buildOrderedRewardListForReveal(rewards: { any }): { any }
+	local orderedRewards = table.create(#rewards)
+	local bodyPartEntries = {}
+
+	for index, reward in ipairs(rewards) do
+		orderedRewards[index] = reward
+		if isBodyPartReward(reward) then
+			table.insert(bodyPartEntries, {
+				reward = reward,
+				originalIndex = index,
+			})
+		end
+	end
+
+	if #bodyPartEntries <= 1 then
+		return orderedRewards
+	end
+
+	table.sort(bodyPartEntries, function(a, b)
+		local rarityRankA, oddsDenominatorA = getBodyPartRewardSortData(a.reward)
+		local rarityRankB, oddsDenominatorB = getBodyPartRewardSortData(b.reward)
+		if rarityRankA ~= rarityRankB then
+			return rarityRankA < rarityRankB
+		end
+		if oddsDenominatorA ~= oddsDenominatorB then
+			return oddsDenominatorA < oddsDenominatorB
+		end
+		return a.originalIndex < b.originalIndex
+	end)
+
+	local nextBodyPartIndex = 1
+	for index, reward in ipairs(orderedRewards) do
+		if isBodyPartReward(reward) then
+			orderedRewards[index] = bodyPartEntries[nextBodyPartIndex].reward
+			nextBodyPartIndex += 1
+		end
+	end
+
+	return orderedRewards
 end
 
 local function populateRewardCard(frame: Frame, reward: any)
@@ -638,7 +735,7 @@ local function openChestSequence(chestId: string, rewards: { any }, completedEve
 		return false
 	end
 
-	local rewardList = if typeof(rewards) == "table" then rewards else {}
+	local rewardList = if typeof(rewards) == "table" then buildOrderedRewardListForReveal(rewards) else {}
 	if #rewardList == 0 then
 		Logger.Warn("[ChestOpeningSequence] No rewards were provided for the chest preview.")
 		return false

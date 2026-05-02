@@ -11,6 +11,7 @@ local CraftingMaterialConfig = require(ReplicatedStorage.Shared.Config.CraftingM
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
 local MutationCovers = require(ReplicatedStorage.Shared.Config.MutationCovers)
 local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
+local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local SizeIcons = require(ReplicatedStorage.Shared.Config.SizeIcons)
 local PerfStats = require(ReplicatedStorage.Shared.Diagnostics.PerfStats)
@@ -293,6 +294,12 @@ type GuiButtonLayoutState = {
 	position: UDim2,
 	anchorPoint: Vector2,
 	visible: boolean,
+}
+
+type SellAllRarityButtonSet = {
+	row: GuiObject,
+	disabled: GuiButton,
+	enabled: GuiButton,
 }
 
 type GuiObjectLayoutState = {
@@ -697,6 +704,7 @@ function InventoryController:_ensureState()
 	self._bodyPartRefreshScheduled = false
 	self._pendingPotionSellOwnedId = nil :: string?
 	self._pendingPotionSellQuantity = 1
+	self._sellAllSelectedRarities = {}
 	self._lastTutorialPotionStateRefreshAt = 0
 	self._lastTutorialBodyPartStateRefreshAt = 0
 	self._openButtonBound = false
@@ -4801,21 +4809,79 @@ function InventoryController:_confirmSellPreviewedBodyPart(ownedId: string)
 	self:_applyLoadoutState(result.state)
 end
 
-function InventoryController:_promptSellAllConfirmation()
-	if ConfirmationWarning.Prompt(self:_buildSellAllConfirmationMessage()) ~= true then
+function InventoryController:_syncSellAllRarityButtons()
+	local selectedRarities = self._sellAllSelectedRarities or {}
+	for rarity, buttonSet: SellAllRarityButtonSet in pairs(self._ui.sellAllRarityButtons or {}) do
+		local isSelected = selectedRarities[rarity] == true
+		buttonSet.enabled.Visible = isSelected
+		buttonSet.enabled.Active = isSelected
+		buttonSet.disabled.Visible = not isSelected
+		buttonSet.disabled.Active = not isSelected
+	end
+end
+
+function InventoryController:_setSellAllRaritySelected(rarity: string, isSelected: boolean)
+	if not ((self._ui.sellAllRarityButtons or {})[rarity]) then
 		return
 	end
 
-	self:_confirmSellAll()
+	self._sellAllSelectedRarities = self._sellAllSelectedRarities or {}
+	if isSelected then
+		self._sellAllSelectedRarities[rarity] = true
+	else
+		self._sellAllSelectedRarities[rarity] = nil
+	end
+	self:_syncSellAllRarityButtons()
+	ToggleSoundUtil.PlayToggle(isSelected == true)
 end
 
-function InventoryController:_confirmSellAll()
+function InventoryController:_resetSellAllMenuSelections()
+	self._sellAllSelectedRarities = {}
+	self:_syncSellAllRarityButtons()
+end
+
+function InventoryController:_setSellAllMenuVisible(isVisible: boolean)
+	local sellAllMenu = self._ui.sellAllMenu
+	if not sellAllMenu then
+		return
+	end
+
+	sellAllMenu.Visible = isVisible == true
+	sellAllMenu.Active = isVisible == true
+end
+
+function InventoryController:_openSellAllMenu()
+	self:_resetSellAllMenuSelections()
+	self:_setSellAllMenuVisible(true)
+end
+
+function InventoryController:_getSelectedSellAllRarities(): ({ [string]: boolean }, number)
+	local selectedRarities = {}
+	local selectedCount = 0
+
+	for _, rarity in ipairs(RollingConfig.DisplayRarityOrder) do
+		if self._sellAllSelectedRarities and self._sellAllSelectedRarities[rarity] == true then
+			selectedRarities[rarity] = true
+			selectedCount += 1
+		end
+	end
+
+	return selectedRarities, selectedCount
+end
+
+function InventoryController:_promptSellAllConfirmation()
+	self:_openSellAllMenu()
+end
+
+function InventoryController:_confirmSellAll(selectedRarities: { [string]: boolean })
 	if not self:_ensureRemotes() then
 		return
 	end
 
 	local ok, result = pcall(function()
-		return self._remotes.sellAll:InvokeServer()
+		return self._remotes.sellAll:InvokeServer({
+			rarities = selectedRarities,
+		})
 	end)
 
 	if not ok then
@@ -4836,7 +4902,45 @@ function InventoryController:_confirmSellAll()
 	end
 
 	showNotification(tostring(result.message or "Sold unfavorited body parts."))
+	self:_setSellAllMenuVisible(false)
 	self:_applyLoadoutState(result.state)
+end
+
+function InventoryController:_confirmSellAllMenu()
+	local selectedRarities, selectedCount = self:_getSelectedSellAllRarities()
+	if selectedCount <= 0 then
+		showNotification("Select at least one rarity to sell.")
+		return
+	end
+
+	self:_confirmSellAll(selectedRarities)
+end
+
+function InventoryController:_bindSellAllMenuButtons()
+	for rarity, buttonSet: SellAllRarityButtonSet in pairs(self._ui.sellAllRarityButtons or {}) do
+		ToggleSoundUtil.MarkToggleButton(buttonSet.disabled)
+		ToggleSoundUtil.MarkToggleButton(buttonSet.enabled)
+
+		UIController:CreateButton(buttonSet.disabled, function()
+			self:_setSellAllRaritySelected(rarity, true)
+		end)
+
+		UIController:CreateButton(buttonSet.enabled, function()
+			self:_setSellAllRaritySelected(rarity, false)
+		end)
+	end
+
+	UIController:CreateButton(self._ui.sellAllMenuConfirm, function()
+		self:_confirmSellAllMenu()
+	end)
+
+	UIController:CreateButton(self._ui.sellAllMenuCancel, function()
+		self:_setSellAllMenuVisible(false)
+	end)
+
+	UIController:CreateButton(self._ui.sellAllMenuClose, function()
+		self:_setSellAllMenuVisible(false)
+	end)
 end
 
 function InventoryController:_bindFilterButtons()
@@ -4942,10 +5046,12 @@ function InventoryController:_bindOpenButton(openButton: GuiButton)
 		local wasOpen = FrameController:IsOpen(WINDOW_NAME)
 		FrameController:ToggleFrame(WINDOW_NAME)
 		if wasOpen then
+			self:_setSellAllMenuVisible(false)
 			self:_invalidateCharacterPreviewModel()
 		else
 			task.defer(function()
 				self:_ensureFullUi(self._playerGui or LOCAL_PLAYER:WaitForChild("PlayerGui"))
+				self:_setSellAllMenuVisible(false)
 				self._selectedFilterRegion = nil
 				self._selectedSpecialFilter = nil
 				self:_markInventoryRecordsDirty()
@@ -5028,6 +5134,12 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 	local potionSellDecrease = potionSellFrame:WaitForChild("Decrease", 30)
 	local potionSellConfirm = potionSellFrame:WaitForChild("Confirm", 30)
 	local potionSellNevermind = potionSellFrame:WaitForChild("Nevermind", 30)
+	local sellAllMenu = inventoryRoot:WaitForChild("SellAllMenu", 30)
+	local sellAllMenuConfirm = sellAllMenu:WaitForChild("ConfirmButton", 30)
+	local sellAllMenuCancel = sellAllMenu:WaitForChild("CancelButton", 30)
+	local sellAllMenuTopbar = sellAllMenu:WaitForChild("Topbar", 30)
+	local sellAllMenuClose = sellAllMenuTopbar:WaitForChild("CloseButton", 30)
+	local sellAllMenuScrollingFrame = sellAllMenu:WaitForChild("ScrollingFrame", 30)
 
 	if not (
 		scrollingFrame:IsA("ScrollingFrame")
@@ -5058,6 +5170,12 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		and potionSellDecrease:IsA("GuiButton")
 		and potionSellConfirm:IsA("GuiButton")
 		and potionSellNevermind:IsA("GuiButton")
+		and sellAllMenu:IsA("GuiObject")
+		and sellAllMenuConfirm:IsA("GuiButton")
+		and sellAllMenuCancel:IsA("GuiButton")
+		and sellAllMenuTopbar:IsA("GuiObject")
+		and sellAllMenuClose:IsA("GuiButton")
+		and sellAllMenuScrollingFrame:IsA("ScrollingFrame")
 		and openButton:IsA("GuiButton")
 	) then
 		Logger.Error("Inventory UI hierarchy is missing required instances.")
@@ -5154,6 +5272,27 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		end
 	end
 
+	local sellAllRarityButtons = {}
+	for _, rarity in ipairs(RollingConfig.DisplayRarityOrder) do
+		local row = sellAllMenuScrollingFrame:WaitForChild(rarity, 30)
+		if row and row:IsA("GuiObject") then
+			local disabledButton = row:WaitForChild("Disabled", 30)
+			local enabledButton = row:WaitForChild("Enabled", 30)
+			if disabledButton:IsA("GuiButton") and enabledButton:IsA("GuiButton") then
+				sellAllRarityButtons[rarity] = {
+					row = row,
+					disabled = disabledButton,
+					enabled = enabledButton,
+				}
+			end
+		end
+	end
+	local sellAllFavoritesRow = sellAllMenuScrollingFrame:FindFirstChild("Favorites")
+	if sellAllFavoritesRow and sellAllFavoritesRow:IsA("GuiObject") then
+		sellAllFavoritesRow.Visible = false
+		sellAllFavoritesRow.Active = false
+	end
+
 	self._ui = {
 		openButton = openButton,
 		previewHolder = previewHolder,
@@ -5197,6 +5336,11 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 		accessorySlotButtons = accessorySlotButtons,
 		equipButton = previewHolder:WaitForChild("EquipButton", 30),
 		sellAllButton = sellAllButton,
+		sellAllMenu = sellAllMenu,
+		sellAllMenuConfirm = sellAllMenuConfirm,
+		sellAllMenuCancel = sellAllMenuCancel,
+		sellAllMenuClose = sellAllMenuClose,
+		sellAllRarityButtons = sellAllRarityButtons,
 		potionSellFrame = potionSellFrame,
 		potionSellTitle = potionSellTitle,
 		potionSellOwned = potionSellOwned,
@@ -5265,6 +5409,8 @@ function InventoryController:_cacheUi(playerGui: PlayerGui)
 	})
 	self._ui.previewIcon.Visible = false
 	self._ui.potionSellFrame.Visible = false
+	self._ui.sellAllMenu.Visible = false
+	self:_resetSellAllMenuSelections()
 end
 
 function InventoryController:_ensureFullUi(playerGui: PlayerGui)
@@ -5279,6 +5425,7 @@ function InventoryController:_ensureFullUi(playerGui: PlayerGui)
 
 	self:_bindFilterButtons()
 	self:_bindSlotButtons()
+	self:_bindSellAllMenuButtons()
 
 	UIController:CreateButton(self._ui.equipButton, function()
 		local previewState = self._previewState
@@ -5307,7 +5454,7 @@ function InventoryController:_ensureFullUi(playerGui: PlayerGui)
 		self:_equipBestLoadout()
 	end)
 	UIController:CreateButton(self._ui.sellAllButton, function()
-		self:_promptSellAllConfirmation()
+		self:_openSellAllMenu()
 	end)
 	UIController:CreateButton(self._ui.potionSellNevermind, function()
 		self:_setPotionSellModalVisible(false)

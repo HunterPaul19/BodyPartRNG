@@ -107,6 +107,12 @@ type BossResultRewardEntry = {
 	displayColor: Color3?,
 	record: { [string]: any }?,
 	sourceBossId: string?,
+	acquisitionStatus: string?,
+	autoSold: boolean?,
+	autoCrafted: boolean?,
+	autoEquipped: boolean?,
+	payout: number?,
+	outcomeMessage: string?,
 }
 
 type BossResultsState = {
@@ -286,6 +292,23 @@ local function getCharacterHumanoid(character: Model?): Humanoid?
 	end
 
 	return nil
+end
+
+local function resetPlayerHealth(player: Player)
+	local character = player.Character
+	if character == nil then
+		return
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid == nil or humanoid.Parent == nil then
+		return
+	end
+
+	local maxHealth = math.max(1, tonumber(humanoid.MaxHealth) or 1)
+	if humanoid.Health < maxHealth then
+		humanoid.Health = maxHealth
+	end
 end
 
 local function getModelRootPart(model: Model): BasePart?
@@ -924,6 +947,12 @@ local function copyRewardEntry(entry: any): BossResultRewardEntry?
 		isBossPart = entry.isBossPart == true,
 		record = if typeof(entry.record) == "table" then table.clone(entry.record) else nil,
 		sourceBossId = if typeof(entry.sourceBossId) == "string" then entry.sourceBossId else nil,
+		acquisitionStatus = if typeof(entry.acquisitionStatus) == "string" then entry.acquisitionStatus else nil,
+		autoSold = entry.autoSold == true,
+		autoCrafted = entry.autoCrafted == true,
+		autoEquipped = entry.autoEquipped == true,
+		payout = if tonumber(entry.payout) ~= nil then math.max(0, math.floor(tonumber(entry.payout) or 0)) else nil,
+		outcomeMessage = if typeof(entry.outcomeMessage) == "string" then entry.outcomeMessage else nil,
 	}
 end
 
@@ -2673,6 +2702,10 @@ function BossArenaRuntimeService:_completeResults(encounter: EncounterState)
 
 	local bossId = encounter.bossId
 	local readyCount = #readyPlayers
+	for _, player in ipairs(readyPlayers) do
+		resetPlayerHealth(player)
+	end
+
 	self:_clearEncounter(string.format(
 		"Boss results finished for '%s'. Replaying with %d ready player(s); returning %d player(s) to boss lobby.",
 		bossId,

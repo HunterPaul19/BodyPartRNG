@@ -11,6 +11,7 @@ local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormat
 local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
 local RollMath = require(ReplicatedStorage.Shared.Rolling.RollMath)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
+local BodyPartAcquisitionService = require(script.Parent.BodyPartAcquisitionService)
 local DataService = require(script.Parent.DataService)
 local PassiveIncomeService = require(script.Parent.PassiveIncomeService)
 local PotionService = require(script.Parent.PotionService)
@@ -386,28 +387,24 @@ local function grantBossBodyPartReward(player: Player, random: Random, sourceBos
 		return nil
 	end
 
-	local grantedRecord, grantError = DataService:AddOwnedBodyPart(
-		player,
-		buildBodyPartGrantPayload(rewardEntry),
-		{ ignoreInventoryLimit = true }
-	)
-	if grantedRecord == nil then
+	local acquisitionResult = BodyPartAcquisitionService:Acquire(player, buildBodyPartGrantPayload(rewardEntry), {
+		source = "daily_chest",
+		presentation = "immediate_reward",
+		isBossPart = rewardEntry.isBossPart,
+		sourceBossId = sourceBossId,
+	})
+	if acquisitionResult.status == "failed" then
 		Logger.Warn(string.format(
 			"[DailyChestService] Failed to grant chest body-part reward '%s' to %s for boss '%s': %s",
 			tostring(rewardEntry.pieceId),
 			player.Name,
 			profile.bossId,
-			tostring(grantError)
+			tostring(acquisitionResult.error)
 		))
 		return nil
 	end
 
-	return {
-		kind = "bodyPart",
-		record = grantedRecord,
-		sourceBossId = sourceBossId,
-		isBossPart = rewardEntry.isBossPart,
-	}
+	return acquisitionResult.rewardEntry
 end
 
 local function buildMoneyDescriptor(amount: number, minutes: number): any
@@ -617,6 +614,23 @@ function DailyChestService:GrantChestPackageForAdmin(player: Player, chestId: st
 
 	local package = grantChestRewards(player, config, Random.new(), "admin_chest_")
 	return true, string.format("Granted %s to %s.", config.displayName, player.Name), package
+end
+
+function DailyChestService:GrantChestPackageForQuest(player: Player, chestId: string): (boolean, string, ChestPackage?)
+	if not DataService:IsPlayerDataLoaded(player) then
+		return false, "Player data is not loaded.", nil
+	end
+	if next(potionIdsByTier) == nil then
+		buildPotionTierCache()
+	end
+
+	local config = DailyChestConfig.Get(chestId)
+	if config == nil then
+		return false, string.format("Unknown chest id '%s'.", tostring(chestId)), nil
+	end
+
+	local package = grantChestRewards(player, config, Random.new(), "quest_chest_")
+	return true, string.format("Granted %s.", config.displayName), package
 end
 
 function DailyChestService:OnStart()

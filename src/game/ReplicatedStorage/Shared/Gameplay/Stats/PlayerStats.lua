@@ -244,6 +244,9 @@ function PlayerStats.CreateEmpty(): any
 			unequipActions = 0,
 			clearActions = 0,
 		},
+		appraisal = {
+			successCount = 0,
+		},
 		monetization = {
 			firstPurchaseAt = 0,
 			firstPurchaseKey = "",
@@ -276,6 +279,7 @@ function PlayerStats.Normalize(value: any, options: any?): any
 	local rolls = if typeof(source.rolls) == "table" then source.rolls else {}
 	local collection = if typeof(source.collection) == "table" then source.collection else {}
 	local loadout = if typeof(source.loadout) == "table" then source.loadout else {}
+	local appraisal = if typeof(source.appraisal) == "table" then source.appraisal else {}
 	local monetization = if typeof(source.monetization) == "table" then source.monetization else {}
 	local settings = if typeof(source.settings) == "table" then source.settings else {}
 	local bodyPartsState = if typeof(options) == "table" then options.bodyPartsState else nil
@@ -358,6 +362,11 @@ function PlayerStats.Normalize(value: any, options: any?): any
 	normalized.loadout.equipActions = math.max(0, toWholeNumber(loadout.equipActions, 0))
 	normalized.loadout.unequipActions = math.max(0, toWholeNumber(loadout.unequipActions, 0))
 	normalized.loadout.clearActions = math.max(0, toWholeNumber(loadout.clearActions, 0))
+
+	normalized.appraisal.successCount = math.max(
+		toWholeNumber(appraisal.successCount, 0),
+		if normalized.economy.spentBySource.appraisal_cost > 0 then 1 else 0
+	)
 
 	normalized.monetization.firstPurchaseAt = math.max(0, toWholeNumber(monetization.firstPurchaseAt, 0))
 	normalized.monetization.firstPurchaseKey = normalizeString(monetization.firstPurchaseKey)

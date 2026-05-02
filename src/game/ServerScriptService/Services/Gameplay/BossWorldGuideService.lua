@@ -1,28 +1,24 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
-local PlayerLoadoutStatsService = require(script.Parent.PlayerLoadoutStatsService)
+local QuestService = require(script.Parent.QuestService)
 local TutorialAnalyticsService = require(script.Parent.TutorialAnalyticsService)
 local BossWorldGuideState = require(ReplicatedStorage.Shared.Character.BossWorldGuideState)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local Schema = require(ReplicatedStorage.Lists.Schema)
 
-local COMBAT_SCORE_THRESHOLD = 1000
 local MAIN_PROFILE_ID = "main"
 local BOSS_PROFILE_IDS = table.freeze({
 	boss_lobby = true,
 	boss_arena = true,
 })
 local BOSS_WORLD_GUIDE_KEY = Schema.BossWorldGuide and Schema.BossWorldGuide.key or nil
-local TUTORIAL_KEY = Schema.Tutorial and Schema.Tutorial.key or nil
+local STAN_BOSS_INTRO_QUEST_ID = "stan_boss_intro"
 
 local BossWorldGuideService = {
 	_started = false,
-	_loadoutConnection = nil :: RBXScriptConnection?,
 	_dataLoadedConnection = nil :: RBXScriptConnection?,
-	_dataChangedConnection = nil :: RBXScriptConnection?,
 }
 
 local function getActiveProfileId(): string
@@ -49,8 +45,15 @@ local function setState(player: Player, state: BossWorldGuideState.BossWorldGuid
 	DataService:Set(player, BOSS_WORLD_GUIDE_KEY, BossWorldGuideState.Normalize(state))
 end
 
-local function hasCompletedTutorial(player: Player): boolean
-	return DataService:GetTutorialState(player).completed == true
+local function isStanBossIntroActive(player: Player): boolean
+	if DataService:IsPlayerDataLoaded(player) ~= true then
+		return false
+	end
+
+	local questState = DataService:GetQuestState(player)
+	local activeByQuestId = questState.activeByQuestId
+	local activeQuest = activeByQuestId[STAN_BOSS_INTRO_QUEST_ID]
+	return typeof(activeQuest) == "table" and activeQuest.status == "active"
 end
 
 function BossWorldGuideService:_markPrompted(player: Player)
@@ -86,12 +89,19 @@ function BossWorldGuideService:MarkBossWorldEntered(player: Player)
 end
 
 function BossWorldGuideService:ShouldRouteToBossTutorial(player: Player): boolean
-	if player.Parent ~= Players or not BOSS_WORLD_GUIDE_KEY then
+	if player.Parent ~= Players then
 		return false
 	end
 
-	local state = getState(player)
-	return state.prompted == true and state.completed ~= true and state.tutorialArenaEntered ~= true
+	return isStanBossIntroActive(player)
+end
+
+function BossWorldGuideService:RecordBossWorldEntered(player: Player, payload: any?)
+	if player.Parent ~= Players then
+		return false
+	end
+
+	return QuestService:RecordEvent(player, "boss_world_entered", payload)
 end
 
 function BossWorldGuideService:MarkBossTutorialArenaEntered(player: Player)
@@ -152,23 +162,6 @@ function BossWorldGuideService:_evaluatePlayer(player: Player)
 	if getActiveProfileId() ~= MAIN_PROFILE_ID then
 		return
 	end
-	if not hasCompletedTutorial(player) then
-		return
-	end
-
-	local state = getState(player)
-	if state.completed == true or state.prompted == true then
-		return
-	end
-
-	local ok, combatScore = pcall(function()
-		return PlayerLoadoutStatsService:GetCombatScore(player)
-	end)
-	if not ok or (tonumber(combatScore) or 0) <= COMBAT_SCORE_THRESHOLD then
-		return
-	end
-
-	self:_markPrompted(player)
 end
 
 function BossWorldGuideService:_scheduleEvaluate(player: Player)
@@ -187,16 +180,8 @@ function BossWorldGuideService:OnStart()
 		return
 	end
 
-	self._loadoutConnection = BodyPartService.LoadoutChanged:Connect(function(player: Player)
-		self:_scheduleEvaluate(player)
-	end)
 	self._dataLoadedConnection = DataService.PlayerDataLoaded:Connect(function(player: Player)
 		self:_scheduleEvaluate(player)
-	end)
-	self._dataChangedConnection = DataService.DataChanged:Connect(function(player: Player, key: string)
-		if key == TUTORIAL_KEY then
-			self:_scheduleEvaluate(player)
-		end
 	end)
 end
 

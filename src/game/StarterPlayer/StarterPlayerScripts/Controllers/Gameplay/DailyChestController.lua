@@ -85,6 +85,11 @@ local function openChestPackagesSequentially(chests: { any })
 	end
 end
 
+function DailyChestController.OpenChestPackages(chests: { any })
+	TutorialTextGui.Init(LOCAL_PLAYER:WaitForChild("PlayerGui"))
+	openChestPackagesSequentially(chests)
+end
+
 function DailyChestController:_claimEligibleChests(): boolean
 	if self._claimStarted == true then
 		return true
@@ -119,7 +124,7 @@ function DailyChestController:_claimEligibleChests(): boolean
 	end
 
 	local chests = if typeof(result.chests) == "table" then result.chests else {}
-	openChestPackagesSequentially(chests)
+	DailyChestController.OpenChestPackages(chests)
 	return true
 end
 

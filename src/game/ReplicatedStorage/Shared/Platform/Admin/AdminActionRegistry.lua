@@ -226,6 +226,67 @@ AdminActionRegistry.Tabs = {
 		},
 	},
 	{
+		id = "purchases",
+		title = "Purchases",
+		subtitle = "Account reset and marketplace grant overrides.",
+		pageName = "PurchasesPage",
+		sections = {
+			{
+				title = "Account",
+				description = "High-risk player account operations.",
+				actions = {
+					{
+						id = "reset_player_data",
+						title = "Reset Player Data",
+						description = "Wipe a selected player's progression profile and kick them to reload.",
+						risk = AdminActionRegistry.Risk.Destructive,
+						requiresConfirmation = true,
+						confirmationText = "RESET",
+						fields = {
+							playerField(),
+							confirmationField("RESET"),
+						},
+					},
+				},
+			},
+			{
+				title = "Marketplace Grants",
+				description = "Direct support grants for configured marketplace offers.",
+				actions = {
+					{
+						id = "grant_gamepass",
+						title = "Grant Gamepass",
+						description = "Grant a configured gamepass entitlement without opening a Roblox prompt.",
+						risk = AdminActionRegistry.Risk.Mutating,
+						requiresConfirmation = true,
+						confirmationText = "GRANT",
+						fields = {
+							playerField(),
+							textField("offerKey", "Offer Key", "vip_plus", "vip_plus"),
+							textField("reason", "Reason", "admin grant", "admin grant"),
+							confirmationField("GRANT"),
+						},
+					},
+					{
+						id = "grant_devproduct",
+						title = "Grant Dev Product",
+						description = "Grant a configured developer product reward without opening a Roblox prompt.",
+						risk = AdminActionRegistry.Risk.Mutating,
+						requiresConfirmation = true,
+						confirmationText = "GRANT",
+						fields = {
+							playerField(),
+							textField("offerKey", "Offer Key", "time_shards_50", "time_shards_50"),
+							numberField("count", "Count", "1", "1"),
+							textField("reason", "Reason", "admin grant", "admin grant"),
+							confirmationField("GRANT"),
+						},
+					},
+				},
+			},
+		},
+	},
+	{
 		id = "progression",
 		title = "Progression",
 		subtitle = "Economy, profile growth, and progression checkpoints.",

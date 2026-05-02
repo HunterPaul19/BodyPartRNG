@@ -12,6 +12,10 @@ local DIALOGUE_CAMERA_PART_ATTRIBUTE = "DialogueCameraPartName"
 local SHOP_FRAME_ATTRIBUTE = "ShopFrameName"
 local SHOP_CAMERA_PART_ATTRIBUTE = "ShopCameraPartName"
 
+local DISABLED_DIALOGUE_IDS = table.freeze({
+	stan_onboarding_paid_roll_intro = true,
+})
+
 local DialogueInteractionController = {
 	_started = false,
 	_clickConnections = {} :: { [ClickDetector]: RBXScriptConnection },
@@ -91,7 +95,12 @@ local function buildContext(source: Instance, interactionType: string): { [strin
 end
 
 local function resolveDialogueId(source: Instance): string?
-	return readStringAttribute(source, DIALOGUE_ID_ATTRIBUTE)
+	local dialogueId = readStringAttribute(source, DIALOGUE_ID_ATTRIBUTE)
+	if typeof(dialogueId) == "string" and DISABLED_DIALOGUE_IDS[dialogueId] == true then
+		return nil
+	end
+
+	return dialogueId
 end
 
 function DialogueInteractionController:_handleInteraction(source: Instance, interactionType: string)

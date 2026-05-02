@@ -12,7 +12,9 @@ local RollMath = require(ReplicatedStorage.Shared.Rolling.RollMath)
 local BodyPartService = require(script.Parent.BodyPartService)
 local DataService = require(script.Parent.DataService)
 local PotionService = require(script.Parent.PotionService)
+local QuestService = require(script.Parent.QuestService)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
+local StatsService = require(script.Parent.StatsService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local APPRAISAL_FOLDER_NAME = "Appraisal"
@@ -297,13 +299,18 @@ function AppraisalService:PerformAppraisal(player: Player, payload: any)
 		return response(false, refreshMessage or "The body part visuals could not be refreshed.", state)
 	end
 
-	return response(true, "Appraisal complete.", state, {
+	local appraisalResult = {
 		ownedId = ownedId,
 		region = region,
 		pieceId = piece.id,
 		before = buildAppraisalSnapshot(ownedRecord, piece),
 		after = buildAppraisalSnapshot(updatedRecord, piece),
-	})
+	}
+
+	StatsService:RecordAppraisalSuccess(player)
+	QuestService:RecordEvent(player, "body_part_appraised", appraisalResult)
+
+	return response(true, "Appraisal complete.", state, appraisalResult)
 end
 
 function AppraisalService:OnStart()

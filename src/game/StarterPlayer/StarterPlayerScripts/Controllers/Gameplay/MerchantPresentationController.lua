@@ -758,6 +758,10 @@ function MerchantPresentationController:IsOpen(): boolean
 	return self._isOpen
 end
 
+function MerchantPresentationController:IsGameplayBlocking(): boolean
+	return self._isOpen == true or self._transitioning == true
+end
+
 function MerchantPresentationController:Open(frameName: string, options: OpenOptions?): boolean
 	self:OnStart()
 

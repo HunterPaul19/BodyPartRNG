@@ -10,6 +10,8 @@ export type ActiveQuest = {
 	status: string,
 	acceptedAt: number,
 	completedAt: number?,
+	currentPartIndex: number,
+	completedParts: number,
 	objectives: { [string]: ObjectiveProgress },
 }
 
@@ -19,12 +21,18 @@ export type RepeatableQuestState = {
 	cooldownUntil: number,
 }
 
+export type DailyQuestState = {
+	localDay: number,
+	selectedQuestIds: { string },
+}
+
 export type QuestStateValue = {
 	activeByQuestId: { [string]: ActiveQuest },
 	completedByQuestId: { [string]: boolean },
 	claimedByQuestId: { [string]: boolean },
 	repeatablesByQuestId: { [string]: RepeatableQuestState },
 	unlockFlags: { [string]: boolean },
+	dailyQuests: DailyQuestState,
 }
 
 local function normalizeString(value: any): string
@@ -82,6 +90,8 @@ local function normalizeActiveQuest(questId: string, value: any): ActiveQuest?
 		status = status,
 		acceptedAt = normalizeWholeNumber(value.acceptedAt),
 		completedAt = if value.completedAt ~= nil then normalizeWholeNumber(value.completedAt) else nil,
+		currentPartIndex = math.max(1, normalizeWholeNumber(value.currentPartIndex)),
+		completedParts = normalizeWholeNumber(value.completedParts),
 		objectives = objectives,
 	}
 end
@@ -126,6 +136,35 @@ local function normalizeRepeatableMap(value: any): { [string]: RepeatableQuestSt
 	return repeatablesByQuestId
 end
 
+local function normalizeStringList(value: any): { string }
+	local results = {}
+	if typeof(value) ~= "table" then
+		return results
+	end
+
+	for _, child in ipairs(value) do
+		if typeof(child) == "string" and child ~= "" then
+			table.insert(results, child)
+		end
+	end
+
+	return results
+end
+
+local function normalizeDailyQuestState(value: any): DailyQuestState
+	if typeof(value) ~= "table" then
+		return {
+			localDay = -1,
+			selectedQuestIds = {},
+		}
+	end
+
+	return {
+		localDay = math.floor(tonumber(value.localDay) or -1),
+		selectedQuestIds = normalizeStringList(value.selectedQuestIds),
+	}
+end
+
 function QuestState.CreateEmptyState(): QuestStateValue
 	return {
 		activeByQuestId = {},
@@ -133,6 +172,10 @@ function QuestState.CreateEmptyState(): QuestStateValue
 		claimedByQuestId = {},
 		repeatablesByQuestId = {},
 		unlockFlags = {},
+		dailyQuests = {
+			localDay = -1,
+			selectedQuestIds = {},
+		},
 	}
 end
 
@@ -147,6 +190,7 @@ function QuestState.Normalize(value: any): QuestStateValue
 	state.claimedByQuestId = cloneBooleanMap(value.claimedByQuestId)
 	state.repeatablesByQuestId = normalizeRepeatableMap(value.repeatablesByQuestId)
 	state.unlockFlags = cloneBooleanMap(value.unlockFlags)
+	state.dailyQuests = normalizeDailyQuestState(value.dailyQuests)
 	return state
 end
 

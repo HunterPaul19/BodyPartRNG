@@ -9,8 +9,8 @@ function DialogueHandlerController:OnStart()
 		return
 	end
 
-	self._started = true
 	DialogueClientHandlers.Register()
+	self._started = true
 end
 
 return DialogueHandlerController

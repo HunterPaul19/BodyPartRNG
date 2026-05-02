@@ -35,6 +35,7 @@ local SET_AUTO_CRAFT_RECIPE_REMOTE_NAME = "SetAutoCraftRecipe"
 local ADD_BODY_PART_INGREDIENT_REMOTE_NAME = "AddBodyPartIngredient"
 local ADD_MATERIAL_INGREDIENT_REMOTE_NAME = "AddMaterialIngredient"
 local ADD_ALL_ELIGIBLE_INGREDIENTS_REMOTE_NAME = "AddAllEligibleIngredients"
+local RECORD_RECIPE_OPENED_REMOTE_NAME = "RecordRecipeOpened"
 local BODY_PARTS_DATA_KEY = Schema.BodyParts and Schema.BodyParts.key or "bodyParts"
 local EQUIPPED_LOADOUT_KEY = Schema.EquippedLoadout and Schema.EquippedLoadout.key or "equippedLoadout"
 local ACCESSORIES_DATA_KEY = Schema.Accessories and Schema.Accessories.key or "accessories"
@@ -84,6 +85,7 @@ type CraftingRemotes = {
 	addBodyPartIngredient: RemoteFunction,
 	addMaterialIngredient: RemoteFunction,
 	addAllEligibleIngredients: RemoteFunction,
+	recordRecipeOpened: RemoteFunction,
 }
 
 type CraftingUi = {
@@ -1206,6 +1208,7 @@ function CraftingController:_ensureRemotes(): boolean
 		and self._remotes.addBodyPartIngredient
 		and self._remotes.addMaterialIngredient
 		and self._remotes.addAllEligibleIngredients
+		and self._remotes.recordRecipeOpened
 	then
 		return true
 	end
@@ -1226,6 +1229,7 @@ function CraftingController:_ensureRemotes(): boolean
 	local addBodyPartIngredient = craftingFolder:FindFirstChild(ADD_BODY_PART_INGREDIENT_REMOTE_NAME)
 	local addMaterialIngredient = craftingFolder:FindFirstChild(ADD_MATERIAL_INGREDIENT_REMOTE_NAME)
 	local addAllEligibleIngredients = craftingFolder:FindFirstChild(ADD_ALL_ELIGIBLE_INGREDIENTS_REMOTE_NAME)
+	local recordRecipeOpened = craftingFolder:FindFirstChild(RECORD_RECIPE_OPENED_REMOTE_NAME)
 	if not (getState and getState:IsA("RemoteFunction")) then
 		return false
 	end
@@ -1244,6 +1248,9 @@ function CraftingController:_ensureRemotes(): boolean
 	if not (addAllEligibleIngredients and addAllEligibleIngredients:IsA("RemoteFunction")) then
 		return false
 	end
+	if not (recordRecipeOpened and recordRecipeOpened:IsA("RemoteFunction")) then
+		return false
+	end
 
 	self._remotes = {
 		getState = getState,
@@ -1252,6 +1259,7 @@ function CraftingController:_ensureRemotes(): boolean
 		addBodyPartIngredient = addBodyPartIngredient,
 		addMaterialIngredient = addMaterialIngredient,
 		addAllEligibleIngredients = addAllEligibleIngredients,
+		recordRecipeOpened = recordRecipeOpened,
 	}
 	return true
 end
@@ -1897,7 +1905,8 @@ end
 
 function CraftingController:_openIngredientSelect()
 	local ui = self:_ensureUi()
-	if not self:_findRecipe(self._selectedRecipeId) then
+	local recipe = self:_findRecipe(self._selectedRecipeId)
+	if not recipe then
 		showNotification("Select a recipe first.")
 		return
 	end
@@ -1911,6 +1920,17 @@ function CraftingController:_openIngredientSelect()
 	self:_hideConfirmation()
 	self:_hideSelectParts()
 	self:_syncIngredientSelect()
+	self:_recordRecipeOpened(recipe.id)
+end
+
+function CraftingController:_recordRecipeOpened(recipeId: string)
+	if not self:_ensureRemotes() then
+		return
+	end
+
+	self:_invokeRemote(self._remotes.recordRecipeOpened, {
+		recipeId = recipeId,
+	})
 end
 
 function CraftingController:_addBodyPartIngredientRow(recipe: any, ingredient: any, layoutOrder: number)
@@ -2413,6 +2433,7 @@ function CraftingController:_openCraftingMenu(prompt: ProximityPrompt)
 		preserveRootLayout = true,
 	})
 	ObjectiveGuideController.ClearObjective("crafting")
+	ObjectiveGuideController.ClearObjective("stan_crafting_intro_guide")
 end
 
 function CraftingController:_bindCraftingPrompt()

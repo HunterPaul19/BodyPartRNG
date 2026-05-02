@@ -85,6 +85,7 @@ local ALL_CONTROLLER_NAMES = {
 	"PotionController",
 	"PvpController",
 	"PvpHitFlashController",
+	"QuestBoardOnboardingGuideController",
 	"SlotCardRenderer",
 	"StoreController",
 	"TestController",

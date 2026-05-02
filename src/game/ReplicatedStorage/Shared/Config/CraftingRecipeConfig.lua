@@ -83,9 +83,9 @@ end
 
 local RAW_ENTRIES: { CraftingRecipeEntry } = {
 	accessoryRecipe("holiday_crown", "Holiday Crown", 30, 1000, {
-		setIngredient("roblox_boy", 1),
-		setIngredient("roblox_girl", 1),
 		setIngredient("man", 1),
+		setIngredient("woman", 1),
+		setIngredient("junkbot", 1),
 	}),
 	accessoryRecipe("mystic_sword_of_the_flames", "Mystic Sword of the Flames", 100, 100000, {
 		setIngredient("flame_guard_general", 1),

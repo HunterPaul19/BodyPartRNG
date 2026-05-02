@@ -298,6 +298,17 @@ function StatsService:RecordTransientBodyPartAcquired(player: Player)
 	setStatsValue(player, { "collection", "totalBodyPartsAcquired" }, stats.collection.totalBodyPartsAcquired + 1)
 end
 
+function StatsService:RecordAppraisalSuccess(player: Player)
+	local stats = DataService:Get(player, STATS_KEY)
+	if typeof(stats) ~= "table" then
+		return
+	end
+
+	local appraisal = if typeof(stats.appraisal) == "table" then stats.appraisal else {}
+	local successCount = math.max(0, math.floor(tonumber(appraisal.successCount) or 0)) + 1
+	setStatsValue(player, { "appraisal", "successCount" }, successCount)
+end
+
 function StatsService:RecordPurchasePrompt(player: Player, key: string)
 	if typeof(key) ~= "string" or key == "" then
 		return

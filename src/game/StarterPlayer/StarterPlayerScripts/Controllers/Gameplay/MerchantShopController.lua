@@ -5,13 +5,16 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local Globals = require(ReplicatedStorage.Lists.Globals)
+local Schema = require(ReplicatedStorage.Lists.Schema)
 local MerchantShopConfig = require(ReplicatedStorage.Shared.Config.MerchantShopConfig)
 local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
+local TimeShardState = require(ReplicatedStorage.Shared.Character.TimeShardState)
 local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
 local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local PotionPresentation = require(ReplicatedStorage.Shared.UI.PotionPresentation)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
+local DataController = require(script.Parent.DataController)
 local MerchantPresentationController = require(script.Parent.MerchantPresentationController)
 local UIController = require(script.Parent.UIController)
 
@@ -21,6 +24,7 @@ local MERCHANT_SHOP_FOLDER_NAME = "MerchantShop"
 local GET_SHOP_STATE_REMOTE_NAME = "GetShopState"
 local PURCHASE_SHOP_ITEM_REMOTE_NAME = "PurchaseShopItem"
 local SHOP_FRAME_NAME = "ShopUI"
+local TIME_SHARDS_KEY = Schema.TimeShards and Schema.TimeShards.key or nil
 
 type MerchantShopState = {
 	windowId: number,
@@ -37,6 +41,7 @@ type MerchantShopUi = {
 	itemDescLabel: TextLabel,
 	stocksLabel: TextLabel,
 	priceLabel: TextLabel,
+	timeShardsLabel: TextLabel?,
 	viewportFrame: ViewportFrame?,
 	selectionScrollingFrame: ScrollingFrame,
 	buttonTemplate: ImageButton,
@@ -60,6 +65,7 @@ local MerchantShopController = {
 	_refreshConnection = nil :: RBXScriptConnection?,
 	_suppressAmountFocus = false,
 	_lastCountdownSecond = -1,
+	_warnedMissingTimeShardsLabel = false,
 }
 
 local function normalizeWhole(value: any): number
@@ -105,6 +111,25 @@ local function buildEmptyState(): MerchantShopState
 	}
 end
 
+local function resolveTimeShardsLabel(root: GuiObject): TextLabel?
+	local timeShards = root:FindFirstChild("TimeShards", true)
+	if timeShards and timeShards:IsA("TextLabel") then
+		return timeShards
+	end
+
+	if not timeShards then
+		return nil
+	end
+
+	local quantity = timeShards:FindFirstChild("Quantity", true)
+	if quantity and quantity:IsA("TextLabel") then
+		return quantity
+	end
+
+	local fallbackLabel = timeShards:FindFirstChildWhichIsA("TextLabel", true)
+	return if fallbackLabel and fallbackLabel:IsA("TextLabel") then fallbackLabel else nil
+end
+
 function MerchantShopController:_getPlayerGui(): PlayerGui
 	return LOCAL_PLAYER:WaitForChild("PlayerGui")
 end
@@ -134,6 +159,12 @@ function MerchantShopController:_ensureUi(): MerchantShopUi
 
 	local priceLabel = root:FindFirstChild("Price", true)
 	assert(priceLabel and priceLabel:IsA("TextLabel"), "ShopUI.Price is missing.")
+
+	local timeShardsLabel = resolveTimeShardsLabel(root)
+	if not timeShardsLabel and not self._warnedMissingTimeShardsLabel then
+		self._warnedMissingTimeShardsLabel = true
+		Logger.Warn("[MerchantShopController] ShopUI.TimeShards label is missing; time shard balance will not render.")
+	end
 
 	local viewportFrame = root:FindFirstChild("ViewportFrame", true)
 	if viewportFrame and not viewportFrame:IsA("ViewportFrame") then
@@ -177,6 +208,7 @@ function MerchantShopController:_ensureUi(): MerchantShopUi
 		itemDescLabel = itemDescLabel,
 		stocksLabel = stocksLabel,
 		priceLabel = priceLabel,
+		timeShardsLabel = timeShardsLabel,
 		viewportFrame = viewportFrame,
 		selectionScrollingFrame = scrollingFrame,
 		buttonTemplate = buttonTemplate,
@@ -380,6 +412,18 @@ end
 
 function MerchantShopController:_showFailureMessage(message: string)
 	self:_showMessage(TranslationHelper.formatByKey(LocalizationKeys.MerchantShop.Message.PurchaseFailedTitle), message)
+end
+
+function MerchantShopController:_refreshTimeShards()
+	local ui = self:_ensureUi()
+	local label = ui.timeShardsLabel
+	if not label then
+		return
+	end
+
+	local stateValue = if TIME_SHARDS_KEY then DataController:Get(TIME_SHARDS_KEY) else nil
+	local normalizedState = TimeShardState.Normalize(stateValue)
+	TranslationHelper.setLiteralText(label, formatTimeShards(normalizedState.balance))
 end
 
 function MerchantShopController:_refreshText()
@@ -641,6 +685,7 @@ function MerchantShopController:_purchaseSelectedItem()
 	end
 
 	if result.ok == true then
+		self:_refreshTimeShards()
 		if self._selectedPotionId ~= nil then
 			self:_hideMessage()
 		end
@@ -658,6 +703,7 @@ function MerchantShopController:_bindUi()
 	self:_hideMessage()
 	self:_clearViewport()
 	self:_refreshVisibleButtons()
+	self:_refreshTimeShards()
 
 	UIController:CreateButton(ui.purchaseButton, function()
 		MerchantShopController:_purchaseSelectedItem()
@@ -728,6 +774,7 @@ function MerchantShopController:_handleShopPrepared(frameName: string, root: Gui
 	self._isShopOpen = true
 	self._lastCountdownSecond = -1
 	self:_hideMessage()
+	self:_refreshTimeShards()
 	if not self:_requestShopState() then
 		self:_applyShopState(buildEmptyState())
 		self:_showFailureMessage("The merchant is not ready right now.")
@@ -762,6 +809,16 @@ function MerchantShopController:OnStart()
 	self._started = true
 	self:_ensureUi()
 	self:_bindUi()
+
+	DataController.DataReceived:Connect(function()
+		self:_refreshTimeShards()
+	end)
+
+	DataController.DataUpdated:Connect(function(key)
+		if key == TIME_SHARDS_KEY then
+			self:_refreshTimeShards()
+		end
+	end)
 
 	MerchantPresentationController.FramePrepared:Connect(function(frameName: string, root: GuiObject)
 		self:_handleShopPrepared(frameName, root)

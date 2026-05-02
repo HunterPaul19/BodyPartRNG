@@ -185,7 +185,7 @@ local PLACEMENT_MODE_LEG_JOINT = "LegJointChainPlacement"
 local TRANSFORM_ROTATION_TOLERANCE = math.rad(1)
 local RIG_ATTACHMENT_ROTATION_TOLERANCE = math.rad(1)
 local FOOTING_SETTLE_MAX_PASSES = 3
-local FOOTING_SETTLE_TOLERANCE = 0.01
+local FOOTING_SETTLE_TOLERANCE = 0.002
 
 local REGION_NATIVE_RIG_ATTACHMENT_SPECS = {
 	Head = {
@@ -2387,7 +2387,7 @@ local function settleCharacterFooting(
 		end
 
 		finalHipHeight =
-			setHipHeightFromSupportDistance(character, neutralSupportDistance or computeFootSupportDistance(character))
+			setHipHeightFromSupportDistance(character, computeFootSupportDistance(character) or neutralSupportDistance)
 
 		if not previousLowestFootBottomY or not currentLowestFootBottomY then
 			break

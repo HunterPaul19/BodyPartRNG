@@ -1,20 +1,21 @@
+local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
 
 local DataController = require(script.Parent.DataController)
 local ObjectiveGuideController = require(script.Parent.ObjectiveGuideController)
-local BossWorldGuideState = require(ReplicatedStorage.Shared.Character.BossWorldGuideState)
-local TutorialState = require(ReplicatedStorage.Shared.Character.TutorialState)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local Schema = require(ReplicatedStorage.Lists.Schema)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local MAIN_PROFILE_ID = "main"
 local GUIDE_ID = "boss_world_guide"
-local BOSS_WORLD_GUIDE_KEY = Schema.BossWorldGuide and Schema.BossWorldGuide.key or nil
-local TUTORIAL_KEY = Schema.Tutorial and Schema.Tutorial.key or nil
+local QUESTS_KEY = Schema.Quests and Schema.Quests.key or "quests"
+local STAN_BOSS_INTRO_QUEST_ID = "stan_boss_intro"
 local GUIDE_TEXT = "Boss world unlocked. Go to the portal."
 local TARGET_PATH = "Workspace.BossPortal"
+local PROMPT_TAG = "EnterBossLobbyPortalPrompt"
 
 local BossWorldGuideController = {
 	_started = false,
@@ -27,11 +28,29 @@ local function shouldRunForPlace(): boolean
 	return PlaceProfile.GetActiveProfile().id == MAIN_PROFILE_ID
 end
 
-local function shouldShow(rawGuideState: any, rawTutorialState: any): boolean
-	local guideState = BossWorldGuideState.Normalize(rawGuideState)
-	return TutorialState.IsCompleted(rawTutorialState)
-		and guideState.prompted == true
-		and guideState.completed ~= true
+local function shouldShow(rawQuestState: any): boolean
+	if typeof(rawQuestState) ~= "table" then
+		return false
+	end
+
+	local activeByQuestId = rawQuestState.activeByQuestId
+	local activeQuest = if typeof(activeByQuestId) == "table" then activeByQuestId[STAN_BOSS_INTRO_QUEST_ID] else nil
+	if typeof(activeQuest) ~= "table" or activeQuest.status ~= "active" then
+		return false
+	end
+
+	return math.floor(tonumber(activeQuest.currentPartIndex) or 1) <= 1
+end
+
+local function resolveBossPortalPromptTarget(): Instance?
+	for _, instance in ipairs(CollectionService:GetTagged(PROMPT_TAG)) do
+		if instance:IsA("ProximityPrompt") and instance:IsDescendantOf(Workspace) then
+			local promptParent = instance.Parent
+			return if promptParent and promptParent:IsA("BasePart") then promptParent else instance
+		end
+	end
+
+	return nil
 end
 
 function BossWorldGuideController:_ensureGui()
@@ -90,7 +109,7 @@ function BossWorldGuideController:_show()
 		self._gui.Enabled = true
 	end
 
-	ObjectiveGuideController.ShowObjective(GUIDE_ID, TARGET_PATH, {
+	ObjectiveGuideController.ShowObjective(GUIDE_ID, resolveBossPortalPromptTarget() or TARGET_PATH, {
 		fallbackTargetPath = "Workspace.BossPortal.Hitbox",
 		projectTargetToGround = false,
 	})
@@ -110,9 +129,8 @@ function BossWorldGuideController:_hide()
 end
 
 function BossWorldGuideController:_syncFromData(data: any)
-	local rawGuideState = if typeof(data) == "table" then data[BOSS_WORLD_GUIDE_KEY] else nil
-	local rawTutorialState = if typeof(data) == "table" then data[TUTORIAL_KEY] else nil
-	if shouldShow(rawGuideState, rawTutorialState) then
+	local rawQuestState = if typeof(data) == "table" then data[QUESTS_KEY] else nil
+	if shouldShow(rawQuestState) then
 		self:_show()
 	else
 		self:_hide()
@@ -125,7 +143,7 @@ function BossWorldGuideController:OnStart()
 	end
 
 	self._started = true
-	if not BOSS_WORLD_GUIDE_KEY or not shouldRunForPlace() then
+	if not shouldRunForPlace() then
 		return
 	end
 
@@ -136,7 +154,7 @@ function BossWorldGuideController:OnStart()
 		self:_syncFromData(data)
 	end)
 	DataController.DataUpdated:Connect(function(key: string)
-		if key == BOSS_WORLD_GUIDE_KEY or key == TUTORIAL_KEY then
+		if key == QUESTS_KEY then
 			self:_syncFromData(DataController:Get())
 		end
 	end)

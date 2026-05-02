@@ -134,6 +134,19 @@ function AvatarViewportPreview:_stopPresentation()
 	end
 end
 
+function AvatarViewportPreview:_isPresentationActive(): boolean
+	local idleTrack = self._idleTrack
+	if idleTrack and idleTrack.IsPlaying then
+		return true
+	end
+
+	return self._headLookConnection ~= nil
+end
+
+function AvatarViewportPreview:_canPlayPresentation(): boolean
+	return self._isActive == nil or self._isActive()
+end
+
 function AvatarViewportPreview:Clear()
 	self._renderToken += 1
 	self._resolvingUserId = nil
@@ -185,7 +198,7 @@ function AvatarViewportPreview:_renderModel(sourceModel: Model?, shouldPlayPrese
 	end
 
 	local rendered = ViewportModelRenderer.RenderCharacterModelAtFramingBounds(viewportFrame, sourceModel, self:_getRigTemplate())
-	if rendered and shouldPlayPresentation then
+	if rendered and shouldPlayPresentation and self:_canPlayPresentation() then
 		self:_startPresentation()
 	end
 end
@@ -523,6 +536,10 @@ function AvatarViewportPreview:RenderUser(userId: number?, player: Player?)
 
 	if self._cachedUserId == userId and self._cachedPreviewModel then
 		if self._renderedUserId == userId and self:_getRenderedPreviewModel() then
+			if not self:_isPresentationActive() and self:_canPlayPresentation() then
+				self:_stopPresentation()
+				self:_startPresentation()
+			end
 			return
 		end
 		self:_renderModel(self._cachedPreviewModel, true)

@@ -39,6 +39,12 @@ type BossResultRewardEntry = {
 	displayColor: Color3?,
 	record: { [string]: any }?,
 	sourceBossId: string?,
+	acquisitionStatus: string?,
+	autoSold: boolean?,
+	autoCrafted: boolean?,
+	autoEquipped: boolean?,
+	payout: number?,
+	outcomeMessage: string?,
 }
 
 type BossResultsState = {
@@ -146,6 +152,10 @@ local function escapeRichText(value: any): string
 	return text
 end
 
+local function formatMoney(value: any): string
+	return "$" .. NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0)))
+end
+
 local function toRichTextColor(color: Color3): string
 	return string.format(
 		"rgb(%d,%d,%d)",
@@ -237,12 +247,35 @@ local function formatRewardDescription(template: Frame, reward: BossResultReward
 	local colorText = parseTemplateRichTextColor(template)
 	local displayName = escapeRichText(reward.displayName)
 	local oddsDenominator = math.max(1, math.floor(tonumber(reward.displayOddsDenominator) or 1))
-	return string.format(
+	local description = string.format(
 		"<font color=\"rgb(%s)\">%s</font> (1 in %s)",
 		colorText,
 		displayName,
 		tostring(oddsDenominator)
 	)
+	if reward.autoSold == true then
+		description = string.format("%s\nAuto-sold for %s", description, formatMoney(reward.payout))
+	elseif reward.autoCrafted == true then
+		description = string.format("%s\nAdded to crafting", description)
+	elseif reward.autoEquipped == true then
+		description = string.format("%s\nEquipped", description)
+	end
+
+	return description
+end
+
+local function getBodyPartRewardOutcomeLabel(reward: BossResultRewardEntry): string
+	if reward.autoSold == true then
+		return "Body Part Auto-Sold"
+	end
+	if reward.autoCrafted == true then
+		return "Body Part Added to Crafting"
+	end
+	if reward.autoEquipped == true then
+		return "Body Part Equipped"
+	end
+
+	return "Body Part Acquired"
 end
 
 local function resolveHeaderLabels(root: Frame): (TextLabel, TextLabel)
@@ -454,7 +487,7 @@ function BossArenaResultsController:_renderRewards(rewards: { BossResultRewardEn
 
 		local leftLabel = row:FindFirstChild("Left")
 		if leftLabel and leftLabel:IsA("TextLabel") then
-			leftLabel.Text = if isMaterialReward(reward) then "Crafting Material Acquired" else "Body Part Acquired"
+			leftLabel.Text = if isMaterialReward(reward) then "Crafting Material Acquired" else getBodyPartRewardOutcomeLabel(reward)
 		end
 
 		local description = row:FindFirstChild("Description")

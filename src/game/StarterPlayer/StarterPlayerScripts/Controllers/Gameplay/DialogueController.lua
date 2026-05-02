@@ -10,6 +10,7 @@ local DialogueRegistry = require(ReplicatedStorage.Shared.Gameplay.Dialogue.Regi
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
 local MainInterfaceController = require(script.Parent.MainInterfaceController)
+local DailyChestController = require(script.Parent.DailyChestController)
 local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
@@ -534,6 +535,28 @@ function DialogueController:_setCurrentNode(nodeId: string): boolean
 	return true
 end
 
+function DialogueController:_resolveInitialNodeId(definition: DialogueDefinition): string
+	for _, rule in ipairs(definition.initialNodeRules or {}) do
+		local nodeId = if typeof(rule) == "table" then rule.nodeId else nil
+		if typeof(nodeId) ~= "string" or nodeId == "" then
+			continue
+		end
+		if definition.nodesById[nodeId] == nil then
+			Logger.Warn(string.format(
+				"[DialogueController] Initial node '%s' was not found for dialogue '%s'.",
+				nodeId,
+				definition.id
+			))
+			continue
+		end
+		if self:_evaluateConditions(rule.conditionIds) then
+			return nodeId
+		end
+	end
+
+	return definition.rootNodeId
+end
+
 function DialogueController:_closeDialogue(afterClose: (() -> ())?)
 	local guiController = self:_getGuiController()
 	self:_stopTyping()
@@ -645,12 +668,32 @@ function DialogueController:_runServerAction(choice: DialogueChoice, action: Dia
 	end
 
 	local data = if typeof(result.data) == "table" then result.data else {}
+	local rewardPresentation = if typeof(data.rewardPresentation) == "table" then data.rewardPresentation else {}
+	local dailyChests = if typeof(rewardPresentation.dailyChests) == "table" then rewardPresentation.dailyChests else nil
 	if data.closeDialogue == true then
-		self:_closeDialogue()
+		if dailyChests and #dailyChests > 0 then
+			self:_closeDialogue(function()
+				DailyChestController.OpenChestPackages(dailyChests)
+			end)
+		else
+			self:_closeDialogue()
+		end
 		return true
 	end
 	if typeof(data.nextNodeId) == "string" and data.nextNodeId ~= "" then
-		return self:_setCurrentNode(data.nextNodeId)
+		local changedNode = self:_setCurrentNode(data.nextNodeId)
+		if changedNode and dailyChests and #dailyChests > 0 then
+			task.spawn(function()
+				DailyChestController.OpenChestPackages(dailyChests)
+			end)
+		end
+		return changedNode
+	end
+
+	if dailyChests and #dailyChests > 0 then
+		task.spawn(function()
+			DailyChestController.OpenChestPackages(dailyChests)
+		end)
 	end
 
 	return true
@@ -691,7 +734,12 @@ function DialogueController:_rerenderChoicesIfOpen()
 end
 
 function DialogueController:_beginDialogue(dialogueId: string)
-	if not self:_setCurrentNode((self:_getDialogueDefinition(dialogueId) :: DialogueDefinition).rootNodeId) then
+	local definition = self:_getDialogueDefinition(dialogueId)
+	if not definition then
+		return false
+	end
+
+	if not self:_setCurrentNode(self:_resolveInitialNodeId(definition)) then
 		return false
 	end
 

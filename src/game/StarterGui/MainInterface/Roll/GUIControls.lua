@@ -13,8 +13,10 @@ GUIControls.DropdownInteractionId = 0
 GUIControls.DropdownAnimationId = 0
 GUIControls.AutoRollLoopId = 0
 GUIControls.AutoRollScheduleId = 0
+GUIControls.AutoRollBlockerWatchId = 0
 GUIControls.CurrentRollResult = nil
 GUIControls.CurrentRollResultEquipped = false
+GUIControls.CurrentRollTriggeredByAuto = false
 GUIControls.EquipDebounce = false
 GUIControls.EquipStatusToken = 0
 GUIControls.StatusRefreshToken = 0
@@ -567,6 +569,76 @@ local function isInventoryFullMessage(message)
 		and string.find(string.lower(message), "inventory is full", 1, true) ~= nil
 end
 
+local controllerCache = {}
+local warnedControllerRequireFailures = {}
+
+local function requireController(controllerName: string)
+	local cachedController = controllerCache[controllerName]
+	if cachedController ~= nil then
+		return cachedController
+	end
+
+	local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
+	local controllers = playerScripts and playerScripts:FindFirstChild("Controllers")
+	local controllerModule = controllers and controllers:FindFirstChild(controllerName)
+	if not (controllerModule and controllerModule:IsA("ModuleScript")) then
+		return nil
+	end
+
+	local ok, controller = pcall(require, controllerModule)
+	if not ok then
+		if warnedControllerRequireFailures[controllerName] ~= true then
+			warnedControllerRequireFailures[controllerName] = true
+			Logger.Warn(string.format("[RollGUI] Failed to require controller '%s': %s", controllerName, tostring(controller)))
+		end
+		return nil
+	end
+
+	controllerCache[controllerName] = controller
+	return controller
+end
+
+local function isDialoguePanelVisible(): boolean
+	local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+	local mainInterface = playerGui and playerGui:FindFirstChild("MainInterface")
+	local dialogueRoot = mainInterface and mainInterface:FindFirstChild("DialogueUI")
+
+	return dialogueRoot ~= nil and dialogueRoot:IsA("GuiObject") and dialogueRoot.Visible == true
+end
+
+function GUIControls:IsGameplayMenuBlockingAutoRoll(): boolean
+	local merchantPresentationController = requireController("MerchantPresentationController")
+	if typeof(merchantPresentationController) == "table" then
+		if type(merchantPresentationController.IsGameplayBlocking) == "function" then
+			local ok, isBlocking = pcall(function()
+				return merchantPresentationController:IsGameplayBlocking()
+			end)
+			if ok and isBlocking == true then
+				return true
+			end
+		elseif type(merchantPresentationController.IsOpen) == "function" then
+			local ok, isOpen = pcall(function()
+				return merchantPresentationController:IsOpen()
+			end)
+			if ok and isOpen == true then
+				return true
+			end
+		end
+	end
+
+	local dialogueController = requireController("DialogueController")
+	if typeof(dialogueController) == "table" and type(dialogueController.IsOpen) == "function" then
+		local ok, isOpen = pcall(function()
+			return dialogueController.IsOpen()
+		end)
+		if ok and isOpen == true then
+			return true
+		end
+	end
+
+	return isDialoguePanelVisible()
+end
+
 local function showAutoCraftNotification(rollResult)
 	if typeof(rollResult) ~= "table" or rollResult.autoCraftCommitted ~= true then
 		return
@@ -786,6 +858,65 @@ function GUIControls:GetAutoResultHoldDuration()
 	return BASE_AUTO_RESULT_HOLD
 end
 
+function GUIControls:PauseAutoRollForGameplayBlocker(resumeDelay)
+	if not GUIControls.AutoRoll then
+		return
+	end
+
+	GUIControls.AutoRollScheduleId += 1
+	GUIControls.AutoRollBlockerWatchId += 1
+	local watchId = GUIControls.AutoRollBlockerWatchId
+	local resolvedResumeDelay = math.max(0, tonumber(resumeDelay) or GUIControls:GetAutoRollRetryDelay())
+
+	task.spawn(function()
+		while GUIControls.AutoRoll
+			and watchId == GUIControls.AutoRollBlockerWatchId
+			and GUIControls:IsGameplayMenuBlockingAutoRoll()
+		do
+			task.wait(0.1)
+		end
+
+		if GUIControls.AutoRoll and watchId == GUIControls.AutoRollBlockerWatchId then
+			GUIControls:ScheduleNextAutoRoll(resolvedResumeDelay)
+		end
+	end)
+end
+
+function GUIControls:SuppressAutoRollResultForGameplayBlocker(resumeDelay)
+	GUIControls.CurrentRollResult = nil
+	GUIControls.CurrentRollResultEquipped = false
+	GUIControls.CurrentRollTriggeredByAuto = false
+	GUIControls.EquipDebounce = false
+	GUIControls.EquipStatusToken += 1
+	GUIControls.RollPresentationPending = false
+	GUIControls.CurrentlyRolling = false
+	endRollNotificationHold()
+	restoreIdleRollUi()
+	GUIControls:RefreshEquipButton()
+	GUIControls:RefreshRollControls()
+	GUIControls:SetButtonCooldown()
+	if GUIControls.AutoRoll then
+		GUIControls:PauseAutoRollForGameplayBlocker(resumeDelay or GUIControls:GetRollCooldownDuration())
+	end
+end
+
+function GUIControls:WatchAutoRollResultForGameplayBlocker(loopId)
+	task.spawn(function()
+		while GUIControls.AutoRoll
+			and GUIControls.CurrentRollTriggeredByAuto == true
+			and GUIControls.AutoRollLoopId == loopId
+			and Main.Visible == true
+		do
+			if GUIControls:IsGameplayMenuBlockingAutoRoll() then
+				GUIControls:SuppressAutoRollResultForGameplayBlocker(GUIControls:GetRollCooldownDuration())
+				return
+			end
+
+			task.wait(0.05)
+		end
+	end)
+end
+
 function GUIControls:SetButtonVisualState(button, isActive, isEligible)
 	local coverTransparency = if isActive then 0 else 0.07
 	local strokeTransparency = if isActive then 0.15 else 0.52
@@ -856,7 +987,11 @@ function GUIControls:SetAutoRollEnabled(enabled)
 		GUIControls:InvalidateTemporaryStatus()
 		GUIControls:RefreshRollControls()
 		if shouldEnable and not GUIControls.CurrentlyRolling then
-			GUIControls:ScheduleNextAutoRoll(AUTO_ROLL_MIN_RETRY_DELAY)
+			if GUIControls:IsGameplayMenuBlockingAutoRoll() then
+				GUIControls:PauseAutoRollForGameplayBlocker(AUTO_ROLL_MIN_RETRY_DELAY)
+			else
+				GUIControls:ScheduleNextAutoRoll(AUTO_ROLL_MIN_RETRY_DELAY)
+			end
 		end
 		return
 	end
@@ -868,7 +1003,11 @@ function GUIControls:SetAutoRollEnabled(enabled)
 	GUIControls:RefreshRollControls()
 
 	if shouldEnable and not GUIControls.CurrentlyRolling then
-		GUIControls:ScheduleNextAutoRoll(AUTO_ROLL_MIN_RETRY_DELAY)
+		if GUIControls:IsGameplayMenuBlockingAutoRoll() then
+			GUIControls:PauseAutoRollForGameplayBlocker(AUTO_ROLL_MIN_RETRY_DELAY)
+		else
+			GUIControls:ScheduleNextAutoRoll(AUTO_ROLL_MIN_RETRY_DELAY)
+		end
 	end
 end
 
@@ -898,10 +1037,24 @@ function GUIControls:ScheduleNextAutoRoll(delayTime)
 		return
 	end
 
+	if GUIControls:IsGameplayMenuBlockingAutoRoll() then
+		GUIControls:PauseAutoRollForGameplayBlocker(delayTime)
+		return
+	end
+
 	local loopId = GUIControls.AutoRollLoopId
 	GUIControls.AutoRollScheduleId += 1
 	local scheduleId = GUIControls.AutoRollScheduleId
 	task.delay(math.max(0, tonumber(delayTime) or 0), function()
+		if not (GUIControls.AutoRoll and loopId == GUIControls.AutoRollLoopId and scheduleId == GUIControls.AutoRollScheduleId) then
+			return
+		end
+
+		if GUIControls:IsGameplayMenuBlockingAutoRoll() then
+			GUIControls:PauseAutoRollForGameplayBlocker(GUIControls:GetAutoRollRetryDelay())
+			return
+		end
+
 		if GUIControls.AutoRoll and loopId == GUIControls.AutoRollLoopId and scheduleId == GUIControls.AutoRollScheduleId then
 			GUIControls:Roll("auto")
 		end
@@ -1511,6 +1664,10 @@ function GUIControls:RollSequence(previewSequence, previewCount)
 	end
 
 	for index = 1, rolls do
+		if GUIControls.CurrentRollTriggeredByAuto == true and GUIControls:IsGameplayMenuBlockingAutoRoll() then
+			return nil
+		end
+
 		local rollInfo = previewSequence[index]
 		local duration = (weights[index] / weightSum) * totalTime
 		local tween = TweenService:Create(
@@ -1523,6 +1680,9 @@ function GUIControls:RollSequence(previewSequence, previewCount)
 		SoundUtil.Play(ROLL_TICK_SOUND_NAME)
 		tween:Play()
 		tween.Completed:Wait()
+		if GUIControls.CurrentRollTriggeredByAuto == true and GUIControls:IsGameplayMenuBlockingAutoRoll() then
+			return nil
+		end
 		if index == rolls then
 			return rollInfo
 		end
@@ -1530,6 +1690,11 @@ function GUIControls:RollSequence(previewSequence, previewCount)
 end
 
 function GUIControls:ShowRollResults(rollInfo)
+	if GUIControls.CurrentRollTriggeredByAuto == true and GUIControls:IsGameplayMenuBlockingAutoRoll() then
+		GUIControls:SuppressAutoRollResultForGameplayBlocker(GUIControls:GetRollCooldownDuration())
+		return
+	end
+
 	local resolvedRollInfo = buildResolvedRollResultAudioInfo(rollInfo)
 
 	ShowBlackTween:Play()
@@ -1619,6 +1784,7 @@ function GUIControls:ShowRollResults(rollInfo)
 
 	if GUIControls.AutoRoll then
 		local loopId = GUIControls.AutoRollLoopId
+		GUIControls:WatchAutoRollResultForGameplayBlocker(loopId)
 		task.delay(GUIControls:GetAutoResultHoldDuration(), function()
 			if GUIControls.AutoRoll and loopId == GUIControls.AutoRollLoopId then
 				GUIControls:HideRollResults()
@@ -1630,6 +1796,7 @@ end
 function GUIControls:HideRollResults()
 	GUIControls.CurrentRollResult = nil
 	GUIControls.CurrentRollResultEquipped = false
+	GUIControls.CurrentRollTriggeredByAuto = false
 	GUIControls.EquipDebounce = false
 	GUIControls.EquipStatusToken += 1
 	GUIControls.RollPresentationPending = false
@@ -1647,6 +1814,11 @@ local function revealFinalRollResult(rollResult, finalResult)
 		return false
 	end
 
+	if GUIControls.CurrentRollTriggeredByAuto == true and GUIControls:IsGameplayMenuBlockingAutoRoll() then
+		GUIControls:SuppressAutoRollResultForGameplayBlocker(GUIControls:GetRollCooldownDuration())
+		return true
+	end
+
 	if shouldPlayRollCutscene(rollResult) then
 		playRollCutsceneIfNeeded(rollResult, finalResult, function()
 			GUIControls:ShowRollResults(finalResult)
@@ -1661,16 +1833,22 @@ end
 function GUIControls:Roll(triggerSource)
 	task.spawn(function()
 		local resolvedTriggerSource = if typeof(triggerSource) == "string" and triggerSource ~= "" then triggerSource else "manual"
+		local isAutoTrigger = resolvedTriggerSource == "auto"
 		local predictedSkippedPresentation = shouldPredictSkippedRollPresentation(resolvedTriggerSource)
 
+		if isAutoTrigger and GUIControls:IsGameplayMenuBlockingAutoRoll() then
+			GUIControls:PauseAutoRollForGameplayBlocker(GUIControls:GetAutoRollRetryDelay())
+			return
+		end
+
 		if os.clock() < GUIControls.SuppressRollClickUntil then
-			if resolvedTriggerSource == "auto" then
+			if isAutoTrigger then
 				GUIControls:ScheduleNextAutoRoll(GUIControls:GetAutoRollRetryDelay())
 			end
 			return
 		end
 		if GUIControls.RollDebounce or GUIControls.CurrentlyRolling then
-			if resolvedTriggerSource == "auto" then
+			if isAutoTrigger then
 				GUIControls:ScheduleNextAutoRoll(GUIControls:GetAutoRollRetryDelay())
 			end
 			return
@@ -1678,6 +1856,7 @@ function GUIControls:Roll(triggerSource)
 
 		GUIControls.CurrentRollResult = nil
 		GUIControls.CurrentRollResultEquipped = false
+		GUIControls.CurrentRollTriggeredByAuto = isAutoTrigger
 		GUIControls.EquipDebounce = false
 		GUIControls.EquipStatusToken += 1
 		GUIControls.RollPresentationPending = true
@@ -1696,6 +1875,7 @@ function GUIControls:Roll(triggerSource)
 		})
 		if not rollResponse then
 			GUIControls.RollPresentationPending = false
+			GUIControls.CurrentRollTriggeredByAuto = false
 			endRollNotificationHold()
 			GUIControls:SetTemporaryStatus("Failed to reach the server.")
 			return
@@ -1703,6 +1883,7 @@ function GUIControls:Roll(triggerSource)
 
 		if not rollResponse.ok or typeof(rollResponse.rollResult) ~= "table" then
 			GUIControls.RollPresentationPending = false
+			GUIControls.CurrentRollTriggeredByAuto = false
 			endRollNotificationHold()
 			local failureMessage = rollResponse.message or "Roll failed."
 			if typeof(rollResponse.state) == "table" then
@@ -1731,6 +1912,11 @@ function GUIControls:Roll(triggerSource)
 		GUIControls:ApplyRollingState(rollResponse.state)
 		local rollResult = rollResponse.rollResult
 		showAutoCraftNotification(rollResult)
+		if isAutoTrigger and GUIControls:IsGameplayMenuBlockingAutoRoll() then
+			GUIControls:SuppressAutoRollResultForGameplayBlocker(GUIControls:GetRollCooldownDuration())
+			return
+		end
+
 		playRollStartSound()
 		if rollResult.skipPresentation == true then
 			local finalResult = if typeof(rollResult.finalResult) == "table" then rollResult.finalResult else nil
@@ -1751,6 +1937,7 @@ function GUIControls:Roll(triggerSource)
 
 			GUIControls.CurrentRollResult = nil
 			GUIControls.CurrentRollResultEquipped = false
+			GUIControls.CurrentRollTriggeredByAuto = false
 			GUIControls.RollPresentationPending = false
 			if predictedSkippedPresentation then
 				Main.Visible = false
@@ -1791,9 +1978,14 @@ function GUIControls:Roll(triggerSource)
 		if rollResult.skipPreview == true then
 			local finalResult = if typeof(rollResult.finalResult) == "table" then rollResult.finalResult else nil
 			GUIControls.CurrentlyRolling = false
+			if isAutoTrigger and GUIControls:IsGameplayMenuBlockingAutoRoll() then
+				GUIControls:SuppressAutoRollResultForGameplayBlocker(GUIControls:GetRollCooldownDuration())
+				return
+			end
 			if not revealFinalRollResult(rollResult, finalResult) then
 				restoreIdleRollUi()
 				GUIControls.RollPresentationPending = false
+				GUIControls.CurrentRollTriggeredByAuto = false
 				endRollNotificationHold()
 				GUIControls:RefreshEquipButton()
 				GUIControls:RefreshRollControls()
@@ -1808,6 +2000,10 @@ function GUIControls:Roll(triggerSource)
 			previewSequence = buildClientPreviewSequence(rollResult) or { rollResult.finalResult }
 		end
 		local previewedResult = GUIControls:RollSequence(previewSequence, #previewSequence)
+		if isAutoTrigger and GUIControls:IsGameplayMenuBlockingAutoRoll() then
+			GUIControls:SuppressAutoRollResultForGameplayBlocker(GUIControls:GetRollCooldownDuration())
+			return
+		end
 		local finalPreviewEntry = previewSequence[#previewSequence]
 		local finalResult = if typeof(finalPreviewEntry) == "table" then finalPreviewEntry else rollResult.finalResult
 		GUIControls.CurrentlyRolling = false
@@ -1815,6 +2011,7 @@ function GUIControls:Roll(triggerSource)
 		if not revealFinalRollResult(rollResult, finalResult) then
 			restoreIdleRollUi()
 			GUIControls.RollPresentationPending = false
+			GUIControls.CurrentRollTriggeredByAuto = false
 			endRollNotificationHold()
 			GUIControls:RefreshEquipButton()
 			GUIControls:RefreshRollControls()

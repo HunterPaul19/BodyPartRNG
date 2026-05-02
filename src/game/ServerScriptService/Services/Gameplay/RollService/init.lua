@@ -15,10 +15,9 @@ local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile
 local RollMath = require(ReplicatedStorage.Shared.Rolling.RollMath)
 local RollCutsceneConfig = require(ReplicatedStorage.Shared.UI.RollCutsceneConfig)
 local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts)
-local BodyPartEconomy = require(ReplicatedStorage.Shared.Character.BodyPartEconomy)
+local BodyPartAcquisitionService = require(script.Parent.BodyPartAcquisitionService)
 local BodyPartService = require(script.Parent.BodyPartService)
 local ChatNotificationService = require(script.Parent.ChatNotificationService)
-local CraftingService = require(script.Parent.CraftingService)
 local DataService = require(script.Parent.DataService)
 local PotionService = require(script.Parent.PotionService)
 local PurchaseReceiptService = require(script.Parent.PurchaseReceiptService)
@@ -370,18 +369,10 @@ local function cloneRollGrantPayload(payload: any): any
 end
 
 local function sellReservedBodyPartRecord(player: Player, ownedRecord: any): (boolean, string)
-	if typeof(ownedRecord) ~= "table" then
-		return false, "No rolled body part was available to sell."
-	end
-
-	local piece = BodyPartsCatalog.GetPiece(ownedRecord.pieceId)
-	local pieceName = if piece then piece.displayName else "body part"
-	local payout = BodyPartEconomy.GetSellValue(ownedRecord, piece)
-	DataService:AddMoney(player, payout, "sell_single")
-	StatsService:RecordBodyPartsSold(player, 1)
-	StatsService:RecordTransientBodyPartAcquired(player)
-
-	return true, string.format("Sold %s for $%s.", pieceName, tostring(payout))
+	local sellResult = BodyPartAcquisitionService:SellTransientBodyPart(player, ownedRecord, {
+		source = "roll",
+	})
+	return sellResult.status == "autoSold", sellResult.message or sellResult.error or "Failed to auto-sell the roll result."
 end
 
 local function isOwnedIdEquipped(player: Player, ownedId: string): boolean
@@ -1668,7 +1659,6 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 
 	local remainingMoney = DataService:AdjustMoney(player, -selectedRollType.moneyCost, "roll_cost")
 	local autoSellRarity = RollingConfig.NormalizeDisplayRarity(finalSet.setConfig.rollDisplay.rarity)
-	local autoSellEnabledForRarity = DataService:IsAutoSellEnabledForRarity(player, autoSellRarity)
 	local grantPayload = {
 		pieceId = finalPiece.id,
 		rarityDenominator = finalSet.displayedDenominator,
@@ -1684,30 +1674,13 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		variantMultiplier = variantMultiplier,
 		finalPassiveIncomePerSecond = finalPassiveIncomePerSecond,
 	}
-	local autoCraftCommitResult = nil
-	local shouldAutoEquipRoll = false
-	if DataService:GetAutoEquipBestEnabled(player) then
-		shouldAutoEquipRoll = BodyPartService:IsBodyPartGrantBetterThanEquipped(player, grantPayload)
-	end
-
-	if not shouldAutoEquipRoll then
-		autoCraftCommitResult = CraftingService:TryAutoCommitRolledBodyPart(player, grantPayload)
-	end
-	local autoCraftCommitted = typeof(autoCraftCommitResult) == "table" and autoCraftCommitResult.committed == true
-	local pendingAutoSell = (not shouldAutoEquipRoll) and (not autoCraftCommitted) and (not skipPresentation) and autoSellEnabledForRarity
-	local shouldUseTransientRecord = (not shouldAutoEquipRoll) and (not autoCraftCommitted) and autoSellEnabledForRarity
-
-	local ownedRecord, grantError, reservedGrant
-	if autoCraftCommitted then
-		ownedRecord = table.clone(grantPayload)
-		ownedRecord.ownedId = ""
-		ownedRecord.serialNumber = 0
-		ownedRecord.isFavorite = false
-	elseif shouldUseTransientRecord then
-		ownedRecord, reservedGrant, grantError = DataService:ReserveBodyPartRollRecord(player, grantPayload)
-	else
-		ownedRecord, grantError = DataService:AddOwnedBodyPart(player, grantPayload)
-	end
+	local acquisitionResult = BodyPartAcquisitionService:Acquire(player, grantPayload, {
+		source = "roll",
+		presentation = if skipPresentation then "immediate_reward" else "roll_pending",
+	})
+	local ownedRecord = acquisitionResult.record
+	local grantError = acquisitionResult.error
+	local reservedGrant = acquisitionResult.reservation
 	if not ownedRecord then
 		StatsService:RecordRollFailure(player, "grant_failed")
 		DataService:AddMoney(player, selectedRollType.moneyCost, "other")
@@ -1718,32 +1691,19 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		return false, grantError or "Failed to save the rolled body part.", nil
 	end
 
-	local autoEquipped = false
-	local autoEquipMessage = nil
-	if shouldAutoEquipRoll then
-		local equipped, equipMessage = BodyPartService:EquipOwnedBodyPartIfBetter(player, ownedRecord.ownedId, sizeScale, {
-			applyVisuals = true,
-		})
-		autoEquipped = equipped == true
-		autoEquipMessage = equipMessage
-		if not equipped and equipMessage then
-			Logger.Warn(string.format(
-				"[RollService] Auto Equip Best skipped for %s (%s): %s",
-				player.Name,
-				tostring(ownedRecord.ownedId),
-				tostring(equipMessage)
-			))
-		end
-	end
-
 	local updatedSuccessfulRollCount = DataService:IncrementSuccessfulRollCount(player)
-	local autoSoldInstantly = false
+	local autoEquipped = acquisitionResult.autoEquipped == true
+	local autoCraftCommitted = acquisitionResult.status == "autoCrafted"
+	local autoSoldInstantly = acquisitionResult.status == "autoSold"
+	local pendingAutoSell = acquisitionResult.pendingAutoSell == true
 	local pendingAutoSellToken = nil
 	local rollMessage = string.format("Rolled %s.", finalResult.Name)
 	if autoEquipped then
-		rollMessage = autoEquipMessage or string.format("Equipped %s.", finalResult.Name)
+		rollMessage = acquisitionResult.message or string.format("Equipped %s.", finalResult.Name)
 	elseif autoCraftCommitted then
-		rollMessage = tostring(autoCraftCommitResult.message or string.format("Added %s to crafting.", finalResult.Name))
+		rollMessage = acquisitionResult.message or string.format("Added %s to crafting.", finalResult.Name)
+	elseif autoSoldInstantly then
+		rollMessage = acquisitionResult.message or string.format("Auto-sold %s.", finalResult.Name)
 	end
 	if pendingAutoSell then
 		pendingAutoSellToken = createPendingAutoSellToken(player)
@@ -1754,21 +1714,6 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 			grantPayload = cloneRollGrantPayload(grantPayload),
 			reservation = reservedGrant,
 		}
-	elseif skipPresentation and autoSellEnabledForRarity then
-		local sold, sellMessage = sellReservedBodyPartRecord(player, ownedRecord)
-		if sold then
-			autoSoldInstantly = true
-			StatsService:RecordAutoSellOutcome(player, "sold")
-			rollMessage = sellMessage or string.format("Auto-sold %s.", finalResult.Name)
-		else
-			Logger.Warn(string.format(
-				"[RollService] Immediate auto-sell failed for %s (%s): %s",
-				player.Name,
-				tostring(ownedRecord.ownedId),
-				tostring(sellMessage)
-			))
-			rollMessage = string.format("Auto-sell failed for %s; item kept.", finalResult.Name)
-		end
 	end
 	StatsService:RecordRollSuccess(player, {
 		rollTypeId = selectedRollType.id,
@@ -1812,7 +1757,7 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		autoSoldInstantly = autoSoldInstantly,
 		autoEquipped = autoEquipped,
 		autoCraftCommitted = autoCraftCommitted,
-		autoCrafted = typeof(autoCraftCommitResult) == "table" and autoCraftCommitResult.crafted == true,
+		autoCrafted = acquisitionResult.autoCrafted == true,
 		autoCraftMessage = if autoCraftCommitted then rollMessage else nil,
 		skipPreview = skipPreview,
 		skipPresentation = skipPresentation,
