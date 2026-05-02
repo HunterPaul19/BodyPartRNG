@@ -3,7 +3,10 @@ local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
+
 local LOCAL_PLAYER = Players.LocalPlayer
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 local REMOTES_FOLDER_NAME = "Remotes"
 local ROLLING_FOLDER_NAME = "Rolling"
 local FINALIZE_AUTO_SELL_ROLL_REMOTE_NAME = "FinalizeAutoSellRoll"
@@ -150,13 +153,13 @@ local function patchRollGuiControls(guiControls)
 			local finalizeRemote = getFinalizeRemote()
 			if finalizeRemote then
 				self.__autoSellFinalizeInFlight = true
-				local ok, result = pcall(function()
-					return finalizeRemote:InvokeServer(payload)
-				end)
+				local ok, result, timedOut =
+					RemoteFunctionTimeout.Invoke(finalizeRemote, payload, REMOTE_INVOKE_TIMEOUT_SECONDS)
 				self.__autoSellFinalizeInFlight = false
 
 				if not ok then
-					Logger.Warn(string.format("[AutoSellRollController] Failed to finalize auto-sell roll: %s", tostring(result)))
+					local reason = if timedOut then "timed out" else "failed"
+					Logger.Warn(string.format("[AutoSellRollController] Auto-sell finalize %s: %s", reason, tostring(result)))
 				elseif typeof(result) == "table" then
 					if type(self.ApplyRollingState) == "function" and typeof(result.state) == "table" then
 						self:ApplyRollingState(result.state)

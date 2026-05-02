@@ -6,9 +6,11 @@ local RunService = game:GetService("RunService")
 
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 local REMOTES_FOLDER_NAME = "Remotes"
 local BOSS_ARENA_FOLDER_NAME = "BossArena"
 local GET_STATE_REMOTE_NAME = "GetStudioPickerState"
@@ -79,19 +81,14 @@ local function createStroke(parent: Instance, color: Color3, transparency: numbe
 end
 
 local function invokeRemote(remote: RemoteFunction, payload: any?): any?
-	local ok, result = pcall(function()
-		if payload ~= nil then
-			return remote:InvokeServer(payload)
-		end
-
-		return remote:InvokeServer()
-	end)
+	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(remote, payload, REMOTE_INVOKE_TIMEOUT_SECONDS)
 
 	if ok then
 		return result
 	end
 
-	Logger.Warn(string.format("[BossArenaStudioPickerController] Remote %s failed: %s", remote.Name, tostring(result)))
+	local reason = if timedOut then "timed out" else "failed"
+	Logger.Warn(string.format("[BossArenaStudioPickerController] Remote %s %s: %s", remote.Name, reason, tostring(result)))
 	return nil
 end
 

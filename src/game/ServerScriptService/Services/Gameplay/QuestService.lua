@@ -11,6 +11,7 @@ local QuestState = require(ReplicatedStorage.Shared.Character.QuestState)
 local DataService = require(script.Parent.DataService)
 local AdminConfig = require(script.Parent.AdminConfig)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
+local TutorialAnalyticsService = require(script.Parent.TutorialAnalyticsService)
 
 local REMOTES_FOLDER_NAME = "Remotes"
 local QUESTS_FOLDER_NAME = "Quests"
@@ -435,6 +436,24 @@ local function markReadyIfComplete(player: Player, state: QuestState.QuestStateV
 
 		activeQuest.currentPartIndex += 1
 		resetObjectiveProgressForPart(definition, activeQuest)
+	end
+end
+
+local function logCompletedOnboardingQuestParts(
+	player: Player,
+	definition: QuestConfig.QuestDefinition,
+	previousCompletedParts: number?,
+	activeQuest: QuestState.ActiveQuest
+)
+	local partCount = QuestConfig.GetPartCount(definition)
+	local previousCompleted = math.clamp(math.floor(tonumber(previousCompletedParts) or 0), 0, partCount)
+	local completedParts = math.clamp(math.floor(tonumber(activeQuest.completedParts) or 0), 0, partCount)
+	if completedParts <= previousCompleted then
+		return
+	end
+
+	for partIndex = previousCompleted + 1, completedParts do
+		TutorialAnalyticsService:LogOnboardingQuestPartCompleted(player, definition.id, partIndex)
 	end
 end
 
@@ -918,9 +937,9 @@ local function reconcileDailyQuestState(player: Player, state: QuestState.QuestS
 	return changed
 end
 
-function QuestService:GetRawState(player: Player): QuestState.QuestStateValue
+function QuestService:GetRawState(player: Player): QuestState.QuestStateValue?
 	if not isActive(player) then
-		return QuestState.CreateEmptyState()
+		return nil
 	end
 
 	local state = DataService:GetQuestState(player)
@@ -932,6 +951,10 @@ end
 
 function QuestService:GetQuestState(player: Player): any
 	local state = self:GetRawState(player)
+	if not state then
+		return nil
+	end
+
 	local questEntries = {}
 	local selectedDailyQuestIds = buildDailyQuestSet(state.dailyQuests.selectedQuestIds)
 
@@ -1019,6 +1042,7 @@ function QuestService:AcceptQuest(player: Player, payload: any)
 	local activeQuest = buildActiveQuest(definition, getNow())
 	refreshStateObjectives(player, state, definition, activeQuest)
 	markReadyIfComplete(player, state, definition, activeQuest)
+	logCompletedOnboardingQuestParts(player, definition, 0, activeQuest)
 	state.activeByQuestId[definition.id] = activeQuest
 	local autoClaimed, autoClaimError = tryAutoClaimQuest(player, state, definition, activeQuest)
 	DataService:SetQuestState(player, state)
@@ -1082,7 +1106,9 @@ function QuestService:ClaimQuest(player: Player, payload: any)
 		return response(false, "That quest is not active.", self:GetQuestState(player))
 	end
 
+	local previousCompletedParts = activeQuest.completedParts
 	markReadyIfComplete(player, state, definition, activeQuest)
+	logCompletedOnboardingQuestParts(player, definition, previousCompletedParts, activeQuest)
 	if activeQuest.status ~= "readyToClaim" then
 		return response(false, "That quest is not complete yet.", self:GetQuestState(player))
 	end
@@ -1135,6 +1161,7 @@ function QuestService:RecordEvent(player: Player, eventType: string, payload: an
 		end
 
 		markReadyIfComplete(player, state, definition, activeQuest)
+		logCompletedOnboardingQuestParts(player, definition, before.completedParts, activeQuest)
 		if hasActiveQuestChanged(activeQuest, before) then
 			changed = true
 		end
@@ -1175,6 +1202,9 @@ function QuestService:OnStart()
 	updatedRemote = createOrGetRemoteEvent(folder, UPDATED_REMOTE_NAME)
 
 	getStateRemote.OnServerInvoke = function(player: Player)
+		if not isActive(player) then
+			return response(false, "Player data is not loaded.", nil)
+		end
 		if not RequestLimiter:Allow(player, "remote.quests.get_state") then
 			return response(false, "You're refreshing quests too quickly.", self:GetQuestState(player))
 		end
@@ -1208,6 +1238,12 @@ function QuestService:OnStart()
 		end
 		return self:MarkQuestBoardOpened(player)
 	end
+
+	DataService.PlayerDataLoaded:Connect(function(player: Player)
+		task.defer(function()
+			self:NotifyClient(player, nil)
+		end)
+	end)
 
 	DataService.MoneyChanged:Connect(function(player: Player, previousValue: number, newValue: number, delta: number, source: string?)
 		if source == "quest_reward" then

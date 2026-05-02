@@ -46,12 +46,14 @@ local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 local RollWarningNotifier = require(ReplicatedStorage.Shared.UI.RollWarningNotifier)
 local RollCutscene = require(ReplicatedStorage.Shared.UI.RollCutscene)
 local RollCutsceneConfig = require(ReplicatedStorage.Shared.UI.RollCutsceneConfig)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 local ScreenEffects = require(ReplicatedStorage.Shared.UI.ScreenEffects)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
 local LocalPlayer = Players.LocalPlayer
 
 local REMOTE_WAIT_TIMEOUT = 15
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 
 local function requireChild(parent: Instance, childName: string, className: string): Instance
 	local child = parent:FindFirstChild(childName)
@@ -512,14 +514,10 @@ local function isPlayerInAutoRollGroup()
 end
 
 local function invokeRemote(remote, payload)
-	local ok, result = pcall(function()
-		if payload ~= nil then
-			return remote:InvokeServer(payload)
-		end
-		return remote:InvokeServer()
-	end)
+	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(remote, payload, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	if not ok then
-		Logger.Warn(string.format("[RollGUI] Remote %s failed: %s", remote.Name, tostring(result)))
+		local reason = if timedOut then "timed out" else "failed"
+		Logger.Warn(string.format("[RollGUI] Remote %s %s: %s", remote.Name, reason, tostring(result)))
 		return nil
 	end
 	return result
@@ -1604,6 +1602,11 @@ end
 
 function GUIControls:IsRollPresentationPending()
 	return GUIControls.RollPresentationPending == true
+end
+
+function GUIControls:GetSelectedRollTypeId()
+	local selectedRollType = getSelectedRollType(GUIControls.RollingState)
+	return if typeof(selectedRollType) == "table" then selectedRollType.id else nil
 end
 
 function GUIControls:GetTutorialTarget(targetId)

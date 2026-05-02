@@ -12,6 +12,7 @@ local TimeShardState = require(ReplicatedStorage.Shared.Character.TimeShardState
 local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
 local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local PotionPresentation = require(ReplicatedStorage.Shared.UI.PotionPresentation)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
 local DataController = require(script.Parent.DataController)
@@ -19,6 +20,7 @@ local MerchantPresentationController = require(script.Parent.MerchantPresentatio
 local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 local REMOTES_FOLDER_NAME = "Remotes"
 local MERCHANT_SHOP_FOLDER_NAME = "MerchantShop"
 local GET_SHOP_STATE_REMOTE_NAME = "GetShopState"
@@ -256,15 +258,10 @@ function MerchantShopController:_ensureRemotes(): boolean
 end
 
 function MerchantShopController:_invokeRemote(remote: RemoteFunction, payload: any?): any?
-	local ok, result = pcall(function()
-		if payload ~= nil then
-			return remote:InvokeServer(payload)
-		end
-
-		return remote:InvokeServer()
-	end)
+	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(remote, payload, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	if not ok then
-		Logger.Warn(string.format("[MerchantShopController] Remote %s failed: %s", remote.Name, tostring(result)))
+		local reason = if timedOut then "timed out" else "failed"
+		Logger.Warn(string.format("[MerchantShopController] Remote %s %s: %s", remote.Name, reason, tostring(result)))
 		return nil
 	end
 

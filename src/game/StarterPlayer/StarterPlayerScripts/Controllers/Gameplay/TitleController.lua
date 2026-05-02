@@ -9,12 +9,14 @@ local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
 local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local TitleUtil = require(ReplicatedStorage.Shared.Titles.TitleUtil)
 local ToggleSoundUtil = require(ReplicatedStorage.Shared.Audio.ToggleSoundUtil)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 local DataController = require(script.Parent.DataController)
 local FrameController = require(script.Parent.FrameController)
 local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local WINDOW_NAME = "Titles"
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 local EQUIPPED_TITLE_KEY = "equippedTitleId"
 local ACHIEVEMENTS_KEY = "achievements"
 local REMOTES_FOLDER_NAME = "Remotes"
@@ -295,11 +297,9 @@ function TitleController:_submitEquipToggle()
 	end
 
 	local isEquipped = getEquippedTitleId() == selectedTitle.id
-	local ok, response = pcall(function()
-		return remote:InvokeServer({
-			titleId = if isEquipped then nil else selectedTitle.id,
-		})
-	end)
+	local ok, response = RemoteFunctionTimeout.Invoke(remote, {
+		titleId = if isEquipped then nil else selectedTitle.id,
+	}, REMOTE_INVOKE_TIMEOUT_SECONDS)
 
 	if not ok then
 		Notify.Show(TranslationHelper.formatByKey(LocalizationKeys.Title.Message.UpdateFailed), { channel = "titles" })

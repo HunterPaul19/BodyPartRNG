@@ -5,13 +5,16 @@ local ProximityPromptService = game:GetService("ProximityPromptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
+local DailyChestController = require(script.Parent.DailyChestController)
 local FrameController = require(script.Parent.FrameController)
 local QuestBoardOnboardingGuideController = require(script.Parent.QuestBoardOnboardingGuideController)
 local UIController = require(script.Parent.UIController)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local WINDOW_NAME = "QuestsFrame"
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 local REMOTES_FOLDER_NAME = "Remotes"
 local QUESTS_FOLDER_NAME = "Quests"
 local GET_STATE_REMOTE_NAME = "GetQuestState"
@@ -22,6 +25,7 @@ local UPDATED_REMOTE_NAME = "QuestUpdated"
 local QUEST_BOARD_MODEL_NAME = "Quest Board"
 local QUEST_BOARD_PROMPT_PARENT_NAME = "PromptPart"
 local QUEST_BOARD_PROMPT_NAME = "BoardPrompt"
+local CHEST_OPEN_AFTER_CLOSE_DELAY_SECONDS = 0.22
 
 local HUD_QUEST_PREFIX = "QuestHud_"
 local HUD_STEP_PREFIX = "QuestHudStep_"
@@ -90,6 +94,16 @@ local function showNotification(text: string, tone: string?)
 		duration = 3,
 		tone = tone,
 	})
+end
+
+local function getRewardDailyChests(result: any): { any }?
+	local rewardPresentation = if typeof(result) == "table" then result.rewardPresentation else nil
+	local dailyChests = if typeof(rewardPresentation) == "table" then rewardPresentation.dailyChests else nil
+	if typeof(dailyChests) == "table" and #dailyChests > 0 then
+		return dailyChests
+	end
+
+	return nil
 end
 
 local function getTextLabel(root: Instance, name: string): TextLabel?
@@ -253,6 +267,15 @@ local function shouldShowInFilter(entry: any, filterName: string): boolean
 	return not isMainQuest(entry)
 end
 
+local function shouldShowInHud(entry: any): boolean
+	local activeQuest = getActiveQuest(entry)
+	return isMainQuest(entry)
+		and not isDailyQuest(entry)
+		and entry.isActive == true
+		and typeof(activeQuest) == "table"
+		and activeQuest.status ~= "claimed"
+end
+
 local function getObjectiveProgress(activeQuest: any, objective: any): any
 	local objectiveId = if typeof(objective) == "table" then objective.id else nil
 	if typeof(activeQuest) == "table" and typeof(activeQuest.objectives) == "table" and typeof(objectiveId) == "string" then
@@ -323,6 +346,15 @@ local function formatRewardRows(rewards: any): { string }
 	end
 
 	return rows
+end
+
+local function formatRewardSummary(rewards: any): string?
+	local rewardRows = formatRewardRows(rewards)
+	if #rewardRows <= 0 then
+		return nil
+	end
+
+	return "Reward: " .. table.concat(rewardRows, ", ")
 end
 
 local function setTabCount(label: TextLabel?, count: number)
@@ -527,6 +559,10 @@ end
 function QuestController:_applyState(state: any)
 	if typeof(state) == "table" then
 		self._state = state
+		local syncQuestState = QuestBoardOnboardingGuideController.SyncQuestState
+		if typeof(syncQuestState) == "function" then
+			syncQuestState(state)
+		end
 	end
 	self:_syncUi()
 end
@@ -537,21 +573,20 @@ function QuestController:_invokeQuestRemote(remote: RemoteFunction, questId: str
 	end
 
 	self._requestInFlight = true
-	local ok, result = pcall(function()
-		return remote:InvokeServer({
-			questId = questId,
-		})
-	end)
+	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(remote, {
+		questId = questId,
+	}, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	self._requestInFlight = false
 
 	if not ok then
-		Logger.Warn(string.format("[QuestController] Quest remote failed: %s", tostring(result)))
+		local reason = if timedOut then "timed out" else "failed"
+		Logger.Warn(string.format("[QuestController] Quest remote %s: %s", reason, tostring(result)))
 		showNotification(failureMessage)
-		return
+		return nil
 	end
 	if typeof(result) ~= "table" then
 		showNotification(failureMessage)
-		return
+		return nil
 	end
 
 	if typeof(result.state) == "table" then
@@ -560,7 +595,10 @@ function QuestController:_invokeQuestRemote(remote: RemoteFunction, questId: str
 
 	if result.ok ~= true then
 		showNotification(tostring(result.message or failureMessage))
+		return nil
 	end
+
+	return result
 end
 
 function QuestController:_requestState(showFailure: boolean?)
@@ -569,17 +607,28 @@ function QuestController:_requestState(showFailure: boolean?)
 	end
 
 	local remotes = self._remotes :: QuestRemotes
-	local ok, result = pcall(function()
-		return remotes.getState:InvokeServer()
-	end)
+	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(remotes.getState, nil, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	if not ok then
-		Logger.Warn(string.format("[QuestController] GetQuestState failed: %s", tostring(result)))
+		local reason = if timedOut then "timed out" else "failed"
+		Logger.Warn(string.format("[QuestController] GetQuestState %s: %s", reason, tostring(result)))
 		if showFailure then
 			showNotification("Quests are not ready right now.")
 		end
 		return
 	end
-	if typeof(result) == "table" and typeof(result.state) == "table" then
+	if typeof(result) ~= "table" then
+		if showFailure then
+			showNotification("Quests are not ready right now.")
+		end
+		return
+	end
+	if result.ok ~= true then
+		if showFailure then
+			showNotification(tostring(result.message or "Quests are not ready right now."))
+		end
+		return
+	end
+	if typeof(result.state) == "table" then
 		self:_applyState(result.state)
 	end
 end
@@ -597,7 +646,22 @@ function QuestController:_claimQuest(questId: string)
 		showNotification("Quests are not ready right now.")
 		return
 	end
-	self:_invokeQuestRemote((self._remotes :: QuestRemotes).claimQuest, questId, "Could not claim quest.")
+	local result = self:_invokeQuestRemote((self._remotes :: QuestRemotes).claimQuest, questId, "Could not claim quest.")
+	local dailyChests = getRewardDailyChests(result)
+	if dailyChests == nil then
+		return
+	end
+
+	local closing = FrameController:CloseFrame(WINDOW_NAME)
+	if closing then
+		task.delay(CHEST_OPEN_AFTER_CLOSE_DELAY_SECONDS, function()
+			DailyChestController.OpenChestPackages(dailyChests)
+		end)
+	else
+		task.spawn(function()
+			DailyChestController.OpenChestPackages(dailyChests)
+		end)
+	end
 end
 
 function QuestController:_markQuestBoardOpened()
@@ -606,11 +670,11 @@ function QuestController:_markQuestBoardOpened()
 	end
 
 	task.spawn(function()
-		local ok, result = pcall(function()
-			return (self._remotes :: QuestRemotes).markBoardOpened:InvokeServer()
-		end)
+		local ok, result, timedOut =
+			RemoteFunctionTimeout.Invoke((self._remotes :: QuestRemotes).markBoardOpened, nil, REMOTE_INVOKE_TIMEOUT_SECONDS)
 		if not ok then
-			Logger.Warn(string.format("[QuestController] MarkQuestBoardOpened failed: %s", tostring(result)))
+			local reason = if timedOut then "timed out" else "failed"
+			Logger.Warn(string.format("[QuestController] MarkQuestBoardOpened %s: %s", reason, tostring(result)))
 			return
 		end
 		if typeof(result) == "table" and typeof(result.state) == "table" then
@@ -626,13 +690,7 @@ function QuestController:_syncHud()
 
 	local activeEntries = {}
 	for _, entry in ipairs(self:_getQuestEntries()) do
-		local activeQuest = getActiveQuest(entry)
-		if isMainQuest(entry)
-			and not isDailyQuest(entry)
-			and entry.isActive == true
-			and typeof(activeQuest) == "table"
-			and activeQuest.status ~= "claimed"
-		then
+		if shouldShowInHud(entry) then
 			table.insert(activeEntries, entry)
 		end
 	end
@@ -761,6 +819,13 @@ function QuestController:_populateQuestRow(row: GuiObject, entry: any, layoutOrd
 		questName.Text = tostring(definition.displayName or definition.id or "Quest")
 	end
 
+	local rewardSummary = getTextLabel(row, "RewardSummary")
+	if rewardSummary then
+		local summary = if isDailyQuest(entry) then formatRewardSummary(definition.rewards) else nil
+		rewardSummary.Visible = typeof(summary) == "string" and summary ~= ""
+		rewardSummary.Text = summary or ""
+	end
+
 	self:_setRowProgress(row, entry)
 	self:_setRowSelected(row, self._selectedQuestId == definition.id)
 
@@ -867,7 +932,7 @@ function QuestController:_syncDetail()
 	ui.startButton.Visible = canStart
 	ui.startButton.Active = canStart
 	if canStart then
-		setButtonText(ui.startButton, if isOnboardingLesson(definition) then "Claim" else "Start Quest")
+		setButtonText(ui.startButton, "Start")
 	end
 
 	if ui.inProgressLabel then

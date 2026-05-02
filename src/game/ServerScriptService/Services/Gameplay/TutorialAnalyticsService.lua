@@ -12,8 +12,37 @@ local ONBOARDING_STEPS = table.freeze({
 	[2] = "Tutorial Started",
 	[3] = "First Roll Completed",
 	[4] = "First Body Part Equipped / Tutorial Complete",
-	[13] = "Boss World Guide Prompted",
-	[14] = "Boss World Entered",
+	[5] = "Rolling Lesson: Paid Roll Used",
+	[6] = "Rolling Lesson: Clean+ Rolled",
+	[7] = "Rolling Lesson: Clean+ Equipped",
+	[8] = "Appraisal Tour: Appraiser Met",
+	[9] = "Appraisal Tour: Body Part Appraised",
+	[10] = "Crafting Tour: Crafter Met",
+	[11] = "Crafting Tour: Crown Recipe Opened",
+	[12] = "Crafting Tour: Crown Crafted",
+	[13] = "Boss World Tour: Boss World Entered",
+	[14] = "Boss World Tour: First Boss Defeated",
+})
+
+local ONBOARDING_QUEST_PART_STEPS = table.freeze({
+	stan_paid_roll_intro = table.freeze({
+		[1] = 5,
+		[2] = 6,
+		[3] = 7,
+	}),
+	stan_appraisal_intro = table.freeze({
+		[1] = 8,
+		[2] = 9,
+	}),
+	stan_crafting_intro = table.freeze({
+		[1] = 10,
+		[2] = 11,
+		[3] = 12,
+	}),
+	stan_boss_intro = table.freeze({
+		[1] = 13,
+		[2] = 14,
+	}),
 })
 
 local loggedStepsByPlayer: { [Player]: { [number]: boolean } } = {}
@@ -78,12 +107,29 @@ function TutorialAnalyticsService:LogOnboardingStep(player: Player, stepNumber: 
 	end)
 end
 
+function TutorialAnalyticsService:LogOnboardingQuestPartCompleted(player: Player, questId: string, partIndex: number)
+	if typeof(questId) ~= "string" or questId == "" then
+		return
+	end
+
+	local questSteps = ONBOARDING_QUEST_PART_STEPS[questId]
+	if typeof(questSteps) ~= "table" then
+		return
+	end
+
+	local normalizedPartIndex = math.floor(tonumber(partIndex) or 0)
+	local stepNumber = questSteps[normalizedPartIndex]
+	if typeof(stepNumber) ~= "number" then
+		return
+	end
+
+	self:LogOnboardingStep(player, stepNumber, nil)
+end
+
 function TutorialAnalyticsService:LogBossWorldGuidePrompted(player: Player)
-	self:LogOnboardingStep(player, 13, nil)
 end
 
 function TutorialAnalyticsService:LogBossWorldGuideCompleted(player: Player)
-	self:LogOnboardingStep(player, 14, nil)
 end
 
 function TutorialAnalyticsService:OnPlayerRemoving(player: Player)

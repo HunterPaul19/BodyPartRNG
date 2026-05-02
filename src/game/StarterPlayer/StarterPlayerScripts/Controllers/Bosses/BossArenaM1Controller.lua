@@ -12,8 +12,10 @@ local AnimationUtil = require(ReplicatedStorage.Shared.Combat.CombatPhysics.Util
 local PlayerM1AnimationResolver = require(ReplicatedStorage.Shared.BossArena.PlayerM1AnimationResolver)
 local PlayerM1Config = require(ReplicatedStorage.Shared.BossArena.PlayerM1Config)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 
 local LOCAL_PLAYER = Players.LocalPlayer
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 4
 local REMOTES_FOLDER_NAME = "Remotes"
 local BOSS_ARENA_FOLDER_NAME = "BossArena"
 local REQUEST_M1_REMOTE_NAME = "RequestPlayerM1"
@@ -417,13 +419,12 @@ function BossArenaM1Controller:_requestAttack()
 		return
 	end
 
-	local ok, response = pcall(function()
-		return requestRemote:InvokeServer(predictedAnimationName)
-	end)
+	local ok, response, timedOut = RemoteFunctionTimeout.Invoke(requestRemote, predictedAnimationName, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	self._requestInFlight = false
 
 	if not ok then
-		warnWithPrefix(string.format("RequestPlayerM1 failed: %s", tostring(response)))
+		local reason = if timedOut then "timed out" else "failed"
+		warnWithPrefix(string.format("RequestPlayerM1 %s: %s", reason, tostring(response)))
 		self:_clearActiveSwing(true)
 		return
 	end

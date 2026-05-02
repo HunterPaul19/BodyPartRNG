@@ -359,12 +359,9 @@ local DEFINITIONS: { QuestDefinition } = {
 					{
 						id = "talk_to_crafter",
 						kind = "event",
-						eventType = "dialogue_prompt_triggered",
+						eventType = "crafting_menu_opened",
 						description = "Talk to the Crafter.",
 						targetValue = 1,
-						filters = {
-							dialogueId = "crafter_default",
-						},
 					},
 				},
 			},

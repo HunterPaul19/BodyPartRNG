@@ -87,6 +87,9 @@
         "Premium": {
           "$path": "src/game/ReplicatedStorage/Shared/Gameplay/Premium"
         },
+        "Remotes": {
+          "$path": "src/game/ReplicatedStorage/Shared/Platform/Remotes"
+        },
         "Rolling": {
           "$path": "src/game/ReplicatedStorage/Shared/Gameplay/Rolling"
         },

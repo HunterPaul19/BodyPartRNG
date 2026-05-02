@@ -7,6 +7,7 @@ local RunService = game:GetService("RunService")
 local DialogueDefinitions = require(ReplicatedStorage.Shared.Config.DialogueDefinitions)
 local DefinitionUtil = require(ReplicatedStorage.Shared.Gameplay.Dialogue.DefinitionUtil)
 local DialogueRegistry = require(ReplicatedStorage.Shared.Gameplay.Dialogue.Registry)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
 local MainInterfaceController = require(script.Parent.MainInterfaceController)
@@ -15,6 +16,7 @@ local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local DIALOGUE_PANEL_NAME = "Dialogue"
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 local PANEL_CLOSE_DELAY = 0.12
 local TYPEWRITER_GRAPHEMES_PER_SECOND = 45
 local POSITIVE_CHOICE_COLOR = Color3.fromRGB(113, 230, 139)
@@ -648,17 +650,16 @@ function DialogueController:_runServerAction(choice: DialogueChoice, action: Dia
 		return false
 	end
 
-	local ok, result = pcall(function()
-		return remote:InvokeServer({
-			dialogueId = dialogueId,
-			nodeId = nodeId,
-			choiceId = choice.id,
-			context = self:_buildSafeActionContext(),
-		})
-	end)
+	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(remote, {
+		dialogueId = dialogueId,
+		nodeId = nodeId,
+		choiceId = choice.id,
+		context = self:_buildSafeActionContext(),
+	}, REMOTE_INVOKE_TIMEOUT_SECONDS)
 
 	if not ok then
-		Logger.Warn(string.format("[DialogueController] Server action '%s' failed: %s", tostring(action.type), tostring(result)))
+		local reason = if timedOut then "timed out" else "failed"
+		Logger.Warn(string.format("[DialogueController] Server action '%s' %s: %s", tostring(action.type), reason, tostring(result)))
 		return false
 	end
 	if typeof(result) ~= "table" or result.ok ~= true then

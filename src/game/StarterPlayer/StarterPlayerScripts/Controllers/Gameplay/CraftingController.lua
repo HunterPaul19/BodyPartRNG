@@ -18,6 +18,7 @@ local OwnedBodyParts = require(ReplicatedStorage.Shared.Character.OwnedBodyParts
 local AccessoryPresentation = require(ReplicatedStorage.Shared.UI.AccessoryPresentation)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
 local DataController = require(script.Parent.DataController)
@@ -27,6 +28,7 @@ local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local WINDOW_NAME = "CraftingMenu"
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 local REMOTES_FOLDER_NAME = "Remotes"
 local CRAFTING_FOLDER_NAME = "Crafting"
 local GET_STATE_REMOTE_NAME = "GetCraftingState"
@@ -36,6 +38,7 @@ local ADD_BODY_PART_INGREDIENT_REMOTE_NAME = "AddBodyPartIngredient"
 local ADD_MATERIAL_INGREDIENT_REMOTE_NAME = "AddMaterialIngredient"
 local ADD_ALL_ELIGIBLE_INGREDIENTS_REMOTE_NAME = "AddAllEligibleIngredients"
 local RECORD_RECIPE_OPENED_REMOTE_NAME = "RecordRecipeOpened"
+local RECORD_CRAFTING_OPENED_REMOTE_NAME = "RecordCraftingOpened"
 local BODY_PARTS_DATA_KEY = Schema.BodyParts and Schema.BodyParts.key or "bodyParts"
 local EQUIPPED_LOADOUT_KEY = Schema.EquippedLoadout and Schema.EquippedLoadout.key or "equippedLoadout"
 local ACCESSORIES_DATA_KEY = Schema.Accessories and Schema.Accessories.key or "accessories"
@@ -86,6 +89,7 @@ type CraftingRemotes = {
 	addMaterialIngredient: RemoteFunction,
 	addAllEligibleIngredients: RemoteFunction,
 	recordRecipeOpened: RemoteFunction,
+	recordCraftingOpened: RemoteFunction,
 }
 
 type CraftingUi = {
@@ -1209,6 +1213,7 @@ function CraftingController:_ensureRemotes(): boolean
 		and self._remotes.addMaterialIngredient
 		and self._remotes.addAllEligibleIngredients
 		and self._remotes.recordRecipeOpened
+		and self._remotes.recordCraftingOpened
 	then
 		return true
 	end
@@ -1230,6 +1235,7 @@ function CraftingController:_ensureRemotes(): boolean
 	local addMaterialIngredient = craftingFolder:FindFirstChild(ADD_MATERIAL_INGREDIENT_REMOTE_NAME)
 	local addAllEligibleIngredients = craftingFolder:FindFirstChild(ADD_ALL_ELIGIBLE_INGREDIENTS_REMOTE_NAME)
 	local recordRecipeOpened = craftingFolder:FindFirstChild(RECORD_RECIPE_OPENED_REMOTE_NAME)
+	local recordCraftingOpened = craftingFolder:FindFirstChild(RECORD_CRAFTING_OPENED_REMOTE_NAME)
 	if not (getState and getState:IsA("RemoteFunction")) then
 		return false
 	end
@@ -1251,6 +1257,9 @@ function CraftingController:_ensureRemotes(): boolean
 	if not (recordRecipeOpened and recordRecipeOpened:IsA("RemoteFunction")) then
 		return false
 	end
+	if not (recordCraftingOpened and recordCraftingOpened:IsA("RemoteFunction")) then
+		return false
+	end
 
 	self._remotes = {
 		getState = getState,
@@ -1260,20 +1269,16 @@ function CraftingController:_ensureRemotes(): boolean
 		addMaterialIngredient = addMaterialIngredient,
 		addAllEligibleIngredients = addAllEligibleIngredients,
 		recordRecipeOpened = recordRecipeOpened,
+		recordCraftingOpened = recordCraftingOpened,
 	}
 	return true
 end
 
 function CraftingController:_invokeRemote(remote: RemoteFunction, payload: any?): any?
-	local ok, result = pcall(function()
-		if payload ~= nil then
-			return remote:InvokeServer(payload)
-		end
-		return remote:InvokeServer()
-	end)
-
+	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(remote, payload, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	if not ok then
-		Logger.Warn(string.format("[CraftingController] Remote %s failed: %s", remote.Name, tostring(result)))
+		local reason = if timedOut then "timed out" else "failed"
+		Logger.Warn(string.format("[CraftingController] Remote %s %s: %s", remote.Name, reason, tostring(result)))
 		return nil
 	end
 
@@ -1933,6 +1938,14 @@ function CraftingController:_recordRecipeOpened(recipeId: string)
 	})
 end
 
+function CraftingController:_recordCraftingOpened()
+	if not self:_ensureRemotes() then
+		return
+	end
+
+	self:_invokeRemote(self._remotes.recordCraftingOpened)
+end
+
 function CraftingController:_addBodyPartIngredientRow(recipe: any, ingredient: any, layoutOrder: number)
 	local ui = self:_ensureUi()
 	if not ui.ingredientList or not ui.bodyPartIngredientTemplate then
@@ -2432,6 +2445,7 @@ function CraftingController:_openCraftingMenu(prompt: ProximityPrompt)
 		crispContent = true,
 		preserveRootLayout = true,
 	})
+	self:_recordCraftingOpened()
 	ObjectiveGuideController.ClearObjective("crafting")
 	ObjectiveGuideController.ClearObjective("stan_crafting_intro_guide")
 end

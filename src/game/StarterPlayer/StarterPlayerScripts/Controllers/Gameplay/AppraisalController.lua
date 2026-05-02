@@ -19,6 +19,7 @@ local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
 local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local BodyPartPresentation = require(ReplicatedStorage.Shared.UI.BodyPartPresentation)
 local ConfirmationWarning = require(ReplicatedStorage.Shared.UI.ConfirmationWarning)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 local RollWarningNotifier = require(ReplicatedStorage.Shared.UI.RollWarningNotifier)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
@@ -29,6 +30,7 @@ local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local WINDOW_NAME = "AppraisalUI"
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 local REMOTES_FOLDER_NAME = "Remotes"
 local APPRAISAL_FOLDER_NAME = "Appraisal"
 local GET_STATE_REMOTE_NAME = "GetState"
@@ -791,15 +793,10 @@ function AppraisalController:_ensureRemotes(): boolean
 end
 
 function AppraisalController:_invokeRemote(remote: RemoteFunction, payload: any?): any?
-	local ok, result = pcall(function()
-		if payload ~= nil then
-			return remote:InvokeServer(payload)
-		end
-
-		return remote:InvokeServer()
-	end)
+	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(remote, payload, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	if not ok then
-		Logger.Warn(string.format("[AppraisalController] Remote %s failed: %s", remote.Name, tostring(result)))
+		local reason = if timedOut then "timed out" else "failed"
+		Logger.Warn(string.format("[AppraisalController] Remote %s %s: %s", remote.Name, reason, tostring(result)))
 		return nil
 	end
 
@@ -1110,6 +1107,11 @@ end
 
 function AppraisalController:IsOpen(): boolean
 	return self._isOpen == true
+end
+
+function AppraisalController:HasSelectedBodyPart(): boolean
+	self:_ensureState()
+	return self:_getSelectedEntry() ~= nil
 end
 
 return AppraisalController

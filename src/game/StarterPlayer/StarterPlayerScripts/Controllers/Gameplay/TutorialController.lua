@@ -8,6 +8,7 @@ local ObjectiveGuideController = require(script.Parent.ObjectiveGuideController)
 local RollController = require(script.Parent.RollController)
 local DataController = require(script.Parent.DataController)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 local ScreenDarkener = require(ReplicatedStorage.Shared.UI.ScreenDarkener)
 local TutorialConfig = require(ReplicatedStorage.Shared.Config.TutorialConfig)
 local TutorialState = require(ReplicatedStorage.Shared.Character.TutorialState)
@@ -15,7 +16,9 @@ local TutorialTextGui = require(ReplicatedStorage.Shared.UI.TutorialTextGui)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local REMOTE_TIMEOUT = 30
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 local OBJECTIVE_ID = "new_player_tutorial"
+local INPUT_CAPTURE_FAILSAFE_SECONDS = 30
 
 local TutorialController = {
 	_started = false,
@@ -32,6 +35,8 @@ local TutorialController = {
 	_welcomeInputConnections = {},
 	_welcomeIntentListening = false,
 	_welcomeAdvanceRequested = false,
+	_darkenerCapturingInput = false,
+	_darkenerCaptureToken = 0,
 }
 
 local function waitForLoadingScreenDismissed()
@@ -134,11 +139,9 @@ function TutorialController:_requestAdvanceRefresh(stepId: string)
 			return
 		end
 
-		local ok, result = pcall(function()
-			return advanceRemote:InvokeServer({
-				stepId = stepId,
-			})
-		end)
+		local ok, result = RemoteFunctionTimeout.Invoke(advanceRemote, {
+			stepId = stepId,
+		}, REMOTE_INVOKE_TIMEOUT_SECONDS)
 		if ok and typeof(result) == "table" and typeof(result.state) == "table" then
 			self:_applyState(result.state)
 		end
@@ -175,11 +178,9 @@ function TutorialController:_requestWelcomeAdvance()
 			return
 		end
 
-		local ok, result = pcall(function()
-			return advanceRemote:InvokeServer({
-				stepId = TutorialConfig.Steps.RollFree,
-			})
-		end)
+		local ok, result = RemoteFunctionTimeout.Invoke(advanceRemote, {
+			stepId = TutorialConfig.Steps.RollFree,
+		}, REMOTE_INVOKE_TIMEOUT_SECONDS)
 		self._welcomeAdvanceRequested = false
 		if ok and typeof(result) == "table" and typeof(result.state) == "table" then
 			self:_applyState(result.state)
@@ -271,10 +272,28 @@ function TutorialController:_setDarkenerInputCapture(enabled: boolean)
 	end
 
 	local shouldCaptureInput = enabled == true and UserInputService.TouchEnabled ~= true
+	if self._darkenerCapturingInput == shouldCaptureInput then
+		return
+	end
+
+	self._darkenerCapturingInput = shouldCaptureInput
+	self._darkenerCaptureToken += 1
+	local captureToken = self._darkenerCaptureToken
+
 	for _, frame in ipairs({ darkener.TopFrame, darkener.BottomFrame, darkener.LeftFrame, darkener.RightFrame }) do
 		if frame and frame:IsA("GuiObject") then
 			frame.Active = shouldCaptureInput
 		end
+	end
+
+	if shouldCaptureInput then
+		task.delay(INPUT_CAPTURE_FAILSAFE_SECONDS, function()
+			if self._darkenerCaptureToken ~= captureToken or self._darkenerCapturingInput ~= true then
+				return
+			end
+
+			self:_clearSpotlight()
+		end)
 	end
 end
 
@@ -496,9 +515,7 @@ function TutorialController:_refreshFromServer()
 		return
 	end
 
-	local ok, result = pcall(function()
-		return getStateRemote:InvokeServer()
-	end)
+	local ok, result = RemoteFunctionTimeout.Invoke(getStateRemote, nil, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	if ok and typeof(result) == "table" and typeof(result.state) == "table" then
 		self:_applyState(result.state)
 	end

@@ -24,6 +24,7 @@ FrameController.ClosedBottomPadding = 32
 
 local MENU_OPEN_SOUND_NAME = "MenuOpen"
 local MENU_CLOSE_SOUND_NAME = "MenuClose"
+local FRAME_TWEEN_WATCHDOG_BUFFER_SECONDS = 0.35
 
 local function warnf(message: string, ...)
 	Logger.Warn(string.format("[FrameController] " .. message, ...))
@@ -361,6 +362,32 @@ function FrameController:_cancelTweens()
 	self:_cancelOverlayTweens()
 end
 
+function FrameController:_scheduleFrameTweenWatchdog(frame: GuiObject, mode: string, tweenInfo: TweenInfo)
+	local expectedFrame = frame
+	local deadline = os.clock() + tweenInfo.Time + FRAME_TWEEN_WATCHDOG_BUFFER_SECONDS
+	task.spawn(function()
+		while self._currentFrame == expectedFrame and self._transitionMode == mode and os.clock() < deadline do
+			task.wait()
+		end
+
+		if self._currentFrame ~= expectedFrame or self._transitionMode ~= mode then
+			return
+		end
+
+		warnf("Forcing modal frame '%s' to finish a stuck %s transition.", expectedFrame.Name, mode)
+		if mode == "opening" then
+			local state = self:_getFrameState(expectedFrame)
+			expectedFrame.Position = state.OpenPosition
+			expectedFrame.Size = state.OpenSize
+			self._transitionMode = nil
+			self._pendingOpen = nil
+			self._pendingOpenOptions = nil
+		elseif mode == "closing" then
+			self:_forceCloseCurrent(true)
+		end
+	end)
+end
+
 function FrameController:_setOverlayState(visible: boolean, instant: boolean?)
 	local backdrop, vignette = self:_ensureOverlay()
 	if not backdrop then
@@ -607,6 +634,7 @@ function FrameController:_beginOpen(name: string, frame: GuiObject, options: { u
 	end)
 
 	self._frameTween:Play()
+	self:_scheduleFrameTweenWatchdog(frame, "opening", self.OpenTween)
 	return true
 end
 
@@ -688,6 +716,7 @@ function FrameController:_beginClose()
 	end)
 
 	self._frameTween:Play()
+	self:_scheduleFrameTweenWatchdog(frame, "closing", self.CloseTween)
 
 	if name then
 		return true
@@ -771,8 +800,6 @@ function FrameController:ToggleFrame(name: string): boolean
 
 	if self._currentName == name and self._currentFrame then
 		if self._transitionMode == "closing" then
-			self._pendingOpen = name
-			self._pendingOpenOptions = nil
 			return true
 		end
 

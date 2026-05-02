@@ -70,4 +70,16 @@ function RollController:IsRollPresentationPending(): boolean
 	return self._guiControls:IsRollPresentationPending() == true
 end
 
+function RollController:GetSelectedRollTypeId(): string?
+	if not self._guiControls then
+		return nil
+	end
+	if typeof(self._guiControls.GetSelectedRollTypeId) ~= "function" then
+		return nil
+	end
+
+	local rollTypeId = self._guiControls:GetSelectedRollTypeId()
+	return if typeof(rollTypeId) == "string" then rollTypeId else nil
+end
+
 return RollController

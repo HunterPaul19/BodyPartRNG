@@ -12,11 +12,13 @@ local PotionRuntimeBonuses = require(ReplicatedStorage.Shared.Character.PotionRu
 local Schema = require(ReplicatedStorage.Lists.Schema)
 local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 local ToggleSoundUtil = require(ReplicatedStorage.Shared.Audio.ToggleSoundUtil)
 local PotionPresentation = require(ReplicatedStorage.Shared.UI.PotionPresentation)
 local DataController = require(script.Parent.DataController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 local POTIONS_DATA_KEY = Schema.Potions and Schema.Potions.key or "potions"
 local REMOTES_FOLDER_NAME = "Remotes"
 local POTIONS_REMOTES_FOLDER_NAME = "Potions"
@@ -552,15 +554,10 @@ function PotionController:_applyServerState(state: any)
 end
 
 function PotionController:_invokeRemote(remote: RemoteFunction, payload: any?): any?
-	local ok, result = pcall(function()
-		if payload ~= nil then
-			return remote:InvokeServer(payload)
-		end
-
-		return remote:InvokeServer()
-	end)
+	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(remote, payload, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	if not ok then
-		Logger.Warn(string.format("[PotionController] Remote %s failed: %s", remote.Name, tostring(result)))
+		local reason = if timedOut then "timed out" else "failed"
+		Logger.Warn(string.format("[PotionController] Remote %s %s: %s", remote.Name, reason, tostring(result)))
 		return nil
 	end
 

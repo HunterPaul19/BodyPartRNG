@@ -7,8 +7,10 @@ local RunService = game:GetService("RunService")
 local Icon = require(ReplicatedStorage.Packages.TopBarPlus)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 
 local LOCAL_PLAYER = Players.LocalPlayer
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 local REMOTES_FOLDER_NAME = "Remotes"
 local BOSS_ARENA_FOLDER_NAME = "BossArena"
 local REQUEST_ABANDON_REMOTE_NAME = "RequestAbandonEncounter"
@@ -60,15 +62,14 @@ local function isAbandonableTimerState(state: any): boolean
 end
 
 local function invokeTimerState(remote: RemoteFunction): BossTimerState?
-	local ok, result = pcall(function()
-		return remote:InvokeServer()
-	end)
+	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(remote, nil, REMOTE_INVOKE_TIMEOUT_SECONDS)
 
 	if ok then
 		return result
 	end
 
-	warnWithPrefix(string.format("Remote %s failed: %s", remote.Name, tostring(result)))
+	local reason = if timedOut then "timed out" else "failed"
+	warnWithPrefix(string.format("Remote %s %s: %s", remote.Name, reason, tostring(result)))
 	return nil
 end
 
@@ -168,15 +169,14 @@ function BossArenaAbandonController:_requestAbandon()
 	self._requestInFlight = true
 	self:_setIconsLocked(true)
 
-	local ok, response = pcall(function()
-		return remotes.requestAbandon:InvokeServer()
-	end)
+	local ok, response, timedOut = RemoteFunctionTimeout.Invoke(remotes.requestAbandon, nil, REMOTE_INVOKE_TIMEOUT_SECONDS)
 
 	self._requestInFlight = false
 	self:_setIconsLocked(false)
 
 	if not ok then
-		warnWithPrefix(string.format("RequestAbandonEncounter failed: %s", tostring(response)))
+		local reason = if timedOut then "timed out" else "failed"
+		warnWithPrefix(string.format("RequestAbandonEncounter %s: %s", reason, tostring(response)))
 		Notify.Show("Failed to abandon the boss encounter.", {
 			title = "Boss",
 			channel = "system",

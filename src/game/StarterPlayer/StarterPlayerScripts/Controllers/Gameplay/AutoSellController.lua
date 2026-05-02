@@ -7,9 +7,11 @@ local DataController = require(script.Parent.DataController)
 local FrameController = require(script.Parent.FrameController)
 local UIController = require(script.Parent.UIController)
 local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 local ToggleSoundUtil = require(ReplicatedStorage.Shared.Audio.ToggleSoundUtil)
 
 local LOCAL_PLAYER = Players.LocalPlayer
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 local WINDOW_NAME = "AutoSell"
 local AUTO_SELL_DATA_KEY = "autoSellRarities"
 local CUTSCENE_DATA_KEY = "cutsceneRarities"
@@ -101,15 +103,14 @@ function AutoSellController:_toggleRarity(rarity: string, enabled: boolean)
 		return
 	end
 
-	local ok, result = pcall(function()
-		return self._autoSellToggleRemote:InvokeServer({
-			rarity = rarity,
-			enabled = enabled == true,
-		})
-	end)
+	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(self._autoSellToggleRemote, {
+		rarity = rarity,
+		enabled = enabled == true,
+	}, REMOTE_INVOKE_TIMEOUT_SECONDS)
 
 	if not ok then
-		Logger.Warn(string.format("[AutoSellController] Failed to toggle %s auto-sell: %s", rarity, tostring(result)))
+		local reason = if timedOut then "timed out" else "failed"
+		Logger.Warn(string.format("[AutoSellController] Failed to toggle %s auto-sell; remote %s: %s", rarity, reason, tostring(result)))
 		return
 	end
 
@@ -130,15 +131,14 @@ function AutoSellController:_toggleCutsceneRarity(rarity: string, enabled: boole
 		return
 	end
 
-	local ok, result = pcall(function()
-		return self._cutsceneToggleRemote:InvokeServer({
-			rarity = rarity,
-			enabled = enabled ~= false,
-		})
-	end)
+	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(self._cutsceneToggleRemote, {
+		rarity = rarity,
+		enabled = enabled ~= false,
+	}, REMOTE_INVOKE_TIMEOUT_SECONDS)
 
 	if not ok then
-		Logger.Warn(string.format("[AutoSellController] Failed to toggle %s cutscenes: %s", rarity, tostring(result)))
+		local reason = if timedOut then "timed out" else "failed"
+		Logger.Warn(string.format("[AutoSellController] Failed to toggle %s cutscenes; remote %s: %s", rarity, reason, tostring(result)))
 		return
 	end
 

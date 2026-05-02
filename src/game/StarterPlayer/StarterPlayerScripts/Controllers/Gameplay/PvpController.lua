@@ -12,11 +12,13 @@ local CameraShaker = require(ReplicatedStorage.Shared.Camera.CameraShaker)
 local PlayerM1AnimationResolver = require(ReplicatedStorage.Shared.BossArena.PlayerM1AnimationResolver)
 local PlayerM1Config = require(ReplicatedStorage.Shared.BossArena.PlayerM1Config)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 local Signal = require(ReplicatedStorage.Common.Signal)
 local ToggleSoundUtil = require(ReplicatedStorage.Shared.Audio.ToggleSoundUtil)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local ACTIVE_PROFILE_ID = "main"
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 4
 local REMOTES_FOLDER_NAME = "Remotes"
 local PVP_FOLDER_NAME = "PvP"
 local GET_PVP_STATE_REMOTE_NAME = "GetPvpState"
@@ -330,11 +332,10 @@ function PvpController:_refreshState()
 		return
 	end
 
-	local ok, result = pcall(function()
-		return remotes.getState:InvokeServer()
-	end)
+	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(remotes.getState, nil, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	if not ok then
-		warnWithPrefix(string.format("GetPvpState failed: %s", tostring(result)))
+		local reason = if timedOut then "timed out" else "failed"
+		warnWithPrefix(string.format("GetPvpState %s: %s", reason, tostring(result)))
 		return
 	end
 
@@ -589,13 +590,12 @@ function PvpController:_requestAttack()
 		return
 	end
 
-	local ok, response = pcall(function()
-		return requestM1:InvokeServer(predictedAnimationName)
-	end)
+	local ok, response, timedOut = RemoteFunctionTimeout.Invoke(requestM1, predictedAnimationName, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	self._requestInFlight = false
 
 	if not ok then
-		warnWithPrefix(string.format("RequestPlayerM1 failed: %s", tostring(response)))
+		local reason = if timedOut then "timed out" else "failed"
+		warnWithPrefix(string.format("RequestPlayerM1 %s: %s", reason, tostring(response)))
 		self:_clearActiveSwing(true)
 		return
 	end
@@ -734,14 +734,13 @@ function PvpController:_bindToggleButton()
 		end
 
 		local previousEnabled = self._enabled == true
-		local ok, response = pcall(function()
-			return remotes.setEnabled:InvokeServer({
-				enabled = not previousEnabled,
-			})
-		end)
+		local ok, response, timedOut = RemoteFunctionTimeout.Invoke(remotes.setEnabled, {
+			enabled = not previousEnabled,
+		}, REMOTE_INVOKE_TIMEOUT_SECONDS)
 
 		if not ok then
-			warnWithPrefix(string.format("SetPvpEnabled failed: %s", tostring(response)))
+			local reason = if timedOut then "timed out" else "failed"
+			warnWithPrefix(string.format("SetPvpEnabled %s: %s", reason, tostring(response)))
 			return
 		end
 

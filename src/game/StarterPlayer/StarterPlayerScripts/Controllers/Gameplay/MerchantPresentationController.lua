@@ -31,6 +31,8 @@ local TRANSITION_OVERLAY_MIN_Z_INDEX = 100
 local CAMERA_OFFSET_X = 0.35
 local CAMERA_OFFSET_Y = 0.18
 local CAMERA_RESPONSE = 11
+local TWEEN_WAIT_BUFFER_SECONDS = 0.35
+local FRAME_CLOSE_WAIT_BUFFER_SECONDS = 0.25
 
 type OpenOptions = {
 	cameraPart: BasePart?,
@@ -114,8 +116,35 @@ end
 
 local function tweenAsync(instance: Instance, tweenInfo: TweenInfo, goal: { [string]: any }): Tween
 	local tween = TweenService:Create(instance, tweenInfo, goal)
+	local completed = false
+	local connection: RBXScriptConnection?
+	connection = tween.Completed:Connect(function()
+		completed = true
+		if connection then
+			connection:Disconnect()
+			connection = nil
+		end
+	end)
+
 	tween:Play()
-	tween.Completed:Wait()
+	local deadline = os.clock() + tweenInfo.Time + TWEEN_WAIT_BUFFER_SECONDS
+	while not completed and os.clock() < deadline do
+		task.wait()
+	end
+
+	if connection then
+		connection:Disconnect()
+	end
+
+	if not completed then
+		tween:Cancel()
+		for property, value in pairs(goal) do
+			pcall(function()
+				(instance :: any)[property] = value
+			end)
+		end
+	end
+
 	return tween
 end
 
@@ -742,7 +771,10 @@ end
 function MerchantPresentationController:_midpointClose(frameName: string?)
 	if frameName then
 		FrameController:CloseFrame(frameName)
-		task.wait(FrameController.CloseTween.Time)
+		local deadline = os.clock() + FrameController.CloseTween.Time + FRAME_CLOSE_WAIT_BUFFER_SECONDS
+		while FrameController:IsOpen(frameName) and os.clock() < deadline do
+			task.wait()
+		end
 	end
 	self:_restorePresentationState()
 end
@@ -774,7 +806,10 @@ function MerchantPresentationController:Open(frameName: string, options: OpenOpt
 	end
 
 	if self._isOpen then
-		self:Close()
+		local closed = self:Close()
+		if not closed then
+			self:_recoverTransition("pre-open close", "Existing presentation did not close.", self._activeFrameName)
+		end
 	end
 
 	local root = self:_getShopRoot(frameName)

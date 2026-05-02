@@ -11,8 +11,10 @@ local CombatSoundUtil = require(ReplicatedStorage.Shared.Audio.CombatSoundUtil)
 local GameAssetPaths = require(ReplicatedStorage.Shared.Assets.GameAssetPaths)
 local GameAssetResolver = require(ReplicatedStorage.Shared.Assets.GameAssetResolver)
 local DashStateRules = require(ReplicatedStorage.Shared.Combat.DashStateRules)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 
 local LOCAL_PLAYER = Players.LocalPlayer
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 4
 local DASH_ANIMATION_NAME = "Dash"
 local DASH_ANIMATION_ID = "rbxassetid://80201492192726"
 local DASH_START_SPEED = 165
@@ -506,13 +508,12 @@ function DashController:RequestDash(input: InputObject?)
 
 	local requestedDirection = self:_resolveDashDirection(input)
 	self._requestInFlight = true
-	local ok, response = pcall(function()
-		return requestRemote:InvokeServer(requestedDirection)
-	end)
+	local ok, response, timedOut = RemoteFunctionTimeout.Invoke(requestRemote, requestedDirection, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	self._requestInFlight = false
 
 	if not ok then
-		warnWithPrefix(string.format("RequestDash failed: %s", tostring(response)))
+		local reason = if timedOut then "timed out" else "failed"
+		warnWithPrefix(string.format("RequestDash %s: %s", reason, tostring(response)))
 		return
 	end
 	if typeof(response) ~= "table" or response.ok ~= true then

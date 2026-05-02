@@ -7,11 +7,13 @@ local ChestOpeningSequence = require(ReplicatedStorage.Shared.UI.ChestOpeningSeq
 local DailyChestConfig = require(ReplicatedStorage.Shared.Config.DailyChestConfig)
 local DataController = require(script.Parent.DataController)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 local TutorialTextGui = require(ReplicatedStorage.Shared.UI.TutorialTextGui)
 local TutorialState = require(ReplicatedStorage.Shared.Character.TutorialState)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local CLAIM_REMOTE_TIMEOUT = 30
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 
 local DailyChestController = {
 	_started = false,
@@ -110,13 +112,13 @@ function DailyChestController:_claimEligibleChests(): boolean
 		return false
 	end
 
-	local ok, result = pcall(function()
-		return claimRemote:InvokeServer({
-			localUtcOffsetMinutes = getLocalUtcOffsetMinutes(),
-		})
-	end)
+	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(claimRemote, {
+		localUtcOffsetMinutes = getLocalUtcOffsetMinutes(),
+	}, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	if not ok then
-		Logger.Warn("[DailyChestController] Daily chest claim failed: " .. tostring(result))
+		local reason = if timedOut then "timed out" else "failed"
+		Logger.Warn("[DailyChestController] Daily chest claim " .. reason .. ": " .. tostring(result))
+		self._claimStarted = false
 		return true
 	end
 	if typeof(result) ~= "table" or result.ok ~= true then

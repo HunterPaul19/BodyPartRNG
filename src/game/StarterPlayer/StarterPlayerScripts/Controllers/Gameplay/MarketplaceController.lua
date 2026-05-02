@@ -10,8 +10,10 @@ local UIController = require(script.Parent.UIController)
 local LocalizationKeys = require(ReplicatedStorage.Shared.Localization.Keys)
 local TranslationHelper = require(ReplicatedStorage.Shared.Localization.TranslationHelper)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 
 local LOCAL_PLAYER = Players.LocalPlayer
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 local TAG_NAME = "marketplace"
 local PRICE_LABEL_TAG_NAME = "marketplace_price_label"
 local MODAL_NAME = "Gifting"
@@ -258,9 +260,7 @@ function MarketplaceController:_getOfferInfo(offerKey: string)
 	end
 
 	local remotes = self:_getRemotes()
-	local ok, result = pcall(function()
-		return remotes.getOfferInfo:InvokeServer(offerKeyString)
-	end)
+	local ok, result = RemoteFunctionTimeout.Invoke(remotes.getOfferInfo, offerKeyString, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	if not ok then
 		return nil, tostring(result)
 	end
@@ -381,9 +381,7 @@ function MarketplaceController:_getOfferPresentations(offerKeys: { string })
 	end
 
 	local remotes = self:_getRemotes()
-	local ok, result = pcall(function()
-		return remotes.getOfferPresentations:InvokeServer(offerKeys)
-	end)
+	local ok, result = RemoteFunctionTimeout.Invoke(remotes.getOfferPresentations, offerKeys, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	if not ok then
 		return nil, tostring(result)
 	end
@@ -712,9 +710,7 @@ end
 
 function MarketplaceController:_invokePromptOfferPurchase(offerKey: string): (boolean, string?, boolean)
 	local remotes = self:_getRemotes()
-	local ok, result = pcall(function()
-		return remotes.promptOfferPurchase:InvokeServer(offerKey)
-	end)
+	local ok, result = RemoteFunctionTimeout.Invoke(remotes.promptOfferPurchase, offerKey, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	if not ok then
 		return false, tostring(result), false
 	end
@@ -727,12 +723,10 @@ end
 
 function MarketplaceController:_invokePromptGiftPurchase(offerKey: string, recipientUserId: number): (boolean, string?)
 	local remotes = self:_getRemotes()
-	local ok, result = pcall(function()
-		return remotes.promptGiftPurchase:InvokeServer({
-			offerKey = offerKey,
-			recipientUserId = recipientUserId,
-		})
-	end)
+	local ok, result = RemoteFunctionTimeout.Invoke(remotes.promptGiftPurchase, {
+		offerKey = offerKey,
+		recipientUserId = recipientUserId,
+	}, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	if not ok then
 		return false, tostring(result)
 	end

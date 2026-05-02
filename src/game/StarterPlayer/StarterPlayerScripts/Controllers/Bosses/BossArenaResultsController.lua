@@ -10,8 +10,10 @@ local ChestOpeningSequence = require(ReplicatedStorage.Shared.UI.ChestOpeningSeq
 local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 
 local LOCAL_PLAYER = Players.LocalPlayer
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 local REMOTES_FOLDER_NAME = "Remotes"
 local BOSS_ARENA_FOLDER_NAME = "BossArena"
 local GET_RESULTS_STATE_REMOTE_NAME = "GetResultsState"
@@ -594,16 +596,15 @@ function BossArenaResultsController:_renderState(state: BossResultsState?)
 	self:_renderResultsFrame(normalizedState)
 end
 
-function BossArenaResultsController:_invokeResponse(remote: RemoteFunction, ...): any?
-	local ok, response = pcall(function(...)
-		return remote:InvokeServer(...)
-	end, ...)
+function BossArenaResultsController:_invokeResponse(remote: RemoteFunction, payload: any?): any?
+	local ok, response, timedOut = RemoteFunctionTimeout.Invoke(remote, payload, REMOTE_INVOKE_TIMEOUT_SECONDS)
 
 	if ok then
 		return response
 	end
 
-	warnWithPrefix(string.format("Remote %s failed: %s", remote.Name, tostring(response)))
+	local reason = if timedOut then "timed out" else "failed"
+	warnWithPrefix(string.format("Remote %s %s: %s", remote.Name, reason, tostring(response)))
 	Notify.Show("The boss results request failed.", {
 		title = "Boss",
 		channel = "system",

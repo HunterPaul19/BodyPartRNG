@@ -23,6 +23,7 @@ MainInterfaceController.PanelNames = {
 
 local MENU_OPEN_SOUND_NAME = "MenuOpen"
 local MENU_CLOSE_SOUND_NAME = "MenuClose"
+local TRANSITION_WAIT_TIMEOUT_SECONDS = 1
 
 local function setGuiObjectEnabled(guiObject: GuiObject?, isEnabled: boolean)
 	if not guiObject then
@@ -34,6 +35,20 @@ local function setGuiObjectEnabled(guiObject: GuiObject?, isEnabled: boolean)
 	if guiObject:IsA("GuiButton") then
 		guiObject.AutoButtonColor = isEnabled
 	end
+end
+
+local function waitForPanelTransition(panelInfo): boolean
+	local deadline = os.clock() + TRANSITION_WAIT_TIMEOUT_SECONDS
+	while panelInfo.currentlyTransitioning and os.clock() < deadline do
+		task.wait()
+	end
+
+	if panelInfo.currentlyTransitioning then
+		panelInfo.currentlyTransitioning = false
+		return false
+	end
+
+	return true
 end
 
 function MainInterfaceController:_ensureState()
@@ -223,9 +238,7 @@ function MainInterfaceController:OpenPanel(panelName: string, forceOpen: boolean
 
 		if found.currentlyTransitioning then
 			if forceOpen then
-				repeat
-					task.wait()
-				until not found.currentlyTransitioning
+				waitForPanelTransition(found)
 			else
 				return
 			end
@@ -268,9 +281,7 @@ function MainInterfaceController:ClosePanel(panelName: string, forceClose: boole
 
 		if found.currentlyTransitioning then
 			if forceClose then
-				repeat
-					task.wait()
-				until not found.currentlyTransitioning
+				waitForPanelTransition(found)
 			else
 				return
 			end

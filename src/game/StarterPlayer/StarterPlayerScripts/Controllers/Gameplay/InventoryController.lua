@@ -33,6 +33,7 @@ local ConfirmationWarning = require(ReplicatedStorage.Shared.UI.ConfirmationWarn
 local MaterialPresentation = require(ReplicatedStorage.Shared.UI.MaterialPresentation)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
 local PotionPresentation = require(ReplicatedStorage.Shared.UI.PotionPresentation)
+local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 local ToggleSoundUtil = require(ReplicatedStorage.Shared.Audio.ToggleSoundUtil)
 local DataController = require(script.Parent.DataController)
@@ -43,6 +44,7 @@ local UIController = require(script.Parent.UIController)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local WINDOW_NAME = "Inventory"
+local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
 local BODY_PARTS_DATA_KEY = "bodyParts"
 local PREMIUM_MOVEMENT_MULTIPLIER_ATTR = "PremiumMovementSpeedMultiplier"
 local AURA_DATA_KEY = "auras"
@@ -326,6 +328,16 @@ local function showNotification(text: string)
 		channel = "inventory",
 		duration = 4,
 	})
+end
+
+local function invokeInventoryRemote(remote: RemoteFunction, payload: any?): (boolean, any)
+	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(remote, payload, REMOTE_INVOKE_TIMEOUT_SECONDS)
+	if not ok then
+		local reason = if timedOut then "timed out" else "failed"
+		Logger.Warn(string.format("[InventoryController] Remote %s %s: %s", remote.Name, reason, tostring(result)))
+	end
+
+	return ok, result
 end
 
 local toRichTextColor = BodyPartPresentation.ToRichTextColor
@@ -2631,11 +2643,9 @@ function InventoryController:_toggleAutoSize()
 		return
 	end
 
-	local ok, result = pcall(function()
-		return self._remotes.setAutoSizeEnabled:InvokeServer({
-			enabled = not self:_getResolvedAutoSizeEnabled(),
-		})
-	end)
+	local ok, result = invokeInventoryRemote(self._remotes.setAutoSizeEnabled, {
+		enabled = not self:_getResolvedAutoSizeEnabled(),
+	})
 
 	if not ok then
 		Logger.Warn(string.format("[InventoryController] Failed to toggle regular scale: %s", tostring(result)))
@@ -2675,13 +2685,10 @@ function InventoryController:_equipBestLoadout()
 		return
 	end
 
-	local ok, result = pcall(function()
-		return self._remotes.equipBest:InvokeServer()
-	end)
+	local ok, result = invokeInventoryRemote(self._remotes.equipBest, nil)
 
 	if not ok then
 		showNotification("Equip best failed. Check the output for details.")
-		Logger.Warn(string.format("[InventoryController] Equip best invoke failed: %s", tostring(result)))
 		return
 	end
 
@@ -4345,12 +4352,10 @@ function InventoryController:_equipSelectedOwnedItem()
 		self._auraActionInFlight = true
 		self:_syncActionButton()
 
-		local ok, result = pcall(function()
-			return self._remotes.auraEquip:InvokeServer({
-				action = requestedAction,
-				ownedId = requestedOwnedId,
-			})
-		end)
+		local ok, result = invokeInventoryRemote(self._remotes.auraEquip, {
+			action = requestedAction,
+			ownedId = requestedOwnedId,
+		})
 
 		if requestToken == self._auraActionRequestToken then
 			self._auraActionInFlight = false
@@ -4359,7 +4364,6 @@ function InventoryController:_equipSelectedOwnedItem()
 
 		if not ok then
 			showNotification("Aura action failed. Check the output for details.")
-			Logger.Warn(string.format("[InventoryController] Aura action invoke failed: %s", tostring(result)))
 			return
 		end
 
@@ -4402,17 +4406,15 @@ function InventoryController:_equipSelectedOwnedItem()
 		self._accessoryActionInFlight = true
 		self:_syncActionButton()
 
-		local ok, result = pcall(function()
-			if requestedAction == "unequip" then
-				return self._remotes.accessoryUnequip:InvokeServer({
-					slot = requestedSlot,
-				})
-			end
-
-			return self._remotes.accessoryEquip:InvokeServer({
+		local remote = if requestedAction == "unequip" then self._remotes.accessoryUnequip else self._remotes.accessoryEquip
+		local payload = if requestedAction == "unequip"
+			then {
+				slot = requestedSlot,
+			}
+			else {
 				ownedId = requestedOwnedId,
-			})
-		end)
+			}
+		local ok, result = invokeInventoryRemote(remote, payload)
 
 		if requestToken == self._accessoryActionRequestToken then
 			self._accessoryActionInFlight = false
@@ -4421,7 +4423,6 @@ function InventoryController:_equipSelectedOwnedItem()
 
 		if not ok then
 			showNotification("Accessory action failed. Check the output for details.")
-			Logger.Warn(string.format("[InventoryController] Accessory action invoke failed: %s", tostring(result)))
 			return
 		end
 
@@ -4463,17 +4464,14 @@ function InventoryController:_equipSelectedOwnedItem()
 		return
 	end
 
-	local ok, result = pcall(function()
-		return self._remotes.equip:InvokeServer({
-			ownedId = selectedOwnedId,
-			scale = tonumber(ownedRecord.sizeMultiplier) or 1,
-			applyVisuals = true,
-		})
-	end)
+	local ok, result = invokeInventoryRemote(self._remotes.equip, {
+		ownedId = selectedOwnedId,
+		scale = tonumber(ownedRecord.sizeMultiplier) or 1,
+		applyVisuals = true,
+	})
 
 	if not ok then
 		showNotification("Inventory equip failed. Check the output for details.")
-		Logger.Warn(string.format("[InventoryController] Equip invoke failed: %s", tostring(result)))
 		return
 	end
 
@@ -4502,15 +4500,12 @@ function InventoryController:_unequipPreviewedRegion()
 		return
 	end
 
-	local ok, result = pcall(function()
-		return self._remotes.unequip:InvokeServer({
-			region = previewState.region,
-		})
-	end)
+	local ok, result = invokeInventoryRemote(self._remotes.unequip, {
+		region = previewState.region,
+	})
 
 	if not ok then
 		showNotification("Inventory unequip failed. Check the output for details.")
-		Logger.Warn(string.format("[InventoryController] Unequip invoke failed: %s", tostring(result)))
 		return
 	end
 
@@ -4556,16 +4551,13 @@ function InventoryController:_toggleFavoriteForPreviewedItem()
 			return
 		end
 
-		local ok, result = pcall(function()
-			return self._remotes.auraToggleFavorite:InvokeServer({
-				ownedId = ownedRecord.ownedId,
-				isFavorite = nextFavoriteState,
-			})
-		end)
+		local ok, result = invokeInventoryRemote(self._remotes.auraToggleFavorite, {
+			ownedId = ownedRecord.ownedId,
+			isFavorite = nextFavoriteState,
+		})
 
 		if not ok then
 			showNotification("Aura favorite failed. Check the output for details.")
-			Logger.Warn(string.format("[InventoryController] Aura favorite invoke failed: %s", tostring(result)))
 			return
 		end
 
@@ -4597,16 +4589,13 @@ function InventoryController:_toggleFavoriteForPreviewedItem()
 			return
 		end
 
-		local ok, result = pcall(function()
-			return self._remotes.accessoryToggleFavorite:InvokeServer({
-				ownedId = ownedRecord.ownedId,
-				isFavorite = nextFavoriteState,
-			})
-		end)
+		local ok, result = invokeInventoryRemote(self._remotes.accessoryToggleFavorite, {
+			ownedId = ownedRecord.ownedId,
+			isFavorite = nextFavoriteState,
+		})
 
 		if not ok then
 			showNotification("Accessory favorite failed. Check the output for details.")
-			Logger.Warn(string.format("[InventoryController] Accessory favorite invoke failed: %s", tostring(result)))
 			return
 		end
 
@@ -4637,16 +4626,13 @@ function InventoryController:_toggleFavoriteForPreviewedItem()
 		return
 	end
 
-	local ok, result = pcall(function()
-		return self._remotes.toggleFavorite:InvokeServer({
-			ownedId = ownedRecord.ownedId,
-			isFavorite = nextFavoriteState,
-		})
-	end)
+	local ok, result = invokeInventoryRemote(self._remotes.toggleFavorite, {
+		ownedId = ownedRecord.ownedId,
+		isFavorite = nextFavoriteState,
+	})
 
 	if not ok then
 		showNotification("Inventory favorite failed. Check the output for details.")
-		Logger.Warn(string.format("[InventoryController] Favorite invoke failed: %s", tostring(result)))
 		return
 	end
 
@@ -4711,15 +4697,12 @@ function InventoryController:_confirmSellPreviewedAccessory(ownedId: string)
 		return
 	end
 
-	local ok, result = pcall(function()
-		return self._remotes.accessorySell:InvokeServer({
-			ownedId = ownedId,
-		})
-	end)
+	local ok, result = invokeInventoryRemote(self._remotes.accessorySell, {
+		ownedId = ownedId,
+	})
 
 	if not ok then
 		showNotification("Accessory sell failed. Check the output for details.")
-		Logger.Warn(string.format("[InventoryController] Accessory sell invoke failed: %s", tostring(result)))
 		return
 	end
 
@@ -4749,15 +4732,12 @@ function InventoryController:_confirmSellMaterialStack(materialId: string)
 		return
 	end
 
-	local ok, result = pcall(function()
-		return self._remotes.craftingSellMaterial:InvokeServer({
-			materialId = materialId,
-		})
-	end)
+	local ok, result = invokeInventoryRemote(self._remotes.craftingSellMaterial, {
+		materialId = materialId,
+	})
 
 	if not ok then
 		showNotification("Material sell failed. Check the output for details.")
-		Logger.Warn(string.format("[InventoryController] Material sell invoke failed: %s", tostring(result)))
 		return
 	end
 
@@ -4782,15 +4762,12 @@ function InventoryController:_confirmSellPreviewedBodyPart(ownedId: string)
 		return
 	end
 
-	local ok, result = pcall(function()
-		return self._remotes.sellOwned:InvokeServer({
-			ownedId = ownedId,
-		})
-	end)
+	local ok, result = invokeInventoryRemote(self._remotes.sellOwned, {
+		ownedId = ownedId,
+	})
 
 	if not ok then
 		showNotification("Inventory sell failed. Check the output for details.")
-		Logger.Warn(string.format("[InventoryController] Sell invoke failed: %s", tostring(result)))
 		return
 	end
 
@@ -4878,15 +4855,12 @@ function InventoryController:_confirmSellAll(selectedRarities: { [string]: boole
 		return
 	end
 
-	local ok, result = pcall(function()
-		return self._remotes.sellAll:InvokeServer({
-			rarities = selectedRarities,
-		})
-	end)
+	local ok, result = invokeInventoryRemote(self._remotes.sellAll, {
+		rarities = selectedRarities,
+	})
 
 	if not ok then
 		showNotification("Sell all failed. Check the output for details.")
-		Logger.Warn(string.format("[InventoryController] Sell all invoke failed: %s", tostring(result)))
 		return
 	end
 

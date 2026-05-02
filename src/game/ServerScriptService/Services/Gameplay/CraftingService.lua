@@ -25,6 +25,7 @@ local ADD_MATERIAL_INGREDIENT_REMOTE_NAME = "AddMaterialIngredient"
 local ADD_ALL_ELIGIBLE_INGREDIENTS_REMOTE_NAME = "AddAllEligibleIngredients"
 local SELL_MATERIAL_STACK_REMOTE_NAME = "SellCraftingMaterialStack"
 local RECORD_RECIPE_OPENED_REMOTE_NAME = "RecordRecipeOpened"
+local RECORD_CRAFTING_OPENED_REMOTE_NAME = "RecordCraftingOpened"
 
 local remotesFolder: Folder? = nil
 local craftingRemotesFolder: Folder? = nil
@@ -36,6 +37,7 @@ local addMaterialIngredientRemote: RemoteFunction? = nil
 local addAllEligibleIngredientsRemote: RemoteFunction? = nil
 local sellMaterialStackRemote: RemoteFunction? = nil
 local recordRecipeOpenedRemote: RemoteFunction? = nil
+local recordCraftingOpenedRemote: RemoteFunction? = nil
 local craftLocksByPlayer: { [Player]: boolean } = {}
 
 local CraftingService = {}
@@ -1003,6 +1005,18 @@ local function handleRecordRecipeOpened(player: Player, payload: any)
 	return response(true, "Recorded recipe open.", nil, nil)
 end
 
+local function handleRecordCraftingOpened(player: Player)
+	if not waitForPlayerData(player, 10) then
+		return response(false, "Player data is not ready yet.", nil, nil)
+	end
+
+	QuestService:RecordEvent(player, "crafting_menu_opened", {
+		amount = 1,
+	})
+
+	return response(true, "Recorded crafting open.", nil, nil)
+end
+
 function CraftingService:OnStart()
 	getStateRemote = ensureRemoteFunction(getStateRemote, GET_STATE_REMOTE_NAME)
 	craftRecipeRemote = ensureRemoteFunction(craftRecipeRemote, CRAFT_RECIPE_REMOTE_NAME)
@@ -1013,6 +1027,7 @@ function CraftingService:OnStart()
 		ensureRemoteFunction(addAllEligibleIngredientsRemote, ADD_ALL_ELIGIBLE_INGREDIENTS_REMOTE_NAME)
 	sellMaterialStackRemote = ensureRemoteFunction(sellMaterialStackRemote, SELL_MATERIAL_STACK_REMOTE_NAME)
 	recordRecipeOpenedRemote = ensureRemoteFunction(recordRecipeOpenedRemote, RECORD_RECIPE_OPENED_REMOTE_NAME)
+	recordCraftingOpenedRemote = ensureRemoteFunction(recordCraftingOpenedRemote, RECORD_CRAFTING_OPENED_REMOTE_NAME)
 
 	getStateRemote.OnServerInvoke = function(player: Player)
 		if not RequestLimiter:Allow(player, "remote.crafting.get_state") then
@@ -1068,6 +1083,13 @@ function CraftingService:OnStart()
 			return response(false, "You're opening recipes too quickly.", nil, nil)
 		end
 		return handleRecordRecipeOpened(player, payload)
+	end
+
+	recordCraftingOpenedRemote.OnServerInvoke = function(player: Player)
+		if not RequestLimiter:Allow(player, "remote.crafting.record_crafting_opened") then
+			return response(false, "You're opening crafting too quickly.", nil, nil)
+		end
+		return handleRecordCraftingOpened(player)
 	end
 end
 
