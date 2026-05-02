@@ -5,6 +5,7 @@ local Workspace = game:GetService("Workspace")
 
 local AppraisalController = require(script.Parent.AppraisalController)
 local DataController = require(script.Parent.DataController)
+local FrameController = require(script.Parent.FrameController)
 local ObjectiveGuideController = require(script.Parent.ObjectiveGuideController)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local QuestConfig = require(ReplicatedStorage.Shared.Config.QuestConfig)
@@ -212,6 +213,10 @@ local function isGuiTargetUsable(target: GuiObject?): boolean
 		and target.AbsoluteSize.Y > 0
 end
 
+local function isHudAssistBlocked(): boolean
+	return FrameController:GetOpenFrame() ~= nil
+end
+
 local function readStringAttributeFromAncestors(source: Instance?, attributeName: string): string?
 	local current = source
 	while current do
@@ -343,6 +348,9 @@ function QuestBoardOnboardingGuideController:_resolvePaidRollAssist(rawQuestStat
 		return nil
 	end
 	if RollController:GetSelectedRollTypeId() == PAID_ROLL_TYPE_ID then
+		return nil
+	end
+	if isHudAssistBlocked() then
 		return nil
 	end
 	if not RollController:PrepareTutorialTarget("roll2Selection") then

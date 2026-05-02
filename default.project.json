@@ -179,6 +179,9 @@
         "BossArenaStudioValidationService": {
           "$path": "src/game/ServerScriptService/Services/Bosses/BossArenaStudioValidationService.lua"
         },
+        "BossLobbyAnalyticsService": {
+          "$path": "src/game/ServerScriptService/Services/Bosses/BossLobbyAnalyticsService.lua"
+        },
         "BossLobbySpawnService": {
           "$path": "src/game/ServerScriptService/Services/Bosses/BossLobbySpawnService.lua"
         },

@@ -4,6 +4,9 @@ local PremiumBenefits = require(script.Parent.Parent.Premium.PremiumBenefits)
 
 local TitleUtil = {}
 
+local DEVELOPER_TAG_TEXT = "[DEVELOPER]"
+local DEVELOPER_TAG_COLOR_HEX = "#ffd166"
+
 local function normalizeOptionalString(value: any): string?
 	if typeof(value) ~= "string" then
 		return nil
@@ -61,9 +64,20 @@ function TitleUtil.IsTitleUnlocked(titleId: any, achievementState: any): boolean
 	return normalizedState.completedIds[title.achievementId] == true
 end
 
-function TitleUtil.GetPrefixSegments(premiumTier: any, equippedTitleId: any): { { text: string, colorHex: string } }
+function TitleUtil.GetPrefixSegments(
+	premiumTier: any,
+	equippedTitleId: any,
+	hasDeveloperTag: boolean?
+): { { text: string, colorHex: string } }
 	local segments = {}
 	local normalizedTier = PremiumBenefits.NormalizeTier(premiumTier)
+
+	if hasDeveloperTag == true then
+		table.insert(segments, {
+			text = DEVELOPER_TAG_TEXT,
+			colorHex = DEVELOPER_TAG_COLOR_HEX,
+		})
+	end
 
 	if normalizedTier ~= PremiumBenefits.Tiers.none then
 		table.insert(segments, {
@@ -84,8 +98,8 @@ function TitleUtil.GetPrefixSegments(premiumTier: any, equippedTitleId: any): { 
 	return segments
 end
 
-function TitleUtil.BuildRichTextPrefix(premiumTier: any, equippedTitleId: any): string
-	local segments = TitleUtil.GetPrefixSegments(premiumTier, equippedTitleId)
+function TitleUtil.BuildRichTextPrefix(premiumTier: any, equippedTitleId: any, hasDeveloperTag: boolean?): string
+	local segments = TitleUtil.GetPrefixSegments(premiumTier, equippedTitleId, hasDeveloperTag)
 	local richSegments = {}
 
 	for _, segment in ipairs(segments) do

@@ -21,6 +21,7 @@ local POWER_LABEL_NAME = "PowerLabel"
 local POWER_ROW_HEIGHT = 22
 local POWER_ROW_GAP = 2
 local POWER_LABEL_FONT_FACE = Font.new("rbxassetid://12187375422", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+local ACCESS_ATTRIBUTE = "CanUseAdminPanel"
 local POWER_STAT_ATTRIBUTE_NAMES = table.freeze({
 	"BodyPartDamage",
 	"BodyPartHealth",
@@ -142,15 +143,23 @@ local function layoutNameLabel(nameLabel: TextLabel, prefixCount: number): numbe
 	local nameY = 26
 	if prefixCount <= 0 then
 		nameY = 26
-	elseif prefixCount == 1 then
-		nameY = 34
 	else
-		nameY = 48
+		nameY = 4 + (prefixCount * PREFIX_ROW_HEIGHT) + 12
 	end
 
 	nameLabel.Position = UDim2.new(0, 0, 0, nameY)
 	nameLabel.Size = UDim2.new(1, 0, 0, NAME_ROW_HEIGHT)
 	return nameY + NAME_ROW_HEIGHT
+end
+
+local function calculateBillboardHeight(prefixCount: number, nameBottomY: number, showPowerLabel: boolean): number
+	local minimumHeight = if showPowerLabel then BOSS_ARENA_BILLBOARD_SIZE.Y.Offset else BILLBOARD_SIZE.Y.Offset
+	local contentBottomY = nameBottomY
+	if showPowerLabel then
+		contentBottomY += POWER_ROW_GAP + POWER_ROW_HEIGHT
+	end
+
+	return math.max(minimumHeight, contentBottomY + 12)
 end
 
 local function layoutPowerLabel(powerLabel: TextLabel, nameBottomY: number)
@@ -235,7 +244,6 @@ function OverheadTitleController:_renderBillboard(player: Player)
 	end
 
 	local showPowerLabel = isBossArenaPowerEnabled()
-	billboard.Size = if showPowerLabel then BOSS_ARENA_BILLBOARD_SIZE else BILLBOARD_SIZE
 
 	local nameLabel = billboard:FindFirstChild("NameLabel")
 	if not (nameLabel and nameLabel:IsA("TextLabel")) then
@@ -244,7 +252,11 @@ function OverheadTitleController:_renderBillboard(player: Player)
 
 	clearPrefixLabels(billboard)
 
-	local prefixSegments = TitleUtil.GetPrefixSegments(player:GetAttribute("PremiumTag"), player:GetAttribute("EquippedTitleId"))
+	local prefixSegments = TitleUtil.GetPrefixSegments(
+		player:GetAttribute("PremiumTag"),
+		player:GetAttribute("EquippedTitleId"),
+		player:GetAttribute(ACCESS_ATTRIBUTE) == true
+	)
 	for index, segment in ipairs(prefixSegments) do
 		local prefixLabel = createTextLabel(
 			string.format("%s%d", PREFIX_LABEL_PREFIX, index),
@@ -257,6 +269,10 @@ function OverheadTitleController:_renderBillboard(player: Player)
 	end
 
 	local nameBottomY = layoutNameLabel(nameLabel, #prefixSegments)
+	billboard.Size = UDim2.fromOffset(
+		BILLBOARD_SIZE.X.Offset,
+		calculateBillboardHeight(#prefixSegments, nameBottomY, showPowerLabel)
+	)
 	nameLabel.Text = TitleUtil.EscapeRichText(player.DisplayName)
 
 	local powerLabel = billboard:FindFirstChild(POWER_LABEL_NAME)
@@ -306,6 +322,9 @@ function OverheadTitleController:_trackPlayer(player: Player)
 		self:_renderBillboard(player)
 	end))
 	table.insert(state.playerConnections, player:GetAttributeChangedSignal("EquippedTitleId"):Connect(function()
+		self:_renderBillboard(player)
+	end))
+	table.insert(state.playerConnections, player:GetAttributeChangedSignal(ACCESS_ATTRIBUTE):Connect(function()
 		self:_renderBillboard(player)
 	end))
 	table.insert(state.playerConnections, player:GetPropertyChangedSignal("DisplayName"):Connect(function()

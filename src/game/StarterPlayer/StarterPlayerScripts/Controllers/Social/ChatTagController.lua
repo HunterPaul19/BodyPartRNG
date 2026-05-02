@@ -6,6 +6,8 @@ local TitleUtil = require(ReplicatedStorage.Shared.Titles.TitleUtil)
 
 local ChatTagController = {}
 
+local ACCESS_ATTRIBUTE = "CanUseAdminPanel"
+
 function ChatTagController:OnStart()
 	TextChatService.OnIncomingMessage = function(message: TextChatMessage)
 		local textSource = message.TextSource
@@ -17,7 +19,8 @@ function ChatTagController:OnStart()
 		if player then
 			local richPrefix = TitleUtil.BuildRichTextPrefix(
 				player:GetAttribute("PremiumTag"),
-				player:GetAttribute("EquippedTitleId")
+				player:GetAttribute("EquippedTitleId"),
+				player:GetAttribute(ACCESS_ATTRIBUTE) == true
 			)
 			if richPrefix ~= "" then
 				local overrideProperties = Instance.new("TextChatMessageProperties")

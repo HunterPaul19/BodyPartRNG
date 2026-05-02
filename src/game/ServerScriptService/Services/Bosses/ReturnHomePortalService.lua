@@ -6,6 +6,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TeleportService = game:GetService("TeleportService")
 local Workspace = game:GetService("Workspace")
 
+local BossLobbyAnalyticsService = require(script.Parent.BossLobbyAnalyticsService)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 
 type PromptState = {
@@ -90,6 +91,7 @@ function ReturnHomePortalService:_teleportPlayerHome(player: Player, prompt: Pro
 	end
 
 	local token = self:_markPlayerTeleportInFlight(player)
+	BossLobbyAnalyticsService:MarkReturningHome(player)
 
 	local teleportOk, teleportError = pcall(function()
 		TeleportService:TeleportAsync(destinationPlaceId, { player })
@@ -99,6 +101,7 @@ function ReturnHomePortalService:_teleportPlayerHome(player: Player, prompt: Pro
 		return
 	end
 
+	BossLobbyAnalyticsService:CancelReturningHome(player)
 	self:_clearPlayerTeleportToken(player, token)
 	Logger.Warn(string.format(
 		"[ReturnHomePortalService] TeleportAsync failed for %s via %s: %s",

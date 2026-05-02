@@ -12,6 +12,7 @@ local ALL_SERVICE_NAMES = {
 	"AudioSettingsService",
 	"AuraService",
 	"BodyPartService",
+	"BossLobbyAnalyticsService",
 	"BossWorldGuideService",
 	"ChatNotificationService",
 	"ChatTagService",

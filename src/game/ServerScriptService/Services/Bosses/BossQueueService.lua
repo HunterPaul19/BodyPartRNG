@@ -8,6 +8,7 @@ local Workspace = game:GetService("Workspace")
 
 local Zone = require(ReplicatedStorage.Packages.ZonePlus)
 local BossArenas = require(ReplicatedStorage.Shared.BossArenas)
+local BossLobbyAnalyticsService = require(script.Parent.BossLobbyAnalyticsService)
 local Bosses = require(ReplicatedStorage.Shared.Bosses)
 local BossQueueConstants = require(ReplicatedStorage.Shared.BossQueue.Constants)
 local BossQueueTeleportPayload = require(ReplicatedStorage.Shared.BossQueue.TeleportPayload)
@@ -282,6 +283,10 @@ function BossQueueService:_launchPortal(state: PortalState, countdownToken: numb
 	teleportOptions.ReservedServerAccessCode = reservedServerCode
 	teleportOptions:SetTeleportData(payload)
 
+	for _, player in ipairs(teleportPlayers) do
+		BossLobbyAnalyticsService:MarkEnteringBossArena(player, state.bossName, state.portalId)
+	end
+
 	local teleportOk, teleportError = pcall(function()
 		TeleportService:TeleportAsync(BossQueueConstants.BossArenaPlaceId, teleportPlayers, teleportOptions)
 	end)
@@ -289,6 +294,10 @@ function BossQueueService:_launchPortal(state: PortalState, countdownToken: numb
 	state.launchInFlight = false
 
 	if not teleportOk then
+		for _, player in ipairs(teleportPlayers) do
+			BossLobbyAnalyticsService:CancelEnteringBossArena(player)
+		end
+
 		Logger.Warn(string.format(
 			"[BossQueueService] TeleportAsync failed for portal %s: %s",
 			getPortalDebugName(state.instance),

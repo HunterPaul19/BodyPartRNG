@@ -88,7 +88,6 @@ local RAW_ENTRIES: { CraftingRecipeEntry } = {
 		setIngredient("junkbot", 1),
 	}),
 	accessoryRecipe("mystic_sword_of_the_flames", "Mystic Sword of the Flames", 100, 100000, {
-		setIngredient("flame_guard_general", 1),
 		setIngredient("knights_of_redcliff_paladin", 2),
 		setIngredient("billy", 2),
 		setIngredient("rig", 1),
@@ -98,7 +97,6 @@ local RAW_ENTRIES: { CraftingRecipeEntry } = {
 		materialIngredient("infernal_crown", 2),
 	}),
 	accessoryRecipe("the_fire_crown", "The Fire Crown", 105, 125000, {
-		setIngredient("flame_guard_general", 1),
 		setIngredient("knights_of_redcliff_paladin", 2),
 		setIngredient("billy", 1),
 		setIngredient("potato_boy", 1),
@@ -108,7 +106,6 @@ local RAW_ENTRIES: { CraftingRecipeEntry } = {
 		materialIngredient("infernal_crown", 2),
 	}),
 	accessoryRecipe("pirate_lieutenants_cutlass", "Pirate Lieutenant's Cutlass", 110, 350000, {
-		setIngredient("captain_squid", 1),
 		setIngredient("pirate_swashbuckler", 3),
 		setIngredient("skeleton", 2),
 		setIngredient("penguin", 1),
@@ -118,7 +115,6 @@ local RAW_ENTRIES: { CraftingRecipeEntry } = {
 		materialIngredient("abyssal_compass", 2),
 	}),
 	accessoryRecipe("pirate_captains_hat", "Pirate Captain's Hat", 115, 500000, {
-		setIngredient("captain_squid", 1),
 		setIngredient("pirate_swashbuckler", 2),
 		setIngredient("penguin", 2),
 		setIngredient("skeleton", 2),
@@ -128,7 +124,6 @@ local RAW_ENTRIES: { CraftingRecipeEntry } = {
 		materialIngredient("abyssal_compass", 2),
 	}),
 	accessoryRecipe("mythic_sword_of_the_tides", "Mythic Sword of the Tides", 120, 1000000, {
-		setIngredient("merfin_the_great", 1),
 		setIngredient("penguin", 2),
 		setIngredient("snow_queen", 2),
 		setIngredient("tentacled_alien", 2),
@@ -138,7 +133,6 @@ local RAW_ENTRIES: { CraftingRecipeEntry } = {
 		materialIngredient("tome_of_the_deep", 3),
 	}),
 	accessoryRecipe("blue_hydromage_wizard_hat", "Blue Hydromage Wizard Hat", 125, 1500000, {
-		setIngredient("merfin_the_great", 1),
 		setIngredient("snow_queen", 2),
 		setIngredient("tentacled_alien", 2),
 		setIngredient("korblox_mage", 1),
@@ -148,7 +142,6 @@ local RAW_ENTRIES: { CraftingRecipeEntry } = {
 		materialIngredient("tome_of_the_deep", 3),
 	}),
 	accessoryRecipe("axe_of_the_divine_flame", "Axe of the Divine Flame", 130, 3000000, {
-		setIngredient("oinan_thickhoof", 1),
 		setIngredient("superhero", 2),
 		setIngredient("capybara", 2),
 		setIngredient("ud_zal", 2),
@@ -158,7 +151,6 @@ local RAW_ENTRIES: { CraftingRecipeEntry } = {
 		materialIngredient("mighty_axe", 4),
 	}),
 	accessoryRecipe("the_bull", "The Bull", 135, 5000000, {
-		setIngredient("oinan_thickhoof", 1),
 		setIngredient("capybara", 2),
 		setIngredient("ud_zal", 2),
 		setIngredient("supreme_claus", 1),
@@ -168,7 +160,6 @@ local RAW_ENTRIES: { CraftingRecipeEntry } = {
 		materialIngredient("mighty_axe", 4),
 	}),
 	accessoryRecipe("flaming_orb_of_divine_pain", "Flaming Orb of Divine Pain", 140, 10000000, {
-		setIngredient("magma_fiend", 1),
 		setIngredient("frost_guard_general", 2),
 		setIngredient("elemental_crystal_golem", 2),
 		setIngredient("iron_slayer", 2),
@@ -178,7 +169,6 @@ local RAW_ENTRIES: { CraftingRecipeEntry } = {
 		materialIngredient("volcanic_heart", 5),
 	}),
 	accessoryRecipe("lava_monster_warrior", "Lava Monster Warrior", 145, 15000000, {
-		setIngredient("magma_fiend", 1),
 		setIngredient("frost_guard_general", 2),
 		setIngredient("iron_slayer", 2),
 		setIngredient("elemental_crystal_golem", 1),
@@ -188,7 +178,6 @@ local RAW_ENTRIES: { CraftingRecipeEntry } = {
 		materialIngredient("volcanic_heart", 5),
 	}),
 	accessoryRecipe("mythic_sword_of_the_earth", "Mythic Sword of the Earth", 150, 25000000, {
-		setIngredient("broccoli_bro", 1),
 		setIngredient("the_gnomsky_brothers", 2),
 		setIngredient("elemental_crystal_golem", 2),
 		setIngredient("heart", 2),
@@ -198,7 +187,6 @@ local RAW_ENTRIES: { CraftingRecipeEntry } = {
 		materialIngredient("golden_broccoli", 6),
 	}),
 	accessoryRecipe("green_laurel_wreath", "Green Laurel Wreath", 155, 35000000, {
-		setIngredient("broccoli_bro", 1),
 		setIngredient("the_gnomsky_brothers", 2),
 		setIngredient("heart", 2),
 		setIngredient("capybara", 1),
