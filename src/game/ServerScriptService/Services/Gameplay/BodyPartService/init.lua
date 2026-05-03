@@ -3680,8 +3680,14 @@ function BodyPartService:OnPlayerAdded(player: Player)
 			activeState = getCharacterLifecycleState(player)
 		end
 
-		activeState.pendingRuntimeApply = true
-		local prepared = prepareBlockyCharacterAppearance(player, character, "CharacterAppearanceLoaded")
+		local wasAppearanceAlreadyPrepared = activeState.appearanceLoadedCharacter == character
+		if not wasAppearanceAlreadyPrepared then
+			activeState.pendingRuntimeApply = true
+		end
+
+		local prepared = if wasAppearanceAlreadyPrepared
+			then true
+			else prepareBlockyCharacterAppearance(player, character, "CharacterAppearanceLoaded")
 		if prepared then
 			waitForCharacterReady(character, CHARACTER_READY_TIMEOUT_SECONDS)
 		end

@@ -68,11 +68,6 @@ local potionStateChangedConnection = nil
 local RollService = {}
 
 local function isRollingEnabled(): boolean
-	local activeProfile = PlaceProfile.GetActiveProfile()
-	if activeProfile.id ~= "unknown" then
-		return true
-	end
-
 	return PlaceProfile.IsFeatureEnabled(ROLLING_FEATURE_ID)
 end
 

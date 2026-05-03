@@ -148,7 +148,8 @@ local FEATURE_TO_EXCLUSIONS = {
 	rolling = {
 		panels = { "Roll" },
 		frames = { "AutoSell" },
-		controllers = { "AutoSellController", "AutoSellRollController" },
+		controllers = { "AutoSellController", "AutoSellRollController", "RollController" },
+		services = { "RollService" },
 	},
 	leaderboard = {
 		panels = { "Leaderboard" },
@@ -416,10 +417,8 @@ local function buildProfile(profileId: string, definition: any): PlaceProfileSha
 		if mappedExclusions then
 			addExclusionList(excludedPanels, mappedExclusions.panels)
 			addExclusionList(excludedFrames, mappedExclusions.frames)
-			if profileId == "unknown" then
-				addExclusionList(excludedServices, mappedExclusions.services)
-				addExclusionList(excludedControllers, mappedExclusions.controllers)
-			end
+			addExclusionList(excludedServices, mappedExclusions.services)
+			addExclusionList(excludedControllers, mappedExclusions.controllers)
 		end
 	end
 
@@ -587,12 +586,7 @@ function PlaceProfile.ShouldLoadService(moduleName: string): boolean
 		return true
 	end
 
-	local activeProfile = PlaceProfile.GetActiveProfile()
-	if activeProfile.id ~= "unknown" then
-		return true
-	end
-
-	return activeProfile.excludedServices[moduleName] ~= true
+	return PlaceProfile.GetActiveProfile().excludedServices[moduleName] ~= true
 end
 
 function PlaceProfile.ShouldLoadController(moduleName: string): boolean
@@ -600,12 +594,7 @@ function PlaceProfile.ShouldLoadController(moduleName: string): boolean
 		return true
 	end
 
-	local activeProfile = PlaceProfile.GetActiveProfile()
-	if activeProfile.id ~= "unknown" then
-		return true
-	end
-
-	return activeProfile.excludedControllers[moduleName] ~= true
+	return PlaceProfile.GetActiveProfile().excludedControllers[moduleName] ~= true
 end
 
 return table.freeze(PlaceProfile)
