@@ -54,47 +54,34 @@ local LocalPlayer = Players.LocalPlayer
 
 local REMOTE_WAIT_TIMEOUT = 15
 local REMOTE_INVOKE_TIMEOUT_SECONDS = 8
-
-local function requireChild(parent: Instance, childName: string, className: string): Instance
-	local child = parent:FindFirstChild(childName)
-	if child == nil then
-		child = parent:WaitForChild(childName, REMOTE_WAIT_TIMEOUT)
-	end
-
-	local expectedPath = string.format("%s.%s", parent:GetFullName(), childName)
-	if child == nil then
-		Logger.Error(string.format(
-			"[Roll.GUIControls] Timed out after %d seconds waiting for %s.",
-			REMOTE_WAIT_TIMEOUT,
-			expectedPath
-		), 0)
-	end
-
-	if not child:IsA(className) then
-		Logger.Error(string.format(
-			"[Roll.GUIControls] Expected %s to be a %s, got %s.",
-			expectedPath,
-			className,
-			child.ClassName
-		), 0)
-	end
-
-	return child
-end
-
-local Remotes = requireChild(ReplicatedStorage, "Remotes", "Folder")
-local RollingRemotes = requireChild(Remotes, "Rolling", "Folder")
-local GetRollingStateRemote = requireChild(RollingRemotes, "GetRollingState", "RemoteFunction") :: RemoteFunction
-local SelectRollTypeRemote = requireChild(RollingRemotes, "SelectRollType", "RemoteFunction") :: RemoteFunction
-local SelectRollRegionRemote = requireChild(RollingRemotes, "SelectRollRegion", "RemoteFunction") :: RemoteFunction
-local PerformRollRemote = requireChild(RollingRemotes, "PerformRoll", "RemoteFunction") :: RemoteFunction
-local ToggleQuickRollRemote = requireChild(RollingRemotes, "ToggleQuickRoll", "RemoteFunction") :: RemoteFunction
-local ToggleAutoEquipBestRemote = requireChild(RollingRemotes, "ToggleAutoEquipBest", "RemoteFunction") :: RemoteFunction
-local PromptQuickRollPurchaseRemote = requireChild(RollingRemotes, "PromptQuickRollPurchase", "RemoteFunction") :: RemoteFunction
-local FinalizeAutoSellRollRemote = requireChild(RollingRemotes, "FinalizeAutoSellRoll", "RemoteFunction") :: RemoteFunction
-local RollingUpdatedRemote = requireChild(RollingRemotes, "RollingUpdated", "RemoteEvent") :: RemoteEvent
+local REMOTE_RETRY_DELAY_SECONDS = 0.5
+local REMOTES_FOLDER_NAME = "Remotes"
+local ROLLING_FOLDER_NAME = "Rolling"
+local GET_STATE_REMOTE_NAME = "GetRollingState"
+local SELECT_ROLL_TYPE_REMOTE_NAME = "SelectRollType"
+local SELECT_ROLL_REGION_REMOTE_NAME = "SelectRollRegion"
+local PERFORM_ROLL_REMOTE_NAME = "PerformRoll"
+local TOGGLE_QUICK_ROLL_REMOTE_NAME = "ToggleQuickRoll"
+local TOGGLE_AUTO_EQUIP_BEST_REMOTE_NAME = "ToggleAutoEquipBest"
+local PROMPT_QUICK_ROLL_PURCHASE_REMOTE_NAME = "PromptQuickRollPurchase"
+local FINALIZE_AUTO_SELL_ROLL_REMOTE_NAME = "FinalizeAutoSellRoll"
+local UPDATED_REMOTE_NAME = "RollingUpdated"
 local BODY_PARTS_FOLDER_NAME = "BodyParts"
 local EQUIP_REMOTE_NAME = "EquipOwnedBodyPart"
+
+local Remotes: Folder? = nil
+local RollingRemotes: Folder? = nil
+local GetRollingStateRemote: RemoteFunction? = nil
+local SelectRollTypeRemote: RemoteFunction? = nil
+local SelectRollRegionRemote: RemoteFunction? = nil
+local PerformRollRemote: RemoteFunction? = nil
+local ToggleQuickRollRemote: RemoteFunction? = nil
+local ToggleAutoEquipBestRemote: RemoteFunction? = nil
+local PromptQuickRollPurchaseRemote: RemoteFunction? = nil
+local FinalizeAutoSellRollRemote: RemoteFunction? = nil
+local RollingUpdatedRemote: RemoteEvent? = nil
+local rollingUpdatedConnection: RBXScriptConnection? = nil
+local lastRemoteWarningAt = 0
 
 local Main = script.Parent
 local Black2 = Main.Parent.Black2
@@ -513,7 +500,130 @@ local function isPlayerInAutoRollGroup()
 	return ok and inGroup == true
 end
 
-local function invokeRemote(remote, payload)
+local function findChildOfClass(parent: Instance?, childName: string, className: string, shouldWait: boolean?): Instance?
+	if not parent then
+		return nil
+	end
+
+	local child = parent:FindFirstChild(childName)
+	if child == nil and shouldWait == true then
+		child = parent:WaitForChild(childName, REMOTE_WAIT_TIMEOUT)
+	end
+
+	if child and child:IsA(className) then
+		return child
+	end
+
+	return nil
+end
+
+local function warnRollingRemotesUnavailable()
+	local now = os.clock()
+	if now - lastRemoteWarningAt < 5 then
+		return
+	end
+
+	lastRemoteWarningAt = now
+	Logger.Warn("[RollGUI] Rolling remotes are not available yet; rolling controls will retry.")
+end
+
+local function connectRollingUpdatedRemote()
+	if rollingUpdatedConnection or not RollingUpdatedRemote then
+		return
+	end
+
+	rollingUpdatedConnection = RollingUpdatedRemote.OnClientEvent:Connect(function(state)
+		GUIControls:ApplyRollingState(state)
+	end)
+end
+
+local function cacheRollingRemote(remoteName: string, className: string, shouldWait: boolean?): Instance?
+	if not (RollingRemotes and RollingRemotes.Parent == Remotes) then
+		return nil
+	end
+
+	return findChildOfClass(RollingRemotes, remoteName, className, shouldWait)
+end
+
+function GUIControls:EnsureRollingRemotes(shouldWait: boolean?): boolean
+	if not (Remotes and Remotes.Parent == ReplicatedStorage) then
+		Remotes = findChildOfClass(ReplicatedStorage, REMOTES_FOLDER_NAME, "Folder", shouldWait) :: Folder?
+	end
+	if not Remotes then
+		return false
+	end
+
+	if not (RollingRemotes and RollingRemotes.Parent == Remotes) then
+		RollingRemotes = findChildOfClass(Remotes, ROLLING_FOLDER_NAME, "Folder", shouldWait) :: Folder?
+	end
+	if not RollingRemotes then
+		return false
+	end
+
+	GetRollingStateRemote = cacheRollingRemote(GET_STATE_REMOTE_NAME, "RemoteFunction", shouldWait) :: RemoteFunction?
+	SelectRollTypeRemote = cacheRollingRemote(SELECT_ROLL_TYPE_REMOTE_NAME, "RemoteFunction", shouldWait) :: RemoteFunction?
+	SelectRollRegionRemote = cacheRollingRemote(SELECT_ROLL_REGION_REMOTE_NAME, "RemoteFunction", shouldWait) :: RemoteFunction?
+	PerformRollRemote = cacheRollingRemote(PERFORM_ROLL_REMOTE_NAME, "RemoteFunction", shouldWait) :: RemoteFunction?
+	ToggleQuickRollRemote = cacheRollingRemote(TOGGLE_QUICK_ROLL_REMOTE_NAME, "RemoteFunction", shouldWait) :: RemoteFunction?
+	ToggleAutoEquipBestRemote = cacheRollingRemote(TOGGLE_AUTO_EQUIP_BEST_REMOTE_NAME, "RemoteFunction", shouldWait) :: RemoteFunction?
+	PromptQuickRollPurchaseRemote = cacheRollingRemote(PROMPT_QUICK_ROLL_PURCHASE_REMOTE_NAME, "RemoteFunction", shouldWait) :: RemoteFunction?
+	FinalizeAutoSellRollRemote = cacheRollingRemote(FINALIZE_AUTO_SELL_ROLL_REMOTE_NAME, "RemoteFunction", shouldWait) :: RemoteFunction?
+	RollingUpdatedRemote = cacheRollingRemote(UPDATED_REMOTE_NAME, "RemoteEvent", shouldWait) :: RemoteEvent?
+
+	local allRemotesReady = GetRollingStateRemote
+		and SelectRollTypeRemote
+		and SelectRollRegionRemote
+		and PerformRollRemote
+		and ToggleQuickRollRemote
+		and ToggleAutoEquipBestRemote
+		and PromptQuickRollPurchaseRemote
+		and FinalizeAutoSellRollRemote
+		and RollingUpdatedRemote
+
+	if allRemotesReady then
+		connectRollingUpdatedRemote()
+	end
+
+	return allRemotesReady ~= nil
+end
+
+local function getRollingRemote(remoteName: string, className: string): Instance?
+	GUIControls:EnsureRollingRemotes(false)
+
+	if remoteName == GET_STATE_REMOTE_NAME then
+		return GetRollingStateRemote
+	elseif remoteName == SELECT_ROLL_TYPE_REMOTE_NAME then
+		return SelectRollTypeRemote
+	elseif remoteName == SELECT_ROLL_REGION_REMOTE_NAME then
+		return SelectRollRegionRemote
+	elseif remoteName == PERFORM_ROLL_REMOTE_NAME then
+		return PerformRollRemote
+	elseif remoteName == TOGGLE_QUICK_ROLL_REMOTE_NAME then
+		return ToggleQuickRollRemote
+	elseif remoteName == TOGGLE_AUTO_EQUIP_BEST_REMOTE_NAME then
+		return ToggleAutoEquipBestRemote
+	elseif remoteName == PROMPT_QUICK_ROLL_PURCHASE_REMOTE_NAME then
+		return PromptQuickRollPurchaseRemote
+	elseif remoteName == FINALIZE_AUTO_SELL_ROLL_REMOTE_NAME then
+		return FinalizeAutoSellRollRemote
+	elseif remoteName == UPDATED_REMOTE_NAME then
+		return RollingUpdatedRemote
+	end
+
+	return cacheRollingRemote(remoteName, className, false)
+end
+
+local function invokeRemote(remoteOrName, payload)
+	local remote = remoteOrName
+	if typeof(remoteOrName) == "string" then
+		remote = getRollingRemote(remoteOrName, "RemoteFunction")
+	end
+
+	if not (remote and remote:IsA("RemoteFunction")) then
+		warnRollingRemotesUnavailable()
+		return nil
+	end
+
 	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(remote, payload, REMOTE_INVOKE_TIMEOUT_SECONDS)
 	if not ok then
 		local reason = if timedOut then "timed out" else "failed"
@@ -543,6 +653,11 @@ local function mergeRollingState(previousState, incomingState)
 end
 
 local function getEquipOwnedBodyPartRemote()
+	GUIControls:EnsureRollingRemotes(false)
+	if not Remotes then
+		return nil
+	end
+
 	local bodyPartsFolder = Remotes:FindFirstChild(BODY_PARTS_FOLDER_NAME)
 	if not (bodyPartsFolder and bodyPartsFolder:IsA("Folder")) then
 		return nil
@@ -1181,7 +1296,7 @@ function GUIControls:EquipCurrentRollResult()
 
 	local result
 	if hasPendingAutoSellResult then
-		result = invokeRemote(FinalizeAutoSellRollRemote, {
+		result = invokeRemote(FINALIZE_AUTO_SELL_ROLL_REMOTE_NAME, {
 			token = pendingAutoSellToken,
 			keep = true,
 			equip = true,
@@ -1381,7 +1496,7 @@ function GUIControls:SelectRollType(rollTypeId)
 	GUIControls.LastSelectRequestId += 1
 	local requestId = GUIControls.LastSelectRequestId
 	local interactionIdAtRequest = GUIControls.DropdownInteractionId
-	local result = invokeRemote(SelectRollTypeRemote, { rollTypeId = rollTypeId })
+	local result = invokeRemote(SELECT_ROLL_TYPE_REMOTE_NAME, { rollTypeId = rollTypeId })
 	if requestId ~= GUIControls.LastSelectRequestId then
 		return
 	end
@@ -1406,7 +1521,7 @@ end
 function GUIControls:SelectRollRegion(rollRegion)
 	GUIControls:SuppressRollClickForInputFrame()
 	local previousRollRegion = getSelectedRollRegion(GUIControls.RollingState)
-	local result = invokeRemote(SelectRollRegionRemote, { rollRegion = rollRegion })
+	local result = invokeRemote(SELECT_ROLL_REGION_REMOTE_NAME, { rollRegion = rollRegion })
 	if not result then
 		GUIControls:SetTemporaryStatus("Failed to reach the server.")
 		return
@@ -1454,7 +1569,7 @@ end
 function GUIControls:ToggleQuickRoll()
 	local quickRollState = getQuickRollState(GUIControls.RollingState)
 	if not quickRollState.owned then
-		local result = invokeRemote(PromptQuickRollPurchaseRemote)
+		local result = invokeRemote(PROMPT_QUICK_ROLL_PURCHASE_REMOTE_NAME)
 		if not result then
 			GUIControls:SetTemporaryStatus("Failed to open the purchase prompt.")
 			return
@@ -1471,7 +1586,7 @@ function GUIControls:ToggleQuickRoll()
 		return
 	end
 
-	local result = invokeRemote(ToggleQuickRollRemote, { enabled = not quickRollState.enabled })
+	local result = invokeRemote(TOGGLE_QUICK_ROLL_REMOTE_NAME, { enabled = not quickRollState.enabled })
 	if not result then
 		GUIControls:SetTemporaryStatus("Failed to update Quick Roll.")
 		return
@@ -1494,7 +1609,7 @@ end
 
 function GUIControls:ToggleAutoEquipBest()
 	local autoEquipBestState = getAutoEquipBestState(GUIControls.RollingState)
-	local result = invokeRemote(ToggleAutoEquipBestRemote, { enabled = not autoEquipBestState.enabled })
+	local result = invokeRemote(TOGGLE_AUTO_EQUIP_BEST_REMOTE_NAME, { enabled = not autoEquipBestState.enabled })
 	if not result then
 		GUIControls:SetTemporaryStatus("Failed to update Auto Equip Best.")
 		return
@@ -1597,6 +1712,11 @@ function GUIControls:PrepareTutorialTarget(targetId)
 		GUIControls:SetButtonCooldown()
 	end
 
+	if RollButton.Visible ~= true or not hasCoreRollCollections(GUIControls.RollingState) then
+		return false
+	end
+
+	GUIControls:SetDropdownOpen(true)
 	return true
 end
 
@@ -1873,7 +1993,7 @@ function GUIControls:Roll(triggerSource)
 			GUIControls:SetDropdownOpen(false)
 		end
 		beginRollNotificationHold()
-		local rollResponse = invokeRemote(PerformRollRemote, {
+		local rollResponse = invokeRemote(PERFORM_ROLL_REMOTE_NAME, {
 			triggerSource = resolvedTriggerSource,
 		})
 		if not rollResponse then
@@ -2032,7 +2152,7 @@ end
 
 function GUIControls:LoadRollingState()
 	GUIControls.RollingStateRefreshPending = false
-	local result = invokeRemote(GetRollingStateRemote)
+	local result = invokeRemote(GET_STATE_REMOTE_NAME)
 	if not result then
 		GUIControls:SetTemporaryStatus("Waiting for rolling state...")
 		return false
@@ -2090,15 +2210,16 @@ ToggleSoundUtil.MarkToggleButton(QuickRollButton)
 ToggleSoundUtil.MarkToggleButton(AutoEquipBestButton)
 ToggleSoundUtil.MarkToggleButton(AutoRollButton)
 
-RollingUpdatedRemote.OnClientEvent:Connect(function(state)
-	GUIControls:ApplyRollingState(state)
-end)
-
 RollDropdownInner.Position = DropdownClosedPosition
 GUIControls:SetDropdownOpen(false)
 RollDropdownTemplate.Visible = false
 GUIControls:RefreshRollControls()
 task.defer(function()
+	while not GUIControls:EnsureRollingRemotes(false) do
+		GUIControls:SetTemporaryStatus("Waiting for rolling server...")
+		task.wait(REMOTE_RETRY_DELAY_SECONDS)
+	end
+
 	local ok, err = pcall(function()
 		GUIControls:LoadRollingState()
 	end)

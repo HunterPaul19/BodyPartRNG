@@ -389,14 +389,6 @@ function QuestBoardOnboardingGuideController:_resolvePaidRollAssist(rawQuestStat
 		}
 	end
 
-	local dropdownButton = RollController:GetTutorialTarget("rollDropdownButton")
-	if isGuiTargetUsable(dropdownButton) then
-		return {
-			target = dropdownButton :: GuiObject,
-			text = "Open Rolls.",
-		}
-	end
-
 	return nil
 end
 
