@@ -6,8 +6,10 @@ local RunService = game:GetService("RunService")
 local QuestConfig = require(ReplicatedStorage.Shared.Config.QuestConfig)
 local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
 local RollTypes = require(ReplicatedStorage.Shared.Config.RollTypes)
+local BodyPartCollection = require(ReplicatedStorage.Shared.Character.BodyPartCollection)
 local DailyChestState = require(ReplicatedStorage.Shared.Character.DailyChestState)
 local QuestState = require(ReplicatedStorage.Shared.Character.QuestState)
+local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local DataService = require(script.Parent.DataService)
 local AdminConfig = require(script.Parent.AdminConfig)
 local RequestLimiter = require(script.Parent.Common.RequestLimiter)
@@ -23,6 +25,11 @@ local MARK_BOARD_OPENED_REMOTE_NAME = "MarkQuestBoardOpened"
 local UPDATED_REMOTE_NAME = "QuestUpdated"
 local DIALOGUE_ID_ATTRIBUTE = "DialogueId"
 local ONBOARDING_QUEST_BOARD_OPENED_FLAG = "onboarding_quest_board_opened"
+local TUTORIAL_AUTO_CHAIN_ENROLLED_FLAG = "tutorial_auto_chain_enrolled"
+local TUTORIAL_AUTO_CHAIN_FINISHED_FLAG = "tutorial_auto_chain_finished"
+local MAN_AURA_TUTORIAL_QUEST_ID = "stan_man_aura_intro"
+local MAN_AURA_SET_ID = "man"
+local FREE_ROLL_TYPE_ID = "free"
 local DAILY_QUEST_COUNT = 5
 local RANDOM_SEED_MODULUS = 2147483647
 local PAID_ROLL_TYPE_IDS = {
@@ -45,6 +52,22 @@ local OLD_TEST_UNLOCK_FLAGS = {
 	test_roll_once_completed = true,
 	test_two_part_chain_completed = true,
 }
+local TUTORIAL_CHAIN_QUEST_IDS = table.freeze({
+	"stan_paid_roll_intro",
+	MAN_AURA_TUTORIAL_QUEST_ID,
+	"stan_appraisal_intro",
+	"stan_crafting_intro",
+	"stan_boss_intro",
+})
+local POST_MAN_AURA_TUTORIAL_QUEST_IDS = table.freeze({
+	"stan_appraisal_intro",
+	"stan_crafting_intro",
+	"stan_boss_intro",
+})
+local TUTORIAL_CHAIN_QUEST_ID_SET = {}
+for _, questId in ipairs(TUTORIAL_CHAIN_QUEST_IDS) do
+	TUTORIAL_CHAIN_QUEST_ID_SET[questId] = true
+end
 
 local remotesFolder: Folder? = nil
 local questsFolder: Folder? = nil
@@ -195,6 +218,105 @@ local function isDailyQuestDefinition(definition: QuestConfig.QuestDefinition?):
 	return typeof(definition) == "table" and definition.kind == "daily"
 end
 
+local function isTutorialChainQuestId(questId: any): boolean
+	return typeof(questId) == "string" and TUTORIAL_CHAIN_QUEST_ID_SET[questId] == true
+end
+
+local function isTutorialChainDefinition(definition: QuestConfig.QuestDefinition?): boolean
+	return typeof(definition) == "table" and isTutorialChainQuestId(definition.id)
+end
+
+local function isTutorialChainEnrolled(state: QuestState.QuestStateValue): boolean
+	return state.unlockFlags[TUTORIAL_AUTO_CHAIN_ENROLLED_FLAG] == true
+end
+
+local function isTutorialChainFinished(state: QuestState.QuestStateValue): boolean
+	return state.unlockFlags[TUTORIAL_AUTO_CHAIN_FINISHED_FLAG] == true
+end
+
+local function hasReachedPostManAuraTutorialQuest(state: QuestState.QuestStateValue): boolean
+	for _, questId in ipairs(POST_MAN_AURA_TUTORIAL_QUEST_IDS) do
+		if state.activeByQuestId[questId] ~= nil
+			or state.completedByQuestId[questId] == true
+			or state.claimedByQuestId[questId] == true
+		then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function shouldSkipTutorialChainQuest(state: QuestState.QuestStateValue, questId: string): boolean
+	return questId == MAN_AURA_TUTORIAL_QUEST_ID and hasReachedPostManAuraTutorialQuest(state)
+end
+
+local function isManAuraTutorialRollStepActive(state: QuestState.QuestStateValue): boolean
+	local activeQuest = state.activeByQuestId[MAN_AURA_TUTORIAL_QUEST_ID]
+	if typeof(activeQuest) ~= "table" or activeQuest.status ~= "active" then
+		return false
+	end
+
+	return math.floor(tonumber(activeQuest.currentPartIndex) or 1) == 1
+end
+
+local function clearTutorialChainQuestState(state: QuestState.QuestStateValue): boolean
+	local changed = false
+	for _, questId in ipairs(TUTORIAL_CHAIN_QUEST_IDS) do
+		if state.activeByQuestId[questId] ~= nil then
+			state.activeByQuestId[questId] = nil
+			changed = true
+		end
+		if state.completedByQuestId[questId] ~= nil then
+			state.completedByQuestId[questId] = nil
+			changed = true
+		end
+		if state.claimedByQuestId[questId] ~= nil then
+			state.claimedByQuestId[questId] = nil
+			changed = true
+		end
+		if state.repeatablesByQuestId[questId] ~= nil then
+			state.repeatablesByQuestId[questId] = nil
+			changed = true
+		end
+	end
+	if state.unlockFlags[TUTORIAL_AUTO_CHAIN_FINISHED_FLAG] ~= nil then
+		state.unlockFlags[TUTORIAL_AUTO_CHAIN_FINISHED_FLAG] = nil
+		changed = true
+	end
+	return changed
+end
+
+local function getTutorialQuestStartedEvent(definition: QuestConfig.QuestDefinition): any
+	return {
+		tutorialQuestStarted = {
+			questId = definition.id,
+			displayName = definition.displayName,
+			message = string.format("%s started.", definition.displayName),
+		},
+	}
+end
+
+local function shouldIncludeTutorialChainQuest(
+	state: QuestState.QuestStateValue,
+	definition: QuestConfig.QuestDefinition,
+	activeQuest: QuestState.ActiveQuest?
+): boolean
+	if not isTutorialChainDefinition(definition) then
+		return true
+	end
+	if not isTutorialChainEnrolled(state) then
+		return false
+	end
+	if shouldSkipTutorialChainQuest(state, definition.id) then
+		return false
+	end
+	if typeof(activeQuest) == "table" then
+		return true
+	end
+	return state.completedByQuestId[definition.id] == true or state.claimedByQuestId[definition.id] == true
+end
+
 local function cloneDefinition(definition: QuestConfig.QuestDefinition): any
 	local clone = table.clone(definition)
 	clone.providerIds = table.clone(definition.providerIds or {})
@@ -314,6 +436,15 @@ local function countEquippedCleanPlusBodyParts(player: Player): number
 	return count
 end
 
+local function countDiscoveredSetPieces(player: Player, setId: string): number
+	local summary = BodyPartCollection.GetSetSummary(DataService:GetBodyPartsState(player), setId)
+	return if summary then summary.discoveredCount else 0
+end
+
+local function isAuraEquipped(player: Player, auraId: string): boolean
+	return DataService:GetEquippedAuraId(player) == auraId
+end
+
 local function countLifetimeAppraisals(player: Player): number
 	local stats = DataService:GetStats(player)
 	if typeof(stats) ~= "table" then
@@ -357,6 +488,15 @@ local function getStateObjectiveProgress(player: Player, state: QuestState.Quest
 		return countCleanPlusRolls(player)
 	elseif stateType == "equipped_clean_plus_body_part_count" then
 		return countEquippedCleanPlusBodyParts(player)
+	elseif stateType == "set_discovered_piece_count" then
+		local setId = objective.filters and objective.filters.setId
+		if typeof(setId) ~= "string" or setId == "" then
+			return 0
+		end
+		return countDiscoveredSetPieces(player, setId)
+	elseif stateType == "equipped_aura_id" then
+		local auraId = objective.filters and objective.filters.auraId
+		return if typeof(auraId) == "string" and auraId ~= "" and isAuraEquipped(player, auraId) then 1 else 0
 	elseif stateType == "appraisal_count" then
 		return countLifetimeAppraisals(player)
 	elseif stateType == "owned_material_amount" then
@@ -539,6 +679,15 @@ local function getAvailability(
 	if definition.adminOnly == true and not isAdminDevPlayer(player) then
 		return false, "This quest is only available to admins/devs."
 	end
+	if isTutorialChainDefinition(definition) then
+		if isTutorialChainFinished(state) then
+			return false, "Tutorial lessons are already complete."
+		end
+		if isTutorialChainEnrolled(state) then
+			return false, "Tutorial lessons start automatically."
+		end
+		return false, "Tutorial lessons are unavailable."
+	end
 	if state.activeByQuestId[definition.id] ~= nil then
 		return false, "Quest is already active."
 	end
@@ -589,6 +738,62 @@ local function buildActiveQuest(definition: QuestConfig.QuestDefinition, now: nu
 	resetObjectiveProgressForPart(definition, activeQuest)
 
 	return activeQuest
+end
+
+local function hasActiveTutorialChainQuest(state: QuestState.QuestStateValue): boolean
+	for _, questId in ipairs(TUTORIAL_CHAIN_QUEST_IDS) do
+		if shouldSkipTutorialChainQuest(state, questId) then
+			continue
+		end
+		local activeQuest = state.activeByQuestId[questId]
+		if typeof(activeQuest) == "table" and activeQuest.status ~= "claimed" then
+			return true
+		end
+	end
+	return false
+end
+
+local function startTutorialChainQuest(
+	player: Player,
+	state: QuestState.QuestStateValue,
+	definition: QuestConfig.QuestDefinition
+): QuestState.ActiveQuest
+	local activeQuest = buildActiveQuest(definition, getNow())
+	refreshStateObjectives(player, state, definition, activeQuest)
+	markReadyIfComplete(player, state, definition, activeQuest)
+	logCompletedOnboardingQuestParts(player, definition, 0, activeQuest)
+	state.activeByQuestId[definition.id] = activeQuest
+	if definition.id == MAN_AURA_TUTORIAL_QUEST_ID then
+		DataService:SetSelectedRollType(player, FREE_ROLL_TYPE_ID)
+	end
+	return activeQuest
+end
+
+local function startNextTutorialChainQuest(
+	player: Player,
+	state: QuestState.QuestStateValue
+): (QuestConfig.QuestDefinition?, QuestState.ActiveQuest?)
+	if not isTutorialChainEnrolled(state) or isTutorialChainFinished(state) then
+		return nil, nil
+	end
+	if hasActiveTutorialChainQuest(state) then
+		return nil, nil
+	end
+
+	for _, questId in ipairs(TUTORIAL_CHAIN_QUEST_IDS) do
+		if shouldSkipTutorialChainQuest(state, questId) then
+			continue
+		end
+		if state.completedByQuestId[questId] ~= true and state.claimedByQuestId[questId] ~= true then
+			local definition = QuestConfig.Get(questId)
+			if definition then
+				return definition, startTutorialChainQuest(player, state, definition)
+			end
+		end
+	end
+
+	state.unlockFlags[TUTORIAL_AUTO_CHAIN_FINISHED_FLAG] = true
+	return nil, nil
 end
 
 local function fieldMatches(expected: any, actual: any): boolean
@@ -878,8 +1083,42 @@ local function cleanupOldTestQuestState(state: QuestState.QuestStateValue): bool
 	return changed
 end
 
+local function reconcileTutorialChainState(state: QuestState.QuestStateValue): boolean
+	if not isTutorialChainEnrolled(state) then
+		local changed = clearTutorialChainQuestState(state)
+		if state.unlockFlags[TUTORIAL_AUTO_CHAIN_ENROLLED_FLAG] ~= nil then
+			state.unlockFlags[TUTORIAL_AUTO_CHAIN_ENROLLED_FLAG] = nil
+			changed = true
+		end
+		return changed
+	end
+
+	if isTutorialChainFinished(state) then
+		local changed = false
+		for _, questId in ipairs(TUTORIAL_CHAIN_QUEST_IDS) do
+			if state.activeByQuestId[questId] ~= nil then
+				state.activeByQuestId[questId] = nil
+				changed = true
+			end
+		end
+		return changed
+	end
+
+	if shouldSkipTutorialChainQuest(state, MAN_AURA_TUTORIAL_QUEST_ID)
+		and state.activeByQuestId[MAN_AURA_TUTORIAL_QUEST_ID] ~= nil
+	then
+		state.activeByQuestId[MAN_AURA_TUTORIAL_QUEST_ID] = nil
+		return true
+	end
+
+	return false
+end
+
 local function reconcileDailyQuestState(player: Player, state: QuestState.QuestStateValue): boolean
 	local changed = cleanupOldTestQuestState(state)
+	if reconcileTutorialChainState(state) then
+		changed = true
+	end
 	local pool = buildDailyQuestPool()
 	if #pool <= 0 then
 		return changed
@@ -966,8 +1205,12 @@ function QuestService:GetQuestState(player: Player): any
 			continue
 		end
 
-		local isAvailable, lockReason = getAvailability(player, state, definition)
 		local activeQuest = state.activeByQuestId[definition.id]
+		if not shouldIncludeTutorialChainQuest(state, definition, activeQuest) then
+			continue
+		end
+
+		local isAvailable, lockReason = getAvailability(player, state, definition)
 		if activeQuest then
 			markReadyIfComplete(player, state, definition, activeQuest)
 		end
@@ -1000,10 +1243,84 @@ function QuestService:GetQuestState(player: Player): any
 	}
 end
 
-function QuestService:NotifyClient(player: Player, message: string?)
+function QuestService:NotifyClient(player: Player, message: string?, eventData: any?)
 	if updatedRemote and isActive(player) then
-		updatedRemote:FireClient(player, self:GetQuestState(player), message)
+		updatedRemote:FireClient(player, self:GetQuestState(player), message, eventData)
 	end
+end
+
+function QuestService:BeginTutorialQuestline(player: Player): boolean
+	if not isActive(player) then
+		return false
+	end
+
+	local state = self:GetRawState(player)
+	if not state then
+		return false
+	end
+
+	clearTutorialChainQuestState(state)
+	state.unlockFlags[TUTORIAL_AUTO_CHAIN_ENROLLED_FLAG] = true
+	state.unlockFlags[TUTORIAL_AUTO_CHAIN_FINISHED_FLAG] = nil
+
+	local startedDefinition = startNextTutorialChainQuest(player, state)
+	DataService:SetQuestState(player, state)
+	self:NotifyClient(player, nil, if startedDefinition then getTutorialQuestStartedEvent(startedDefinition) else nil)
+	return startedDefinition ~= nil
+end
+
+function QuestService:IsTutorialRollTypeLockedToFree(player: Player): boolean
+	local state = self:GetRawState(player)
+	return state ~= nil and isManAuraTutorialRollStepActive(state)
+end
+
+function QuestService:ResolveTutorialRollOverride(player: Player, randomSource: Random?): any?
+	local state = self:GetRawState(player)
+	if state == nil or not isManAuraTutorialRollStepActive(state) then
+		return nil
+	end
+
+	local setConfig = BodyPartsCatalog.GetSet(MAN_AURA_SET_ID)
+	local pieces = BodyPartsCatalog.GetPiecesForSet(MAN_AURA_SET_ID)
+	if not setConfig or typeof(pieces) ~= "table" then
+		return nil
+	end
+
+	local missingPieces = {}
+	for _, piece in ipairs(pieces) do
+		if typeof(piece) == "table"
+			and typeof(piece.id) == "string"
+			and piece.id ~= ""
+			and not DataService:HasDiscoveredBodyPartPiece(player, piece.id)
+		then
+			table.insert(missingPieces, piece)
+		end
+	end
+
+	if #missingPieces <= 0 then
+		return nil
+	end
+
+	local random = if typeof(randomSource) == "Random" then randomSource else Random.new()
+	local selectedPiece = missingPieces[random:NextInteger(1, #missingPieces)]
+	return {
+		questId = MAN_AURA_TUTORIAL_QUEST_ID,
+		setId = MAN_AURA_SET_ID,
+		setConfig = setConfig,
+		pieceId = selectedPiece.id,
+		piece = selectedPiece,
+		rollTypeId = FREE_ROLL_TYPE_ID,
+		rollRegion = selectedPiece.region,
+		effectiveRollTypeId = FREE_ROLL_TYPE_ID,
+		ignoreRollRegion = true,
+		allowAutoSell = false,
+		allowAutoCraft = false,
+		allowAutoEquip = false,
+		skipPresentation = false,
+		skipPreview = false,
+		forceVisiblePresentation = true,
+		tutorialRoll = true,
+	}
 end
 
 function QuestService:MarkQuestBoardOpened(player: Player)
@@ -1119,10 +1436,18 @@ function QuestService:ClaimQuest(player: Player, payload: any)
 	end
 
 	finishClaimedQuestInState(state, definition, activeQuest)
+	local tutorialQuestStartedEvent = nil
+	if isTutorialChainDefinition(definition) then
+		local startedDefinition = startNextTutorialChainQuest(player, state)
+		if startedDefinition then
+			tutorialQuestStartedEvent = getTutorialQuestStartedEvent(startedDefinition)
+		end
+	end
 	DataService:SetQuestState(player, state)
-	self:NotifyClient(player, "Quest complete.")
+	self:NotifyClient(player, if isTutorialChainDefinition(definition) then nil else "Quest complete.", tutorialQuestStartedEvent)
 	return response(true, "Quest complete.", self:GetQuestState(player), {
 		rewardPresentation = rewardPresentation,
+		tutorialQuestStarted = if tutorialQuestStartedEvent then tutorialQuestStartedEvent.tutorialQuestStarted else nil,
 	})
 end
 
@@ -1261,6 +1586,24 @@ function QuestService:OnStart()
 
 	DataService.OwnedBodyPartAdded:Connect(function(player: Player, record: any)
 		self:RecordEvent(player, "body_part_acquired", record)
+	end)
+
+	DataService.BodyPartPieceDiscovered:Connect(function(player: Player, pieceId: string)
+		self:RecordEvent(player, "body_part_piece_discovered", {
+			pieceId = pieceId,
+			amount = 1,
+		})
+	end)
+
+	DataService.OwnedAuraAdded:Connect(function(player: Player, record: any)
+		self:RecordEvent(player, "aura_acquired", record)
+	end)
+
+	DataService.EquippedAuraChanged:Connect(function(player: Player, _previousAuraId: string?, newAuraId: string?)
+		self:RecordEvent(player, "aura_equipped", {
+			auraId = newAuraId,
+			amount = if typeof(newAuraId) == "string" and newAuraId ~= "" then 1 else 0,
+		})
 	end)
 
 	ProximityPromptService.PromptTriggered:Connect(function(prompt: ProximityPrompt, player: Player)

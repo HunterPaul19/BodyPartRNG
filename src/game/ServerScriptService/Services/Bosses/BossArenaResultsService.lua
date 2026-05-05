@@ -224,7 +224,7 @@ function BossArenaResultsService:OnStart()
 		end
 
 		warnWithPrefix(string.format("ReturnToBossLobby failed for %s: %s", player.Name, tostring(response)))
-		return buildResponse(false, "Failed to return to the boss lobby.", BossArenaRuntimeService:GetBossResultsState(player))
+		return buildResponse(false, "Failed to return from boss results.", BossArenaRuntimeService:GetBossResultsState(player))
 	end
 
 	self._disconnectResultsListener = BossArenaRuntimeService:ConnectBossResultsStateChanged(function()

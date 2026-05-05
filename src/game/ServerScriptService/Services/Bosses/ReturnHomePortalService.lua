@@ -3,11 +3,11 @@ local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TeleportService = game:GetService("TeleportService")
 local Workspace = game:GetService("Workspace")
 
 local BossLobbyAnalyticsService = require(script.Parent.BossLobbyAnalyticsService)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
+local TeleportTransitionService = require(script.Parent.TeleportTransitionService)
 
 type PromptState = {
 	prompt: ProximityPrompt,
@@ -94,7 +94,7 @@ function ReturnHomePortalService:_teleportPlayerHome(player: Player, prompt: Pro
 	BossLobbyAnalyticsService:MarkReturningHome(player)
 
 	local teleportOk, teleportError = pcall(function()
-		TeleportService:TeleportAsync(destinationPlaceId, { player })
+		TeleportTransitionService:TeleportAsync(destinationPlaceId, { player })
 	end)
 
 	if teleportOk then

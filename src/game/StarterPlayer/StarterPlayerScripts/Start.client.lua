@@ -16,6 +16,7 @@ local CLIENT_STARTUP_PHASE_DEFINITIONS = {
 	{
 		label = "Phase1.CoreUI",
 		names = {
+			"TeleportTransitionController",
 			"UIController",
 			"FrameController",
 			"HUDWindowController",
@@ -65,6 +66,7 @@ local CLIENT_STARTUP_PHASE_DEFINITIONS = {
 		label = "Phase4.Features",
 		names = {
 			"DataController",
+			"PlayerStatsBoardController",
 			"MoneyHUDController",
 			"TimeShardsHUDController",
 			"DailyChestController",

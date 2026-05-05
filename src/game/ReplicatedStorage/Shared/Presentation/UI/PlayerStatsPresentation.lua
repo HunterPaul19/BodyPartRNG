@@ -35,6 +35,22 @@ local function formatNumberish(value: number?): string
 	return NumberFormatter.Format(math.max(0, math.floor(tonumber(value) or 0)))
 end
 
+local function formatWholeWithSeparators(value: number?): string
+	local wholeNumber = math.max(0, math.floor(tonumber(value) or 0))
+	if wholeNumber >= 1e15 then
+		return NumberFormatter.Format(wholeNumber)
+	end
+
+	local text = string.format("%.0f", wholeNumber)
+	local reversedText = string.reverse(text)
+	local formattedText = string.reverse((string.gsub(reversedText, "(%d%d%d)", "%1,")))
+	if string.sub(formattedText, 1, 1) == "," then
+		formattedText = string.sub(formattedText, 2)
+	end
+
+	return formattedText
+end
+
 local function formatDuration(totalSeconds: number?): string
 	local seconds = math.max(0, math.floor(tonumber(totalSeconds) or 0))
 	local days = math.floor(seconds / 86400)
@@ -180,6 +196,48 @@ local function formatSizeBreakdown(map: any): string
 	end
 
 	return table.concat(lines, "\n")
+end
+
+function PlayerStatsPresentation.FormatBoardWholeNumber(value: number?): string
+	return formatWholeWithSeparators(value)
+end
+
+function PlayerStatsPresentation.FormatBoardClockDuration(totalSeconds: number?): string
+	local seconds = math.max(0, math.floor(tonumber(totalSeconds) or 0))
+	local days = math.floor(seconds / 86400)
+	local hours = math.floor((seconds % 86400) / 3600)
+	local minutes = math.floor((seconds % 3600) / 60)
+	local remainingSeconds = seconds % 60
+
+	return string.format("%02dd %02dh %02dm %02ds", days, hours, minutes, remainingSeconds)
+end
+
+function PlayerStatsPresentation.FormatBoardLuckMultiplier(value: number?): string
+	local luckMultiplier = math.max(0, tonumber(value) or 1)
+	local roundedValue = math.floor((luckMultiplier * 10) + 0.5) / 10
+
+	return string.format("%.1fx", roundedValue)
+end
+
+function PlayerStatsPresentation.FormatBoardRarestRng(bestEver: any): string
+	local denominator = if typeof(bestEver) == "table" then tonumber(bestEver.displayedDenominator) else nil
+	denominator = math.max(0, math.floor(denominator or 0))
+	if denominator <= 0 then
+		return "None"
+	end
+
+	return "1/" .. formatWholeWithSeparators(denominator)
+end
+
+function PlayerStatsPresentation.FormatBoardRarestPart(bestEver: any): string
+	local denominator = if typeof(bestEver) == "table" then tonumber(bestEver.displayedDenominator) else nil
+	if math.max(0, math.floor(denominator or 0)) <= 0 then
+		return "None"
+	end
+
+	local pieceId = if typeof(bestEver.pieceId) == "string" then bestEver.pieceId else ""
+	local piece = if pieceId ~= "" then BodyPartsCatalog.GetPiece(pieceId) else nil
+	return if piece then piece.displayName else if pieceId ~= "" then pieceId else "Unknown"
 end
 
 function PlayerStatsPresentation.BuildInspectStatusText(baseText: string, summary: any): string

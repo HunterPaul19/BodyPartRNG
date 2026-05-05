@@ -104,6 +104,10 @@ function SizeConfig.GetDefault(): SizeEntry
 	return BY_ID.normal
 end
 
+function SizeConfig.GetScaleBounds(): (number, number)
+	return MIN_SCALE, MAX_SCALE
+end
+
 function SizeConfig.NormalizeId(value: any): string
 	if typeof(value) == "string" then
 		if BY_ID[value] then

@@ -10,6 +10,7 @@ local BossWorldGuideService = require(script.Parent.BossWorldGuideService)
 local BossQueueConstants = require(ReplicatedStorage.Shared.BossQueue.Constants)
 local BossQueueTeleportPayload = require(ReplicatedStorage.Shared.BossQueue.TeleportPayload)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
+local TeleportTransitionService = require(script.Parent.TeleportTransitionService)
 
 type PromptState = {
 	prompt: ProximityPrompt,
@@ -129,7 +130,7 @@ function EnterBossLobbyPortalService:_teleportPlayerToBossTutorial(player: Playe
 	teleportOptions:SetTeleportData(payload)
 
 	local teleportOk, teleportError = pcall(function()
-		TeleportService:TeleportAsync(BossQueueConstants.BossArenaPlaceId, { player }, teleportOptions)
+		TeleportTransitionService:TeleportAsync(BossQueueConstants.BossArenaPlaceId, { player }, teleportOptions)
 	end)
 
 	if teleportOk then
@@ -179,7 +180,7 @@ function EnterBossLobbyPortalService:_teleportPlayer(player: Player, prompt: Pro
 	local token = self:_markPlayerTeleportInFlight(player)
 
 	local teleportOk, teleportError = pcall(function()
-		TeleportService:TeleportAsync(destinationPlaceId, { player })
+		TeleportTransitionService:TeleportAsync(destinationPlaceId, { player })
 	end)
 
 	if teleportOk then

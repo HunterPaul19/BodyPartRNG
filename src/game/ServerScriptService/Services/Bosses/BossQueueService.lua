@@ -14,6 +14,7 @@ local BossQueueConstants = require(ReplicatedStorage.Shared.BossQueue.Constants)
 local BossQueueTeleportPayload = require(ReplicatedStorage.Shared.BossQueue.TeleportPayload)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local PotionService = require(script.Parent.PotionService)
+local TeleportTransitionService = require(script.Parent.TeleportTransitionService)
 
 type PortalState = {
 	instance: Model,
@@ -288,7 +289,7 @@ function BossQueueService:_launchPortal(state: PortalState, countdownToken: numb
 	end
 
 	local teleportOk, teleportError = pcall(function()
-		TeleportService:TeleportAsync(BossQueueConstants.BossArenaPlaceId, teleportPlayers, teleportOptions)
+		TeleportTransitionService:TeleportAsync(BossQueueConstants.BossArenaPlaceId, teleportPlayers, teleportOptions)
 	end)
 
 	state.launchInFlight = false

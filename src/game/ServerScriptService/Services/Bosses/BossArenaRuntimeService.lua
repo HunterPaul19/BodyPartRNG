@@ -5,7 +5,6 @@ local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local TeleportService = game:GetService("TeleportService")
 local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 
@@ -13,6 +12,7 @@ local BossArenaArrivalService = require(script.Parent.BossArenaArrivalService)
 local BossAnimationController = require(script.Parent.Common.BossAnimationController)
 local BossArenaRewardService = require(script.Parent.BossArenaRewardService)
 local QuestService = require(script.Parent.QuestService)
+local TeleportTransitionService = require(script.Parent.TeleportTransitionService)
 local BossPhysicsStabilizer = require(script.Parent.Common.BossPhysicsStabilizer)
 local BossArenas = require(ReplicatedStorage.Shared.BossArenas)
 local BossEncounterScaling = require(ReplicatedStorage.Shared.BossArena.EncounterScaling)
@@ -44,11 +44,16 @@ local BOSS_ATTACK_SPAWN_DELAY_SECONDS = 5
 local BOSS_ENCOUNTER_DURATION_SECONDS = 180
 local TIMER_PHASE_WAITING_FOR_PLAYERS = "waiting_for_players"
 local BOSS_TIMEOUT_RETURN_ROUTE_ID = "return_to_boss_lobby"
+local BOSS_MAIN_RETURN_ROUTE_ID = "final_return_to_main"
 local BOSS_RESULTS_DURATION_SECONDS = 60
 local BOSS_VICTORY_RESULTS_DELAY_SECONDS = 2
 local CHARACTER_PLACEMENT_RETRY_COUNT = 20
 local CHARACTER_PLACEMENT_RETRY_INTERVAL_SECONDS = 0.1
 local BOSS_REWARD_DAMAGE_CONTRIBUTION_RATIO = 0.15
+local TUTORIAL_SOURCE_FLOW = "boss_world_tutorial"
+local TUTORIAL_BOSS_ID = "Flame Guard General"
+local RETURN_DESTINATION_BOSS_LOBBY = "boss_lobby"
+local RETURN_DESTINATION_MAIN = "main"
 local DAMAGE_LEADERSTAT_NAME = "Damage"
 local BOSS_INVULNERABLE_ATTRIBUTE = "BossM1Invulnerable"
 local BOSS_HITBOX_COLLIDER_NAME = "BossHitboxCollider"
@@ -128,6 +133,9 @@ type BossResultsState = {
 	readyCount: number,
 	capacity: number,
 	isReplayReady: boolean,
+	sourceFlow: string?,
+	returnDestination: string?,
+	canReplay: boolean?,
 }
 
 type EncounterState = {
@@ -222,6 +230,30 @@ local BossArenaRuntimeService = {
 
 local function isEnabledForPlace(): boolean
 	return PlaceProfile.GetActiveProfile().id == ACTIVE_PROFILE_ID
+end
+
+local function getEncounterSourceFlow(encounter: EncounterState?): string?
+	local payload = if typeof(encounter) == "table" then encounter.payload else nil
+	local sourceFlow = if typeof(payload) == "table" then payload.sourceFlow else nil
+	return if typeof(sourceFlow) == "string" and sourceFlow ~= "" then sourceFlow else nil
+end
+
+local function isTutorialBossEncounter(encounter: EncounterState?): boolean
+	return typeof(encounter) == "table"
+		and encounter.bossId == TUTORIAL_BOSS_ID
+		and getEncounterSourceFlow(encounter) == TUTORIAL_SOURCE_FLOW
+end
+
+local function shouldReturnToMainFromResults(encounter: EncounterState?): boolean
+	return isTutorialBossEncounter(encounter) and encounter.resultsOutcome == "victory"
+end
+
+local function getResultsReturnDestination(encounter: EncounterState?): string
+	return if shouldReturnToMainFromResults(encounter) then RETURN_DESTINATION_MAIN else RETURN_DESTINATION_BOSS_LOBBY
+end
+
+local function canReplayEncounterResults(encounter: EncounterState?): boolean
+	return shouldReturnToMainFromResults(encounter) ~= true
 end
 
 local function warnWithPrefix(message: string)
@@ -1144,6 +1176,8 @@ function BossArenaRuntimeService:_beginResults(encounter: EncounterState, outcom
 				QuestService:RecordEvent(player, "boss_victory", {
 					bossId = encounter.bossId,
 					arenaId = encounter.arenaId,
+					portalId = if typeof(encounter.payload) == "table" then encounter.payload.portalId else nil,
+					sourceFlow = getEncounterSourceFlow(encounter),
 					damage = encounter.damageByUserId[userId] or 0,
 					rewardEligibleDamageThreshold = encounter.rewardEligibleDamageThreshold,
 					amount = 1,
@@ -2505,8 +2539,8 @@ function BossArenaRuntimeService:_collectOnlineRosterPlayers(encounter: Encounte
 	return rosterPlayers
 end
 
-function BossArenaRuntimeService:_getBossLobbyReturnPlaceId(): number
-	local route = PlaceProfile.GetRoutes()[BOSS_TIMEOUT_RETURN_ROUTE_ID]
+function BossArenaRuntimeService:_getRoutePlaceId(routeId: string): number
+	local route = PlaceProfile.GetRoutes()[routeId]
 	if typeof(route) ~= "table" then
 		return 0
 	end
@@ -2514,8 +2548,13 @@ function BossArenaRuntimeService:_getBossLobbyReturnPlaceId(): number
 	return math.max(0, math.floor(tonumber(route.placeId) or 0))
 end
 
-function BossArenaRuntimeService:_queuePlayersReturnToBossLobby(players: { Player }, reasonLabel: string): number
-	local destinationPlaceId = self:_getBossLobbyReturnPlaceId()
+function BossArenaRuntimeService:_queuePlayersReturnViaRoute(
+	players: { Player },
+	routeId: string,
+	destinationLabel: string,
+	reasonLabel: string
+): number
+	local destinationPlaceId = self:_getRoutePlaceId(routeId)
 	local returnPlayers = {}
 
 	for _, player in ipairs(players) do
@@ -2525,16 +2564,17 @@ function BossArenaRuntimeService:_queuePlayersReturnToBossLobby(players: { Playe
 	end
 
 	if destinationPlaceId <= 0 then
-		warnWithPrefix(string.format("%s, but route '%s' is not configured.", reasonLabel, BOSS_TIMEOUT_RETURN_ROUTE_ID))
+		warnWithPrefix(string.format("%s, but route '%s' is not configured.", reasonLabel, routeId))
 	elseif #returnPlayers > 0 then
 		task.spawn(function()
 			local teleportOk, teleportError = pcall(function()
-				TeleportService:TeleportAsync(destinationPlaceId, returnPlayers)
+				TeleportTransitionService:TeleportAsync(destinationPlaceId, returnPlayers)
 			end)
 			if not teleportOk then
 				warnWithPrefix(string.format(
-					"%s teleport to place %d failed for %d player(s): %s",
+					"%s teleport to %s place %d failed for %d player(s): %s",
 					reasonLabel,
+					destinationLabel,
 					destinationPlaceId,
 					#returnPlayers,
 					tostring(teleportError)
@@ -2546,20 +2586,28 @@ function BossArenaRuntimeService:_queuePlayersReturnToBossLobby(players: { Playe
 	return #returnPlayers
 end
 
+function BossArenaRuntimeService:_queuePlayersReturnToBossLobby(players: { Player }, reasonLabel: string): number
+	return self:_queuePlayersReturnViaRoute(players, BOSS_TIMEOUT_RETURN_ROUTE_ID, "boss lobby", reasonLabel)
+end
+
+function BossArenaRuntimeService:_queuePlayersReturnToMain(players: { Player }, reasonLabel: string): number
+	return self:_queuePlayersReturnViaRoute(players, BOSS_MAIN_RETURN_ROUTE_ID, "main", reasonLabel)
+end
+
 function BossArenaRuntimeService:_queueRosterReturnToBossLobby(
 	encounter: EncounterState,
 	reasonLabel: string,
 	reasonDescription: string
 ): number
 	local rosterPlayers = self:_collectOnlineRosterPlayers(encounter)
-	local destinationPlaceId = self:_getBossLobbyReturnPlaceId()
+	local destinationPlaceId = self:_getRoutePlaceId(BOSS_TIMEOUT_RETURN_ROUTE_ID)
 
 	if destinationPlaceId <= 0 then
 		warnWithPrefix(string.format("%s, but route '%s' is not configured.", reasonLabel, BOSS_TIMEOUT_RETURN_ROUTE_ID))
 	elseif #rosterPlayers > 0 then
 		task.spawn(function()
 			local teleportOk, teleportError = pcall(function()
-				TeleportService:TeleportAsync(destinationPlaceId, rosterPlayers)
+				TeleportTransitionService:TeleportAsync(destinationPlaceId, rosterPlayers)
 			end)
 			if not teleportOk then
 				warnWithPrefix(string.format(
@@ -2674,13 +2722,19 @@ function BossArenaRuntimeService:_completeResults(encounter: EncounterState)
 	encounter.resultsCompleted = true
 
 	local readyPlayers, returnPlayers, readyUserIds = self:_collectResultsSplit(encounter)
-	self:_queuePlayersReturnToBossLobby(returnPlayers, "Boss results return")
+	local returnDestination = getResultsReturnDestination(encounter)
+	if returnDestination == RETURN_DESTINATION_MAIN then
+		self:_queuePlayersReturnToMain(returnPlayers, "Boss results return")
+	else
+		self:_queuePlayersReturnToBossLobby(returnPlayers, "Boss results return")
+	end
 
 	if #readyPlayers <= 0 then
 		self:_clearEncounter(string.format(
-			"Boss results finished for '%s' with no replay-ready players. Returning %d player(s) to boss lobby.",
+			"Boss results finished for '%s' with no replay-ready players. Returning %d player(s) to %s.",
 			encounter.bossId,
-			#returnPlayers
+			#returnPlayers,
+			returnDestination
 		))
 		return
 	end
@@ -2931,7 +2985,7 @@ function BossArenaRuntimeService:RequestPlayerAbandon(player: Player): (boolean,
 		return false, "This boss encounter cannot be abandoned right now."
 	end
 
-	local destinationPlaceId = self:_getBossLobbyReturnPlaceId()
+	local destinationPlaceId = self:_getRoutePlaceId(BOSS_TIMEOUT_RETURN_ROUTE_ID)
 	if destinationPlaceId <= 0 then
 		return false, "Boss lobby return route is not configured."
 	end
@@ -2967,7 +3021,7 @@ function BossArenaRuntimeService:RequestPlayerAbandon(player: Player): (boolean,
 
 	task.spawn(function()
 		local teleportOk, teleportError = pcall(function()
-			TeleportService:TeleportAsync(destinationPlaceId, { player })
+			TeleportTransitionService:TeleportAsync(destinationPlaceId, { player })
 		end)
 		if not teleportOk then
 			warnWithPrefix(string.format(
@@ -3182,6 +3236,9 @@ function BossArenaRuntimeService:GetBossResultsState(player: Player?): BossResul
 		readyCount = countReplayReadyPlayers(encounter),
 		capacity = countRosterMembers(encounter),
 		isReplayReady = userId > 0 and encounter.replayReadyUserIds[userId] == true,
+		sourceFlow = getEncounterSourceFlow(encounter),
+		returnDestination = getResultsReturnDestination(encounter),
+		canReplay = canReplayEncounterResults(encounter),
 	}
 end
 
@@ -3205,6 +3262,9 @@ function BossArenaRuntimeService:SetPlayerReplayReady(player: Player, isReady: b
 	end
 	if encounter.resultRewardStatus == "pending" then
 		return false, "Boss rewards are still being processed."
+	end
+	if canReplayEncounterResults(encounter) ~= true then
+		return false, "Replay is not available for this boss result."
 	end
 
 	if isReady then
@@ -3245,7 +3305,12 @@ function BossArenaRuntimeService:ReturnPlayerToBossLobbyFromResults(player: Play
 	encounter.damageByUserId[player.UserId] = nil
 	setDamageLeaderstat(player, 0)
 
-	self:_queuePlayersReturnToBossLobby({ player }, "Boss results return request")
+	local returnDestination = getResultsReturnDestination(encounter)
+	if returnDestination == RETURN_DESTINATION_MAIN then
+		self:_queuePlayersReturnToMain({ player }, "Boss results return request")
+	else
+		self:_queuePlayersReturnToBossLobby({ player }, "Boss results return request")
+	end
 
 	if countRosterMembers(encounter) <= 0 then
 		self:_clearEncounter(string.format("Player %s returned from results; no roster players remain.", player.Name))
@@ -3255,7 +3320,7 @@ function BossArenaRuntimeService:ReturnPlayerToBossLobbyFromResults(player: Play
 		self:_completeResultsIfAllReplayReady(encounter)
 	end
 
-	return true, "Returning to the boss lobby."
+	return true, if returnDestination == RETURN_DESTINATION_MAIN then "Returning to the main world." else "Returning to the boss lobby."
 end
 
 function BossArenaRuntimeService:GetAssignedPlayerSpawnCFrame(player: Player): CFrame?

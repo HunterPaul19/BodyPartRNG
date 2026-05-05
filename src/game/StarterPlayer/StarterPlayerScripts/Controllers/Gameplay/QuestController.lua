@@ -10,6 +10,8 @@ local FrameController = require(script.Parent.FrameController)
 local QuestBoardOnboardingGuideController = require(script.Parent.QuestBoardOnboardingGuideController)
 local UIController = require(script.Parent.UIController)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
+local TutorialOverlayGate = require(ReplicatedStorage.Shared.UI.TutorialOverlayGate)
+local TutorialTextGui = require(ReplicatedStorage.Shared.UI.TutorialTextGui)
 local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 
 local LOCAL_PLAYER = Players.LocalPlayer
@@ -26,6 +28,7 @@ local QUEST_BOARD_MODEL_NAME = "Quest Board"
 local QUEST_BOARD_PROMPT_PARENT_NAME = "PromptPart"
 local QUEST_BOARD_PROMPT_NAME = "BoardPrompt"
 local CHEST_OPEN_AFTER_CLOSE_DELAY_SECONDS = 0.22
+local TUTORIAL_QUEST_STARTED_TEXT_DURATION_SECONDS = TutorialTextGui.DefaultTemporaryDurationSeconds or 3
 
 local HUD_QUEST_PREFIX = "QuestHud_"
 local HUD_STEP_PREFIX = "QuestHudStep_"
@@ -34,15 +37,17 @@ local REWARD_ROW_PREFIX = "QuestReward_"
 
 local ONBOARDING_LESSON_QUEST_IDS = table.freeze({
 	stan_paid_roll_intro = true,
+	stan_man_aura_intro = true,
 	stan_appraisal_intro = true,
 	stan_crafting_intro = true,
 	stan_boss_intro = true,
 })
 local ONBOARDING_LESSON_ORDER = table.freeze({
 	stan_paid_roll_intro = 1,
-	stan_appraisal_intro = 2,
-	stan_crafting_intro = 3,
-	stan_boss_intro = 4,
+	stan_man_aura_intro = 2,
+	stan_appraisal_intro = 3,
+	stan_crafting_intro = 4,
+	stan_boss_intro = 5,
 })
 
 type QuestRemotes = {
@@ -96,6 +101,23 @@ local function showNotification(text: string, tone: string?)
 	})
 end
 
+local function showTutorialQuestStarted(eventData: any)
+	local payload = if typeof(eventData) == "table" then eventData.tutorialQuestStarted else nil
+	if typeof(payload) ~= "table" then
+		return
+	end
+
+	local message = if typeof(payload.message) == "string" then payload.message else nil
+	local displayName = if typeof(payload.displayName) == "string" then payload.displayName else nil
+	local text = message
+	if text == nil and displayName then
+		text = string.format("%s started.", displayName)
+	end
+	if typeof(text) == "string" and text ~= "" then
+		TutorialTextGui.ShowTemporaryText(text, TUTORIAL_QUEST_STARTED_TEXT_DURATION_SECONDS)
+	end
+end
+
 local function getRewardDailyChests(result: any): { any }?
 	local rewardPresentation = if typeof(result) == "table" then result.rewardPresentation else nil
 	local dailyChests = if typeof(rewardPresentation) == "table" then rewardPresentation.dailyChests else nil
@@ -104,6 +126,15 @@ local function getRewardDailyChests(result: any): { any }?
 	end
 
 	return nil
+end
+
+local function openChestPackagesAndRelease(dailyChests: { any }, releaseOverlayBlock: () -> ())
+	local ok, errorMessage = pcall(DailyChestController.OpenChestPackages, dailyChests)
+	releaseOverlayBlock()
+
+	if not ok then
+		Logger.Warn(string.format("[QuestController] Chest reward presentation failed: %s", tostring(errorMessage)))
+	end
 end
 
 local function getTextLabel(root: Instance, name: string): TextLabel?
@@ -646,20 +677,23 @@ function QuestController:_claimQuest(questId: string)
 		showNotification("Quests are not ready right now.")
 		return
 	end
+
+	local releaseOverlayBlock = TutorialOverlayGate.BeginBlock("quest_claim")
 	local result = self:_invokeQuestRemote((self._remotes :: QuestRemotes).claimQuest, questId, "Could not claim quest.")
 	local dailyChests = getRewardDailyChests(result)
 	if dailyChests == nil then
+		releaseOverlayBlock()
 		return
 	end
 
 	local closing = FrameController:CloseFrame(WINDOW_NAME)
 	if closing then
 		task.delay(CHEST_OPEN_AFTER_CLOSE_DELAY_SECONDS, function()
-			DailyChestController.OpenChestPackages(dailyChests)
+			openChestPackagesAndRelease(dailyChests, releaseOverlayBlock)
 		end)
 	else
 		task.spawn(function()
-			DailyChestController.OpenChestPackages(dailyChests)
+			openChestPackagesAndRelease(dailyChests, releaseOverlayBlock)
 		end)
 	end
 end
@@ -1058,12 +1092,14 @@ function QuestController:OnStart()
 	self._started = true
 
 	self:_ensureUi()
+	TutorialTextGui.Init(LOCAL_PLAYER:WaitForChild("PlayerGui"))
 	self:_bindUi()
 	self:_bindQuestBoardPrompt()
 	self:_ensureRemotes()
 	if self._remotes then
-		self._remotes.questUpdated.OnClientEvent:Connect(function(state: any, message: string?)
+		self._remotes.questUpdated.OnClientEvent:Connect(function(state: any, message: string?, eventData: any?)
 			self:_applyState(state)
+			showTutorialQuestStarted(eventData)
 			if typeof(message) == "string" and message ~= "" then
 				showNotification(message, "good")
 			end

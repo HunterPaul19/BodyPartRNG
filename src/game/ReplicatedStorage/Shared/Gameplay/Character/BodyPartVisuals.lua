@@ -3490,10 +3490,23 @@ function BodyPartVisuals.RefreshAura(character: Model, auraRequest: ApplyAuraReq
 	clearAuraRuntime(character)
 
 	if auraRequest == nil then
+		local requests = appliedRegionRequestsByCharacter[character]
+		if requests then
+			requests.__aura = nil
+		end
 		return true, nil
 	end
 
-	return applyAuraRuntime(character, auraRequest)
+	local success, err = applyAuraRuntime(character, auraRequest)
+	if success then
+		local requests = getAppliedRegionRequests(character)
+		requests.__aura = {
+			id = auraRequest.id,
+			model = auraRequest.model,
+		}
+	end
+
+	return success, err
 end
 
 function BodyPartVisuals.GetAuraRuntimeStatus(character: Model, auraRequest: ApplyAuraRequest?): AuraRuntimeStatus
@@ -3872,6 +3885,52 @@ function BodyPartVisuals.RefreshAppearance(character: Model, request: ApplyReque
 end
 
 function BodyPartVisuals.Apply(character: Model, request: ApplyRequest): ApplyResult
+	local rollbackDisabled = typeof(request) == "table" and request.__rollbackDisabled == true
+	local baseRig = if typeof(request) == "table" then request.baseRig else nil
+	local canRollback = not rollbackDisabled and character and character:IsA("Model") and baseRig and baseRig:IsA("Model")
+	local rollbackRequest = nil
+
+	if canRollback then
+		local previousRegions = {}
+		local previousAura = nil
+		local previousRequests = appliedRegionRequestsByCharacter[character]
+		if previousRequests then
+			for _, region in ipairs(FULL_LOADOUT_REGION_ORDER) do
+				previousRegions[region] = cloneRegionRequest(previousRequests[region])
+			end
+
+			local storedAuraRequest = previousRequests.__aura
+			local storedAuraModel = if typeof(storedAuraRequest) == "table" then storedAuraRequest.model else nil
+			if typeof(storedAuraRequest) == "table"
+				and typeof(storedAuraRequest.id) == "string"
+				and storedAuraRequest.id ~= ""
+				and storedAuraModel
+				and storedAuraModel:IsA("Model")
+			then
+				previousAura = {
+					id = storedAuraRequest.id,
+					model = storedAuraModel,
+				}
+			end
+		end
+
+		if hasAnyRequestedRegions(previousRegions) or previousAura ~= nil then
+			rollbackRequest = {
+				baseRig = baseRig,
+				regions = previousRegions,
+				aura = previousAura,
+			}
+		end
+	end
+
+	local function formatResultMessage(result: ApplyResult): string
+		if result.errors and #result.errors > 0 then
+			return table.concat(result.errors, "; ")
+		end
+
+		return "unknown error"
+	end
+
 	local startedAt = PerfStats.Begin()
 	local releaseBuildPose = quiesceCharacterForBuild(character)
 
@@ -3991,16 +4050,47 @@ function BodyPartVisuals.Apply(character: Model, request: ApplyRequest): ApplyRe
 		return buildResult(#errors == 0, errors, appliedRegions, character)
 	end, debug.traceback)
 
+	local result
 	if not ok then
-		return finalize({
+		result = finalize({
 			success = false,
 			errors = { tostring(resultOrTrace) },
 			appliedRegions = {},
 			hipHeight = nil,
 		})
+	else
+		result = finalize(resultOrTrace)
 	end
 
-	return finalize(resultOrTrace)
+	if not result.success and canRollback then
+		local shouldReset = true
+		if rollbackRequest then
+			rollbackRequest.__rollbackDisabled = true
+			local rollbackResult = BodyPartVisuals.Apply(character, rollbackRequest)
+			if rollbackResult.success then
+				shouldReset = false
+			else
+				Logger.Warn(string.format(
+					"[BodyPartVisuals] Failed to restore previous visuals after apply failure (%s). Resetting character: %s",
+					formatResultMessage(result),
+					formatResultMessage(rollbackResult)
+				))
+			end
+		end
+
+		if shouldReset then
+			local resetResult = BodyPartVisuals.Reset(character, baseRig)
+			if not resetResult.success then
+				Logger.Warn(string.format(
+					"[BodyPartVisuals] Failed to reset character after apply failure (%s): %s",
+					formatResultMessage(result),
+					formatResultMessage(resetResult)
+				))
+			end
+		end
+	end
+
+	return result
 end
 
 function BodyPartVisuals.Reset(character: Model, _baseRig: Model?): ApplyResult

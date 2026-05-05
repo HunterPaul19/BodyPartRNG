@@ -7,6 +7,9 @@
       "$ignoreUnknownInstances": true,
       "LoadingBootstrap": {
         "$path": "src/game/ReplicatedFirst/LoadingBootstrap.client.lua"
+      },
+      "TeleportTransitionArrival": {
+        "$path": "src/game/ReplicatedFirst/TeleportTransitionArrival.client.lua"
       }
     },
     "ReplicatedStorage": {
@@ -275,6 +278,9 @@
         "TestService": {
           "$path": "src/game/ServerScriptService/Services/Core/TestService.lua"
         },
+        "TeleportTransitionService": {
+          "$path": "src/game/ServerScriptService/Services/Core/TeleportTransitionService.lua"
+        },
         "TimeShardService": {
           "$path": "src/game/ServerScriptService/Services/Gameplay/TimeShardService.lua"
         },
@@ -452,6 +458,9 @@
           "OverheadTitleController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/OverheadTitleController.lua"
           },
+          "PlayerStatsBoardController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/UI/PlayerStatsBoardController.lua"
+          },
           "PlayerInspectController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/PlayerInspectController.lua"
           },
@@ -478,6 +487,9 @@
           },
           "TestController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Core/TestController.lua"
+          },
+          "TeleportTransitionController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Core/TeleportTransitionController.lua"
           },
           "TimeShardsHUDController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/UI/TimeShardsHUDController.lua"

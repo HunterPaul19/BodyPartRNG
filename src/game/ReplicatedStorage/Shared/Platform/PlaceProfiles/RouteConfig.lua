@@ -3,6 +3,7 @@ local Logger = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared
 local RunService = game:GetService("RunService")
 
 local RouteConfig = {}
+local runtimeEnvironmentFallbackWarningEmitted = false
 
 export type RuntimeEnvironment = "dev" | "production"
 
@@ -75,6 +76,26 @@ local function getConfiguredProfileIds(): { string }
 	return orderedProfileIds
 end
 
+local function resolveEnvironmentForPlaceId(placeId: number): RuntimeEnvironment?
+	if placeId <= 0 then
+		return nil
+	end
+
+	for _, configuredPlaceId in pairs(RouteConfig.PlaceIds.dev) do
+		if normalizePlaceId(configuredPlaceId) == placeId then
+			return "dev"
+		end
+	end
+
+	for _, configuredPlaceId in pairs(RouteConfig.PlaceIds.production) do
+		if normalizePlaceId(configuredPlaceId) == placeId then
+			return "production"
+		end
+	end
+
+	return nil
+end
+
 local function validatePlaceIds()
 	local configuredProfileIds = getConfiguredProfileIds()
 
@@ -109,12 +130,22 @@ local function validatePlaceIds()
 end
 
 function RouteConfig.GetRuntimeEnvironment(): RuntimeEnvironment
-	-- Studio sessions should stay on the development place graph while live
-	-- servers and clients resolve against production place ids.
 	if RunService:IsStudio() then
 		return "dev"
 	end
 
+	local placeEnvironment = resolveEnvironmentForPlaceId(normalizePlaceId(game.PlaceId))
+	if placeEnvironment then
+		return placeEnvironment
+	end
+
+	if not runtimeEnvironmentFallbackWarningEmitted then
+		runtimeEnvironmentFallbackWarningEmitted = true
+		Logger.Warn(string.format(
+			"[RouteConfig] No configured runtime environment matched PlaceId %d. Falling back to production routes.",
+			normalizePlaceId(game.PlaceId)
+		))
+	end
 	return "production"
 end
 

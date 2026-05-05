@@ -1288,6 +1288,9 @@ function RollService:SelectRollType(player: Player, rollTypeId: string): (boolea
 	if not rollType then
 		return false, "That roll type does not exist."
 	end
+	if rollTypeId ~= "free" and QuestService:IsTutorialRollTypeLockedToFree(player) then
+		return false, "Finish the aura lesson first."
+	end
 
 	local previousRollTypeId = DataService:GetSelectedRollType(player)
 	local ok, message = DataService:SetSelectedRollType(player, rollTypeId)
@@ -1553,6 +1556,19 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		return false, "No valid roll type is selected.", nil
 	end
 
+	local randomSource = Random.new()
+	local tutorialRollOverride = QuestService:ResolveTutorialRollOverride(player, randomSource)
+	if tutorialRollOverride then
+		local overrideRollTypeId = if typeof(tutorialRollOverride.effectiveRollTypeId) == "string"
+			then tutorialRollOverride.effectiveRollTypeId
+			else tutorialRollOverride.rollTypeId
+		local overrideRollType = RollTypes.Get(overrideRollTypeId)
+		if overrideRollType then
+			selectedRollTypeId = overrideRollType.id
+			selectedRollType = overrideRollType
+		end
+	end
+
 	local currentOwnedCount = OwnedBodyParts.CountOwned(DataService:GetBodyPartsState(player))
 	if currentOwnedCount >= OwnedBodyParts.MAX_OWNED_COUNT then
 		rollLocks[player] = nil
@@ -1602,9 +1618,29 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 	local triggerSource = if typeof(payload) == "table" and payload.triggerSource == "auto" then "auto" else "manual"
 	local skipPresentation = quickRollApplied and triggerSource == "auto"
 	local skipPreview = quickRollApplied and triggerSource ~= "auto"
+	if tutorialRollOverride and tutorialRollOverride.forceVisiblePresentation == true then
+		skipPresentation = false
+		skipPreview = false
+	end
 	local _, activeEntries = buildRollListEntries(luckState.bandLuckInput)
-	local randomSource = Random.new()
-	local finalSet = chooseWeightedSet(randomSource, activeEntries)
+	local finalSet = nil
+	if tutorialRollOverride then
+		local overrideSetConfig = if typeof(tutorialRollOverride.setConfig) == "table"
+			then tutorialRollOverride.setConfig
+			else BodyPartsCatalog.GetSet(tutorialRollOverride.setId)
+		if overrideSetConfig then
+			local rollDisplay = overrideSetConfig.rollDisplay or {}
+			local displayRarity = RollingConfig.NormalizeDisplayRarity(rollDisplay.rarity)
+			finalSet = {
+				setId = overrideSetConfig.id,
+				setConfig = overrideSetConfig,
+				displayedDenominator = math.max(1, math.floor(tonumber(rollDisplay.chance) or 1)),
+				displayRarity = displayRarity,
+			}
+		end
+	else
+		finalSet = chooseWeightedSet(randomSource, activeEntries)
+	end
 	if not finalSet then
 		rollLocks[player] = nil
 		StatsService:RecordRollFailure(player, "missing_config")
@@ -1614,7 +1650,9 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		return false, "No body part sets are configured for rolling.", nil
 	end
 
-	local finalPiece = choosePieceFromSetForRegion(randomSource, finalSet.setId, selectedRollRegion)
+	local finalPiece = if tutorialRollOverride and typeof(tutorialRollOverride.piece) == "table"
+		then tutorialRollOverride.piece
+		else choosePieceFromSetForRegion(randomSource, finalSet.setId, selectedRollRegion)
 	if not finalPiece then
 		rollLocks[player] = nil
 		StatsService:RecordRollFailure(player, "missing_config")
@@ -1677,6 +1715,9 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 	local acquisitionResult = BodyPartAcquisitionService:Acquire(player, grantPayload, {
 		source = "roll",
 		presentation = if skipPresentation then "immediate_reward" else "roll_pending",
+		allowAutoEquip = if tutorialRollOverride then tutorialRollOverride.allowAutoEquip == true else nil,
+		allowAutoCraft = if tutorialRollOverride then tutorialRollOverride.allowAutoCraft == true else nil,
+		allowAutoSell = if tutorialRollOverride then tutorialRollOverride.allowAutoSell == true else nil,
 	})
 	local ownedRecord = acquisitionResult.record
 	local grantError = acquisitionResult.error
@@ -1715,9 +1756,12 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 			reservation = reservedGrant,
 		}
 	end
+	local effectiveRollRegion = if tutorialRollOverride and tutorialRollOverride.ignoreRollRegion == true
+		then RollTargetRegions.FullBody
+		else selectedRollRegion
 	StatsService:RecordRollSuccess(player, {
 		rollTypeId = selectedRollType.id,
-		rollRegion = selectedRollRegion,
+		rollRegion = effectiveRollRegion,
 		displayRarity = autoSellRarity,
 		setId = finalSet.setId,
 		mutationId = mutationData.id,
@@ -1731,7 +1775,7 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 	})
 	QuestService:RecordEvent(player, "roll_completed", {
 		rollTypeId = selectedRollType.id,
-		rollRegion = selectedRollRegion,
+		rollRegion = effectiveRollRegion,
 		displayRarity = autoSellRarity,
 		setId = finalSet.setId,
 		mutationId = mutationData.id,
@@ -1744,6 +1788,8 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		autoEquipped = autoEquipped,
 		autoCraftCommitted = autoCraftCommitted,
 		autoSoldInstantly = autoSoldInstantly,
+		tutorialQuestId = if tutorialRollOverride then tutorialRollOverride.questId else nil,
+		tutorialRoll = tutorialRollOverride ~= nil,
 		amount = 1,
 	})
 	local shouldPlayCutscene, cutsceneTier =
@@ -1763,9 +1809,11 @@ function RollService:PerformRoll(player: Player, payload: any?): (boolean, strin
 		skipPresentation = skipPresentation,
 		autoSellRarity = if (pendingAutoSell or autoSoldInstantly) then autoSellRarity else nil,
 		rollTypeId = selectedRollType.id,
-		rollRegion = selectedRollRegion,
+		rollRegion = effectiveRollRegion,
 		moneySpent = selectedRollType.moneyCost,
 		remainingMoney = remainingMoney,
+		tutorialQuestId = if tutorialRollOverride then tutorialRollOverride.questId else nil,
+		tutorialRoll = tutorialRollOverride ~= nil,
 		bonuses = bonuses,
 		baseTotalLuck = luckState.baseLuck,
 		totalLuck = luckState.rawLuck,

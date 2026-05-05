@@ -8,6 +8,7 @@ local DialogueDefinitions = require(ReplicatedStorage.Shared.Config.DialogueDefi
 local DefinitionUtil = require(ReplicatedStorage.Shared.Gameplay.Dialogue.DefinitionUtil)
 local DialogueRegistry = require(ReplicatedStorage.Shared.Gameplay.Dialogue.Registry)
 local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
+local TutorialOverlayGate = require(ReplicatedStorage.Shared.UI.TutorialOverlayGate)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
 local MainInterfaceController = require(script.Parent.MainInterfaceController)
@@ -650,6 +651,29 @@ function DialogueController:_runServerAction(choice: DialogueChoice, action: Dia
 		return false
 	end
 
+	local releaseOverlayBlock: (() -> ())? = nil
+	if action.type == "claimQuest" then
+		releaseOverlayBlock = TutorialOverlayGate.BeginBlock("dialogue_claim")
+	end
+
+	local function releaseOverlayBlockIfHeld()
+		if releaseOverlayBlock == nil then
+			return
+		end
+
+		releaseOverlayBlock()
+		releaseOverlayBlock = nil
+	end
+
+	local function openChestPackagesAndRelease(dailyChests: { any })
+		local ok, errorMessage = pcall(DailyChestController.OpenChestPackages, dailyChests)
+		releaseOverlayBlockIfHeld()
+
+		if not ok then
+			Logger.Warn(string.format("[DialogueController] Chest reward presentation failed: %s", tostring(errorMessage)))
+		end
+	end
+
 	local ok, result, timedOut = RemoteFunctionTimeout.Invoke(remote, {
 		dialogueId = dialogueId,
 		nodeId = nodeId,
@@ -660,41 +684,49 @@ function DialogueController:_runServerAction(choice: DialogueChoice, action: Dia
 	if not ok then
 		local reason = if timedOut then "timed out" else "failed"
 		Logger.Warn(string.format("[DialogueController] Server action '%s' %s: %s", tostring(action.type), reason, tostring(result)))
+		releaseOverlayBlockIfHeld()
 		return false
 	end
 	if typeof(result) ~= "table" or result.ok ~= true then
 		local message = if typeof(result) == "table" then result.message else nil
 		Logger.Warn(string.format("[DialogueController] Server action '%s' rejected: %s", tostring(action.type), tostring(message)))
+		releaseOverlayBlockIfHeld()
 		return false
 	end
 
 	local data = if typeof(result.data) == "table" then result.data else {}
 	local rewardPresentation = if typeof(data.rewardPresentation) == "table" then data.rewardPresentation else {}
 	local dailyChests = if typeof(rewardPresentation.dailyChests) == "table" then rewardPresentation.dailyChests else nil
+	local hasDailyChests = dailyChests and #dailyChests > 0
 	if data.closeDialogue == true then
-		if dailyChests and #dailyChests > 0 then
+		if hasDailyChests then
 			self:_closeDialogue(function()
-				DailyChestController.OpenChestPackages(dailyChests)
+				openChestPackagesAndRelease(dailyChests)
 			end)
 		else
+			releaseOverlayBlockIfHeld()
 			self:_closeDialogue()
 		end
 		return true
 	end
 	if typeof(data.nextNodeId) == "string" and data.nextNodeId ~= "" then
 		local changedNode = self:_setCurrentNode(data.nextNodeId)
-		if changedNode and dailyChests and #dailyChests > 0 then
+		if changedNode and hasDailyChests then
 			task.spawn(function()
-				DailyChestController.OpenChestPackages(dailyChests)
+				openChestPackagesAndRelease(dailyChests)
 			end)
+		else
+			releaseOverlayBlockIfHeld()
 		end
 		return changedNode
 	end
 
-	if dailyChests and #dailyChests > 0 then
+	if hasDailyChests then
 		task.spawn(function()
-			DailyChestController.OpenChestPackages(dailyChests)
+			openChestPackagesAndRelease(dailyChests)
 		end)
+	else
+		releaseOverlayBlockIfHeld()
 	end
 
 	return true

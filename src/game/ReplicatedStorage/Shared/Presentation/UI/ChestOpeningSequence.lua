@@ -16,6 +16,7 @@ local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormat
 local PotionConfig = require(ReplicatedStorage.Shared.Config.PotionConfig)
 local PotionPresentation = require(ReplicatedStorage.Shared.UI.PotionPresentation)
 local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
+local TutorialOverlayGate = require(ReplicatedStorage.Shared.UI.TutorialOverlayGate)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local OVERLAY_NAME = "ChestRewardOverlay"
@@ -741,6 +742,7 @@ local function openChestSequence(chestId: string, rewards: { any }, completedEve
 		return false
 	end
 
+	local releaseOverlayBlock = TutorialOverlayGate.BeginBlock("chest_opening_sequence")
 	ChestOpeningSequence._active = true
 
 	local overlay = overlayParts.overlay :: ScreenGui
@@ -836,6 +838,7 @@ local function openChestSequence(chestId: string, rewards: { any }, completedEve
 			overlay.Enabled = false
 			ChestOpeningSequence._active = false
 			setTutorialTarget(nil, nil)
+			releaseOverlayBlock()
 			if completedEvent then
 				completedEvent:Fire(true)
 			end

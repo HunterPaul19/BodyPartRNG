@@ -5,7 +5,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Logger = require(ReplicatedStorage.Shared.Diagnostics.Logger)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 
-local TUTORIAL_VERSION = "v1"
+local TUTORIAL_VERSION = "v2"
 
 local ONBOARDING_STEPS = table.freeze({
 	[1] = "Tutorial Eligible",
@@ -15,13 +15,16 @@ local ONBOARDING_STEPS = table.freeze({
 	[5] = "Rolling Lesson: Paid Roll Used",
 	[6] = "Rolling Lesson: Clean+ Rolled",
 	[7] = "Rolling Lesson: Clean+ Equipped",
-	[8] = "Appraisal Tour: Appraiser Met",
-	[9] = "Appraisal Tour: Body Part Appraised",
-	[10] = "Crafting Tour: Crafter Met",
-	[11] = "Crafting Tour: Crown Recipe Opened",
-	[12] = "Crafting Tour: Crown Crafted",
-	[13] = "Boss World Tour: Boss World Entered",
-	[14] = "Boss World Tour: First Boss Defeated",
+	[8] = "Man Aura Lesson: Man Set Completed",
+	[9] = "Man Aura Lesson: Man Aura Equipped",
+	[10] = "Appraisal Tour: Appraiser Met",
+	[11] = "Appraisal Tour: Body Part Appraised",
+	[12] = "Crafting Tour: Crafter Met",
+	[13] = "Crafting Tour: Crown Recipe Opened",
+	[14] = "Crafting Tour: Crown Crafted",
+	[15] = "Boss World Tour: Boss World Entered",
+	[16] = "Boss World Tour: First Boss Defeated",
+	[17] = "Boss World Tour: First Gear Crafted",
 })
 
 local ONBOARDING_QUEST_PART_STEPS = table.freeze({
@@ -30,18 +33,23 @@ local ONBOARDING_QUEST_PART_STEPS = table.freeze({
 		[2] = 6,
 		[3] = 7,
 	}),
-	stan_appraisal_intro = table.freeze({
+	stan_man_aura_intro = table.freeze({
 		[1] = 8,
 		[2] = 9,
 	}),
-	stan_crafting_intro = table.freeze({
+	stan_appraisal_intro = table.freeze({
 		[1] = 10,
 		[2] = 11,
-		[3] = 12,
+	}),
+	stan_crafting_intro = table.freeze({
+		[1] = 12,
+		[2] = 13,
+		[3] = 14,
 	}),
 	stan_boss_intro = table.freeze({
-		[1] = 13,
-		[2] = 14,
+		[1] = 15,
+		[2] = 16,
+		[3] = 17,
 	}),
 })
 

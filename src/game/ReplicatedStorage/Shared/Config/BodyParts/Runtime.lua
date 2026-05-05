@@ -1,8 +1,11 @@
+local SizeConfig = require(script.Parent.Parent.SizeConfig)
+
 local Runtime = {}
+local minScale, maxScale = SizeConfig.GetScaleBounds()
 
 Runtime.DefaultScale = 1
-Runtime.MinScale = 0.5
-Runtime.MaxScale = 3
+Runtime.MinScale = minScale
+Runtime.MaxScale = maxScale
 
 function Runtime.GetScaleBounds(_pieceId: string): (number, number)
 	return Runtime.MinScale, Runtime.MaxScale

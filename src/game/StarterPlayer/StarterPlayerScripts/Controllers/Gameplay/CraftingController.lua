@@ -49,6 +49,8 @@ local MONEY_DATA_KEY = Schema.Money and Schema.Money.key or "money"
 
 local HEAD_FILTER = "HeadAccessory"
 local GEAR_FILTER = "GearAccessory"
+local HOLIDAY_CROWN_RECIPE_ID = "holiday_crown"
+local FIRST_GEAR_RECIPE_ID = "bombos_survival_knife"
 local SELECTED_ROW_TRANSPARENCY = 0
 local DEFAULT_ROW_TRANSPARENCY = 0.16
 local DISABLED_ROW_TRANSPARENCY = 0.45
@@ -1691,11 +1693,22 @@ function CraftingController:GetTutorialTarget(targetId: string): GuiObject?
 		return nil
 	end
 
-	local isHolidayCrownSelected = self._selectedRecipeId == "holiday_crown"
-	local isIngredientPanelOpen = self._ui.ingredientSelect ~= nil
-		and self._ui.ingredientSelect.Visible == true
+	local isHolidayCrownSelected = self._selectedRecipeId == HOLIDAY_CROWN_RECIPE_ID
+	local isFirstGearSelected = self._selectedRecipeId == FIRST_GEAR_RECIPE_ID
+	local isIngredientSelectVisible = self._ui.ingredientSelect ~= nil and self._ui.ingredientSelect.Visible == true
+	local isIngredientPanelOpen = isIngredientSelectVisible
 		and self._ui.ingredientMain ~= nil
 		and self._ui.ingredientMain.Visible == true
+	local isConfirmationOpen = isIngredientSelectVisible
+		and self._ui.confirmationFrame ~= nil
+		and self._ui.confirmationFrame.Visible == true
+	local isFirstGearCraftable = false
+	if isFirstGearSelected then
+		local firstGearRecipe = self:_findRecipe(FIRST_GEAR_RECIPE_ID)
+		if firstGearRecipe then
+			isFirstGearCraftable = self:_getCraftability(firstGearRecipe)
+		end
+	end
 
 	if targetId == "closeButton" then
 		local button = self._ui.menuCloseButton
@@ -1705,12 +1718,31 @@ function CraftingController:GetTutorialTarget(targetId: string): GuiObject?
 		local button = self._ui.accessoriesFilterButton
 		return if button and button.Visible == true and button.Active == true then button else nil
 	end
+	if targetId == "gearsFilter" or targetId == "firstGearGearFilter" or targetId == "firstGearGearsFilter" then
+		if self._selectedFilterSlot == GEAR_FILTER then
+			return nil
+		end
+		local button = self._ui.gearsFilterButton
+		return if button and button.Visible == true and button.Active == true then button else nil
+	end
 	if targetId == "holidayCrownRecipe" then
 		if isHolidayCrownSelected then
 			return nil
 		end
 		self:_syncRecipeRows()
-		local row = self._recipeRowsById["holiday_crown"]
+		local row = self._recipeRowsById[HOLIDAY_CROWN_RECIPE_ID]
+		if row and row:IsA("GuiButton") and row.Visible == true and row.Active == true then
+			self:_scrollTutorialRecipeIntoView(row)
+			return row
+		end
+		return nil
+	end
+	if targetId == "firstGearRecipe" or targetId == "bombosSurvivalKnifeRecipe" then
+		if isFirstGearSelected or self._selectedFilterSlot ~= GEAR_FILTER then
+			return nil
+		end
+		self:_syncRecipeRows()
+		local row = self._recipeRowsById[FIRST_GEAR_RECIPE_ID]
 		if row and row:IsA("GuiButton") and row.Visible == true and row.Active == true then
 			self:_scrollTutorialRecipeIntoView(row)
 			return row
@@ -1724,15 +1756,31 @@ function CraftingController:GetTutorialTarget(targetId: string): GuiObject?
 		local button = self._ui.autoCraftButton
 		return if button and button.Visible == true and button.Active == true then button else nil
 	end
-	if targetId == "openRecipe" then
-		if not isHolidayCrownSelected or isIngredientPanelOpen then
+	if targetId == "openRecipe" or targetId == "firstGearOpenRecipe" then
+		local isTargetRecipeSelected = if targetId == "firstGearOpenRecipe" then isFirstGearSelected else isHolidayCrownSelected
+		if not isTargetRecipeSelected or isIngredientSelectVisible then
 			return nil
 		end
 		local button = self._ui.openRecipeButton
 		return if button and button.Visible == true and button.Active == true then button else nil
 	end
-	if targetId == "craftButton" then
-		if not isHolidayCrownSelected or not isIngredientPanelOpen then
+	if targetId == "firstGearAddEverything" then
+		if not isFirstGearSelected or not isIngredientPanelOpen or isFirstGearCraftable then
+			return nil
+		end
+		local button = self._ui.addEverythingButton
+		return if button and button.Visible == true and button.Active == true then button else nil
+	end
+	if targetId == "firstGearConfirmAddEverything" then
+		if not isFirstGearSelected or not isConfirmationOpen then
+			return nil
+		end
+		local button = self._ui.confirmationConfirmButton
+		return if button and button.Visible == true and button.Active == true then button else nil
+	end
+	if targetId == "craftButton" or targetId == "firstGearCraftButton" then
+		local isTargetRecipeSelected = if targetId == "firstGearCraftButton" then isFirstGearSelected else isHolidayCrownSelected
+		if not isTargetRecipeSelected or not isIngredientPanelOpen or isConfirmationOpen then
 			return nil
 		end
 		local button = self._ui.ingredientCraftButton

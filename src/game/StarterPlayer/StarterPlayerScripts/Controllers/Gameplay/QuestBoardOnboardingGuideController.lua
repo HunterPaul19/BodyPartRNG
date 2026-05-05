@@ -4,35 +4,41 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local AppraisalController = require(script.Parent.AppraisalController)
+local CraftingController = require(script.Parent.CraftingController)
 local DataController = require(script.Parent.DataController)
 local FrameController = require(script.Parent.FrameController)
+local InventoryController = require(script.Parent.InventoryController)
 local ObjectiveGuideController = require(script.Parent.ObjectiveGuideController)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local QuestConfig = require(ReplicatedStorage.Shared.Config.QuestConfig)
 local RollController = require(script.Parent.RollController)
 local Schema = require(ReplicatedStorage.Lists.Schema)
 local ScreenDarkener = require(ReplicatedStorage.Shared.UI.ScreenDarkener)
+local TutorialOverlayGate = require(ReplicatedStorage.Shared.UI.TutorialOverlayGate)
 local TutorialTextGui = require(ReplicatedStorage.Shared.UI.TutorialTextGui)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local MAIN_PROFILE_ID = "main"
 local QUESTS_KEY = Schema.Quests and Schema.Quests.key or "quests"
-local TUTORIAL_KEY = Schema.Tutorial and Schema.Tutorial.key or "tutorial"
-local BOARD_OPENED_FLAG = "onboarding_quest_board_opened"
-local QUEST_BOARD_TEXT = "Go to the quest board!"
 local QUEST_READY_TO_CLAIM_TEXT = "Go back to quest board to claim rewards!"
 local DIALOGUE_ID_ATTRIBUTE = "DialogueId"
 local PAID_ROLL_QUEST_ID = "stan_paid_roll_intro"
+local MAN_AURA_QUEST_ID = "stan_man_aura_intro"
 local APPRAISAL_QUEST_ID = "stan_appraisal_intro"
+local BOSS_INTRO_QUEST_ID = "stan_boss_intro"
 local PAID_ROLL_TYPE_ID = "roll_2"
+local INVENTORY_FRAME_NAME = "Inventory"
+local MAN_AURA_SET_TARGET = 6
 local SYNC_INTERVAL_SECONDS = 0.2
 local STEP_TEXT_DURATION_SECONDS = TutorialTextGui.DefaultTemporaryDurationSeconds or 3
+local TUTORIAL_AUTO_CHAIN_ENROLLED_FLAG = "tutorial_auto_chain_enrolled"
 
-local ONBOARDING_QUEST_IDS = table.freeze({
-	PAID_ROLL_QUEST_ID,
-	APPRAISAL_QUEST_ID,
-	"stan_crafting_intro",
-	"stan_boss_intro",
+local TUTORIAL_CHAIN_QUEST_IDS = table.freeze({
+	stan_paid_roll_intro = true,
+	stan_man_aura_intro = true,
+	stan_appraisal_intro = true,
+	stan_crafting_intro = true,
+	stan_boss_intro = true,
 })
 
 local BOARD_GUIDE = table.freeze({
@@ -67,11 +73,23 @@ local GUIDE_TARGETS = table.freeze({
 		},
 		projectTargetToGround = false,
 	},
+	{
+		questId = "stan_boss_intro",
+		partIndex = 3,
+		objectiveId = "stan_boss_intro_first_gear_guide",
+		targetPath = "Workspace.Crafting.Craftsman",
+		fallbackTargetPaths = {
+			"Workspace.Crafting.Craftsman.HumanoidRootPart",
+			"Workspace.Crafting.Craftsman.Crafting",
+			"Workspace.Crafting",
+		},
+		projectTargetToGround = false,
+	},
 })
 
 local QuestBoardOnboardingGuideController = {
 	_started = false,
-	_boardOpenedThisSession = false,
+	_boardGuideSuppressedForReady = false,
 	_darkener = nil :: any,
 	_activeTarget = nil :: GuiObject?,
 	_ownsText = false,
@@ -90,62 +108,20 @@ local function shouldRunForPlace(): boolean
 	return PlaceProfile.GetActiveProfile().id == MAIN_PROFILE_ID
 end
 
-local function isTutorialComplete(rawTutorialState: any): boolean
-	return typeof(rawTutorialState) == "table" and rawTutorialState.completed == true
+local function isTutorialChainQuestId(questId: any): boolean
+	return typeof(questId) == "string" and TUTORIAL_CHAIN_QUEST_IDS[questId] == true
 end
 
-local function isQuestClaimed(rawQuestState: any, questId: string): boolean
-	if typeof(rawQuestState) ~= "table" then
-		return false
-	end
-
-	local completedByQuestId = rawQuestState.completedByQuestId
-	if typeof(completedByQuestId) == "table" and completedByQuestId[questId] == true then
-		return true
-	end
-
-	local claimedByQuestId = rawQuestState.claimedByQuestId
-	if typeof(claimedByQuestId) == "table" and claimedByQuestId[questId] == true then
-		return true
-	end
-
-	local activeByQuestId = rawQuestState.activeByQuestId
-	local activeQuest = if typeof(activeByQuestId) == "table" then activeByQuestId[questId] else nil
-	return typeof(activeQuest) == "table" and activeQuest.status == "claimed"
-end
-
-local function areAllOnboardingQuestsClaimed(rawQuestState: any): boolean
-	for _, questId in ipairs(ONBOARDING_QUEST_IDS) do
-		if not isQuestClaimed(rawQuestState, questId) then
-			return false
-		end
-	end
-
-	return true
-end
-
-local function wasQuestBoardOpened(rawQuestState: any): boolean
+local function isTutorialChainEnrolled(rawQuestState: any): boolean
 	if typeof(rawQuestState) ~= "table" then
 		return false
 	end
 
 	local unlockFlags = rawQuestState.unlockFlags
-	return typeof(unlockFlags) == "table" and unlockFlags[BOARD_OPENED_FLAG] == true
+	return typeof(unlockFlags) == "table" and unlockFlags[TUTORIAL_AUTO_CHAIN_ENROLLED_FLAG] == true
 end
 
-local function shouldShowBoardGuide(data: any, boardOpenedThisSession: boolean): boolean
-	if typeof(data) ~= "table" then
-		return false
-	end
-
-	local rawQuestState = data[QUESTS_KEY]
-	return isTutorialComplete(data[TUTORIAL_KEY])
-		and boardOpenedThisSession ~= true
-		and not wasQuestBoardOpened(rawQuestState)
-		and not areAllOnboardingQuestsClaimed(rawQuestState)
-end
-
-local function hasReadyToClaimQuest(rawQuestState: any): boolean
+local function hasReadyToClaimGuidedQuest(rawQuestState: any): boolean
 	if typeof(rawQuestState) ~= "table" then
 		return false
 	end
@@ -155,8 +131,16 @@ local function hasReadyToClaimQuest(rawQuestState: any): boolean
 		return false
 	end
 
-	for _, activeQuest in pairs(activeByQuestId) do
-		if typeof(activeQuest) == "table" and activeQuest.status == "readyToClaim" then
+	for questId, activeQuest in pairs(activeByQuestId) do
+		if typeof(questId) ~= "string" or typeof(activeQuest) ~= "table" or activeQuest.status ~= "readyToClaim" then
+			continue
+		end
+		if isTutorialChainQuestId(questId) and not isTutorialChainEnrolled(rawQuestState) then
+			continue
+		end
+
+		local definition = QuestConfig.Get(questId)
+		if definition and (definition.kind == "main" or definition.kind == "unlock") then
 			return true
 		end
 	end
@@ -178,18 +162,20 @@ local function getQuestStepText(questId: string, partIndex: number): string?
 	return if typeof(description) == "string" and description ~= "" then description else nil
 end
 
-local function isTalkStepActive(rawQuestState: any, questId: string): boolean
+local function isGuideStepActive(rawQuestState: any, guide: any): boolean
 	if typeof(rawQuestState) ~= "table" then
 		return false
 	end
 
 	local activeByQuestId = rawQuestState.activeByQuestId
+	local questId = guide.questId
 	local activeQuest = if typeof(activeByQuestId) == "table" then activeByQuestId[questId] else nil
 	if typeof(activeQuest) ~= "table" or activeQuest.status ~= "active" then
 		return false
 	end
 
-	return math.floor(tonumber(activeQuest.currentPartIndex) or 1) == 1
+	local partIndex = math.max(1, math.floor(tonumber(guide.partIndex) or 1))
+	return math.floor(tonumber(activeQuest.currentPartIndex) or 1) == partIndex
 end
 
 local function isQuestPartActive(rawQuestState: any, questId: string, partIndex: number): boolean
@@ -204,6 +190,44 @@ local function isQuestPartActive(rawQuestState: any, questId: string, partIndex:
 	end
 
 	return math.floor(tonumber(activeQuest.currentPartIndex) or 1) == partIndex
+end
+
+local function getActiveQuest(rawQuestState: any, questId: string): any?
+	if typeof(rawQuestState) ~= "table" then
+		return nil
+	end
+
+	local activeByQuestId = rawQuestState.activeByQuestId
+	local activeQuest = if typeof(activeByQuestId) == "table" then activeByQuestId[questId] else nil
+	return if typeof(activeQuest) == "table" then activeQuest else nil
+end
+
+local function getObjectiveProgress(activeQuest: any, objectiveId: string): number
+	local objectives = activeQuest and activeQuest.objectives
+	local objective = if typeof(objectives) == "table" then objectives[objectiveId] else nil
+	if typeof(objective) ~= "table" then
+		return 0
+	end
+
+	return math.max(0, math.floor(tonumber(objective.progress) or 0))
+end
+
+local function getManAuraRollText(rawQuestState: any): string?
+	local activeQuest = getActiveQuest(rawQuestState, MAN_AURA_QUEST_ID)
+	if typeof(activeQuest) ~= "table" or activeQuest.status ~= "active" or getQuestPartIndex(activeQuest) ~= 1 then
+		return nil
+	end
+
+	local remaining = math.max(0, MAN_AURA_SET_TARGET - getObjectiveProgress(activeQuest, "complete_man_set"))
+	if remaining <= 0 then
+		return nil
+	end
+
+	return string.format(
+		"Roll %d more %s to complete the Man set.",
+		remaining,
+		if remaining == 1 then "time" else "times"
+	)
 end
 
 local function isGuiTargetUsable(target: GuiObject?): boolean
@@ -264,7 +288,7 @@ end
 
 local function syncTalkStepGuides(rawQuestState: any)
 	for _, guide in ipairs(GUIDE_TARGETS) do
-		syncGuide(guide, isTalkStepActive(rawQuestState, guide.questId))
+		syncGuide(guide, isGuideStepActive(rawQuestState, guide))
 	end
 end
 
@@ -376,6 +400,77 @@ function QuestBoardOnboardingGuideController:_resolvePaidRollAssist(rawQuestStat
 	return nil
 end
 
+function QuestBoardOnboardingGuideController:_resolveManAuraRollAssist(rawQuestState: any): AssistTarget?
+	if not isQuestPartActive(rawQuestState, MAN_AURA_QUEST_ID, 1) then
+		return nil
+	end
+	if isHudAssistBlocked() then
+		return nil
+	end
+
+	local rollButton = RollController:GetTutorialTarget("rollButton")
+	if isGuiTargetUsable(rollButton) then
+		return {
+			target = rollButton :: GuiObject,
+			text = getManAuraRollText(rawQuestState) or "Roll to complete the Man set.",
+		}
+	end
+
+	return nil
+end
+
+function QuestBoardOnboardingGuideController:_resolveManAuraEquipAssist(rawQuestState: any): AssistTarget?
+	if not isQuestPartActive(rawQuestState, MAN_AURA_QUEST_ID, 2) then
+		return nil
+	end
+
+	local openFrame = FrameController:GetOpenFrame()
+	if openFrame ~= nil and openFrame ~= INVENTORY_FRAME_NAME then
+		return nil
+	end
+
+	if not FrameController:IsOpen(INVENTORY_FRAME_NAME) then
+		local inventoryButton = InventoryController:GetTutorialTarget("inventoryButton")
+		if isGuiTargetUsable(inventoryButton) then
+			return {
+				target = inventoryButton :: GuiObject,
+				text = "Open Inventory.",
+			}
+		end
+		return nil
+	end
+
+	local auraFilter = InventoryController:GetTutorialTarget("auraFilter")
+	if isGuiTargetUsable(auraFilter) then
+		return {
+			target = auraFilter :: GuiObject,
+			text = "Open Auras.",
+		}
+	end
+
+	if typeof(InventoryController.PrepareTutorialTarget) == "function" then
+		InventoryController:PrepareTutorialTarget("manAura")
+	end
+
+	local actionButton = InventoryController:GetTutorialTarget("auraAction")
+	if isGuiTargetUsable(actionButton) then
+		return {
+			target = actionButton :: GuiObject,
+			text = "Press Equip.",
+		}
+	end
+
+	local auraRow = InventoryController:GetTutorialTarget("manAuraRow")
+	if isGuiTargetUsable(auraRow) then
+		return {
+			target = auraRow :: GuiObject,
+			text = "Select Man aura.",
+		}
+	end
+
+	return nil
+end
+
 function QuestBoardOnboardingGuideController:_resolveAppraisalAssist(rawQuestState: any): AssistTarget?
 	if not isQuestPartActive(rawQuestState, APPRAISAL_QUEST_ID, 2) then
 		return nil
@@ -403,12 +498,66 @@ function QuestBoardOnboardingGuideController:_resolveAppraisalAssist(rawQuestSta
 	return nil
 end
 
-function QuestBoardOnboardingGuideController:_resolvePersistentText(rawQuestState: any, data: any): string?
-	if hasReadyToClaimQuest(rawQuestState) then
-		return QUEST_READY_TO_CLAIM_TEXT
+function QuestBoardOnboardingGuideController:_resolveFirstGearCraftAssist(rawQuestState: any): AssistTarget?
+	if not isQuestPartActive(rawQuestState, BOSS_INTRO_QUEST_ID, 3) then
+		return nil
 	end
-	if shouldShowBoardGuide(data, self._boardOpenedThisSession) then
-		return QUEST_BOARD_TEXT
+	if not CraftingController:IsOpen() then
+		return nil
+	end
+
+	local steps = {
+		{
+			targetId = "firstGearGearFilter",
+			text = "Choose Gears.",
+		},
+		{
+			targetId = "firstGearRecipe",
+			text = "Select Bombo's Survival Knife.",
+		},
+		{
+			targetId = "firstGearOpenRecipe",
+			text = "Open Recipe.",
+		},
+		{
+			targetId = "firstGearAddEverything",
+			text = "Add all ingredients.",
+		},
+		{
+			targetId = "firstGearConfirmAddEverything",
+			text = "Confirm ingredients.",
+		},
+		{
+			targetId = "firstGearCraftButton",
+			text = "Craft the knife.",
+		},
+	}
+
+	for _, step in ipairs(steps) do
+		local target = CraftingController:GetTutorialTarget(step.targetId)
+		if isGuiTargetUsable(target) then
+			return {
+				target = target :: GuiObject,
+				text = step.text,
+			}
+		end
+	end
+
+	return nil
+end
+
+function QuestBoardOnboardingGuideController:_resolvePersistentText(rawQuestState: any, _data: any): string?
+	local manAuraRollText = getManAuraRollText(rawQuestState)
+	if manAuraRollText then
+		return manAuraRollText
+	end
+
+	if isQuestPartActive(rawQuestState, MAN_AURA_QUEST_ID, 2) then
+		return "Equip the Man aura."
+	end
+
+	if hasReadyToClaimGuidedQuest(rawQuestState) and self._boardGuideSuppressedForReady ~= true then
+		return QUEST_READY_TO_CLAIM_TEXT
 	end
 
 	return nil
@@ -482,8 +631,17 @@ function QuestBoardOnboardingGuideController:_syncAssist(rawQuestState: any, dat
 		self:_setOwnedText(nil)
 		return
 	end
+	if TutorialOverlayGate.IsBlocked() then
+		self:_clearDarkener()
+		self:_setOwnedText(nil)
+		return
+	end
 
-	local assist = self:_resolvePaidRollAssist(rawQuestState) or self:_resolveAppraisalAssist(rawQuestState)
+	local assist = self:_resolvePaidRollAssist(rawQuestState)
+		or self:_resolveManAuraRollAssist(rawQuestState)
+		or self:_resolveManAuraEquipAssist(rawQuestState)
+		or self:_resolveAppraisalAssist(rawQuestState)
+		or self:_resolveFirstGearCraftAssist(rawQuestState)
 	if assist then
 		self:_showDarkener(assist.target)
 		self:_setOwnedText(assist.text)
@@ -502,7 +660,11 @@ end
 function QuestBoardOnboardingGuideController:_syncFromData(data: any)
 	local rawQuestState = if typeof(data) == "table" then data[QUESTS_KEY] else nil
 	self:_processQuestStateTransitions(rawQuestState)
-	syncGuide(BOARD_GUIDE, shouldShowBoardGuide(data, self._boardOpenedThisSession))
+	local hasReadyToClaim = hasReadyToClaimGuidedQuest(rawQuestState)
+	if not hasReadyToClaim then
+		self._boardGuideSuppressedForReady = false
+	end
+	syncGuide(BOARD_GUIDE, hasReadyToClaim and self._boardGuideSuppressedForReady ~= true)
 	syncTalkStepGuides(rawQuestState)
 	self:_syncAssist(rawQuestState, data)
 end
@@ -513,12 +675,17 @@ function QuestBoardOnboardingGuideController.SyncQuestState(rawQuestState: any)
 	end
 
 	QuestBoardOnboardingGuideController:_processQuestStateTransitions(rawQuestState)
+	local hasReadyToClaim = hasReadyToClaimGuidedQuest(rawQuestState)
+	if not hasReadyToClaim then
+		QuestBoardOnboardingGuideController._boardGuideSuppressedForReady = false
+	end
+	syncGuide(BOARD_GUIDE, hasReadyToClaim and QuestBoardOnboardingGuideController._boardGuideSuppressedForReady ~= true)
 	syncTalkStepGuides(rawQuestState)
 	QuestBoardOnboardingGuideController:_syncAssist(rawQuestState, DataController:Get())
 end
 
 function QuestBoardOnboardingGuideController.MarkQuestBoardOpened()
-	QuestBoardOnboardingGuideController._boardOpenedThisSession = true
+	QuestBoardOnboardingGuideController._boardGuideSuppressedForReady = true
 	ObjectiveGuideController.ClearObjective(BOARD_GUIDE.objectiveId)
 	QuestBoardOnboardingGuideController:_syncFromData(DataController:Get())
 end
@@ -542,7 +709,7 @@ function QuestBoardOnboardingGuideController:OnStart()
 		self:_syncFromData(data)
 	end)
 	DataController.DataUpdated:Connect(function(key: string)
-		if key == QUESTS_KEY or key == TUTORIAL_KEY then
+		if key == QUESTS_KEY then
 			self:_syncFromData(DataController:Get())
 		end
 	end)

@@ -60,6 +60,8 @@ local CHARACTER_ACTIVATION_RETRY_LIMIT = 4
 local CHARACTER_READY_TIMEOUT_SECONDS = 5
 local CHARACTER_READY_POLL_INTERVAL_SECONDS = 0.1
 local PLAYER_DATA_READY_TIMEOUT_SECONDS = 15
+local VISUAL_MUTATION_LOCK_TIMEOUT_SECONDS = 10
+local VISUAL_MUTATION_LOCK_POLL_INTERVAL_SECONDS = 0.03
 
 local REQUIRED_R15_PARTS = {
 	"Head",
@@ -127,6 +129,76 @@ local characterRuntimeWatcherStates: {
 		appearanceRefreshReason: string?,
 	},
 } = {}
+local visualMutationLockStates: {
+	[Player]: {
+		isLocked: boolean,
+		owner: string?,
+		token: number,
+	},
+} = {}
+
+local function getVisualMutationLockState(player: Player)
+	local state = visualMutationLockStates[player]
+	if state then
+		return state
+	end
+
+	state = {
+		isLocked = false,
+		owner = nil,
+		token = 0,
+	}
+	visualMutationLockStates[player] = state
+	return state
+end
+
+local function runSerializedVisualMutation(
+	player: Player,
+	owner: string,
+	callback: () -> (boolean, string?)
+): (boolean, string?)
+	local deadline = os.clock() + VISUAL_MUTATION_LOCK_TIMEOUT_SECONDS
+
+	while true do
+		local state = getVisualMutationLockState(player)
+		if not state.isLocked then
+			state.isLocked = true
+			state.owner = owner
+			state.token += 1
+
+			local token = state.token
+			local callSucceeded, successOrTrace, message = xpcall(callback, debug.traceback)
+			local activeState = visualMutationLockStates[player]
+			if activeState == state and activeState.token == token then
+				activeState.isLocked = false
+				activeState.owner = nil
+			end
+
+			if not callSucceeded then
+				return false, tostring(successOrTrace)
+			end
+
+			if successOrTrace == nil then
+				return false, message
+			end
+
+			return successOrTrace, message
+		end
+
+		if player.Parent ~= Players then
+			return false, "Player is no longer available."
+		end
+
+		if os.clock() >= deadline then
+			return false, string.format(
+				"Timed out waiting for body part visuals to finish %s.",
+				tostring(state.owner or "updating")
+			)
+		end
+
+		task.wait(VISUAL_MUTATION_LOCK_POLL_INTERVAL_SECONDS)
+	end
+end
 
 local BodyPartService = {}
 BodyPartService.LoadoutChanged = Signal.new()
@@ -2127,91 +2199,93 @@ function BodyPartService:CanApplyCurrentVisualState(player: Player, equippedAura
 end
 
 function BodyPartService:ApplySessionLoadout(player: Player, overrideAutoSizeEnabled: boolean?): (boolean, string?)
-	local startedAt = PerfStats.Begin()
-	local character = getCharacter(player)
-	if not character then
+	return runSerializedVisualMutation(player, "apply_session_loadout", function()
+		local startedAt = PerfStats.Begin()
+		local character = getCharacter(player)
+		if not character then
+			PerfStats.Measure("BodyPartVisualsApply", startedAt, {
+				detail = string.format("%s:no_character", player.Name),
+			})
+			return true, nil
+		end
+
+		local isCharacterReady, characterReadyError, characterReadyErrorKind =
+			waitForCharacterReady(character, CHARACTER_READY_TIMEOUT_SECONDS)
+		if not isCharacterReady then
+			local failureMessage = getCharacterRigNotReadyMessage(characterReadyError, characterReadyErrorKind)
+			PerfStats.Measure("BodyPartVisualsApply", startedAt, {
+				detail = string.format("%s:not_ready", player.Name),
+			})
+			return false, failureMessage
+		end
+
+		beginRuntimeMutationSuppression(player, character)
+		setCharacterBuildLock(character, true)
+
+		local callSucceeded, applySuccessOrTrace, applyMessage = xpcall(function()
+			local equippedState = SessionStore.GetEquipped(player)
+			local equippedAuraId = DataService:GetEquippedAuraId(player)
+			local bodyPartScaleOverride = getBodyPartScaleOverride(player, overrideAutoSizeEnabled)
+
+			if not BodyPartLoadout.HasAnyEquipped(equippedState) and equippedAuraId == nil and bodyPartScaleOverride == nil then
+				local resetResult = BodyPartVisuals.Reset(character, getBaseRig())
+				if not resetResult.success then
+					return false, table.concat(resetResult.errors, " | ")
+				end
+			else
+				local request, requestError = buildVisualApplyRequest(
+					equippedState,
+					equippedAuraId,
+					DataService:GetOwnedBodyParts(player),
+					bodyPartScaleOverride
+				)
+				if not request then
+					return false, requestError or "Failed to build body part apply request."
+				end
+
+				local applyResult = BodyPartVisuals.Apply(character, request)
+				if not applyResult.success then
+					return false, table.concat(applyResult.errors, " | ")
+				end
+			end
+
+			local headAccessorySuccess, headAccessoryMessage = applyCurrentHeadAccessoryVisual(player, character)
+			if not headAccessorySuccess then
+				return false, headAccessoryMessage or "Failed to apply the equipped head accessory visual."
+			end
+
+			local gearSuccess, gearMessage = applyCurrentGearVisual(player, character)
+			if not gearSuccess then
+				return false, gearMessage or "Failed to apply the equipped gear visual."
+			end
+
+			return true, nil
+		end, debug.traceback)
+
+		local success = applySuccessOrTrace
+		local message = applyMessage
+
+		if not callSucceeded then
+			success = false
+			message = tostring(applySuccessOrTrace)
+		end
+
+		if success == nil then
+			success = false
+		end
+
+		if success == false and message == nil then
+			message = "Failed to apply the current body part loadout."
+		end
+
+		setCharacterBuildLock(character, false)
+		endRuntimeMutationSuppression(player, character)
+		ensureLiveHumanoidAutoRotateEnabled(character)
 		PerfStats.Measure("BodyPartVisualsApply", startedAt, {
-			detail = string.format("%s:no_character", player.Name),
+			detail = string.format("%s:%s", player.Name, if success then "ok" else "failed"),
 		})
-		return true, nil
-	end
-
-	local isCharacterReady, characterReadyError, characterReadyErrorKind =
-		waitForCharacterReady(character, CHARACTER_READY_TIMEOUT_SECONDS)
-	if not isCharacterReady then
-		local failureMessage = getCharacterRigNotReadyMessage(characterReadyError, characterReadyErrorKind)
-		PerfStats.Measure("BodyPartVisualsApply", startedAt, {
-			detail = string.format("%s:not_ready", player.Name),
-		})
-		return false, failureMessage
-	end
-
-	beginRuntimeMutationSuppression(player, character)
-	setCharacterBuildLock(character, true)
-
-	local callSucceeded, applySuccessOrTrace, applyMessage = xpcall(function()
-		local equippedState = SessionStore.GetEquipped(player)
-		local equippedAuraId = DataService:GetEquippedAuraId(player)
-		local bodyPartScaleOverride = getBodyPartScaleOverride(player, overrideAutoSizeEnabled)
-
-		if not BodyPartLoadout.HasAnyEquipped(equippedState) and equippedAuraId == nil and bodyPartScaleOverride == nil then
-			local resetResult = BodyPartVisuals.Reset(character, getBaseRig())
-			if not resetResult.success then
-				return false, table.concat(resetResult.errors, " | ")
-			end
-		else
-			local request, requestError = buildVisualApplyRequest(
-				equippedState,
-				equippedAuraId,
-				DataService:GetOwnedBodyParts(player),
-				bodyPartScaleOverride
-			)
-			if not request then
-				return false, requestError or "Failed to build body part apply request."
-			end
-
-			local applyResult = BodyPartVisuals.Apply(character, request)
-			if not applyResult.success then
-				return false, table.concat(applyResult.errors, " | ")
-			end
-		end
-
-		local headAccessorySuccess, headAccessoryMessage = applyCurrentHeadAccessoryVisual(player, character)
-		if not headAccessorySuccess then
-			return false, headAccessoryMessage or "Failed to apply the equipped head accessory visual."
-		end
-
-		local gearSuccess, gearMessage = applyCurrentGearVisual(player, character)
-		if not gearSuccess then
-			return false, gearMessage or "Failed to apply the equipped gear visual."
-		end
-
-		return true, nil
-	end, debug.traceback)
-
-	local success = applySuccessOrTrace
-	local message = applyMessage
-
-	if not callSucceeded then
-		success = false
-		message = tostring(applySuccessOrTrace)
-	end
-
-	if success == nil then
-		success = false
-	end
-
-	if success == false and message == nil then
-		message = "Failed to apply the current body part loadout."
-	end
-
-	setCharacterBuildLock(character, false)
-	endRuntimeMutationSuppression(player, character)
-	ensureLiveHumanoidAutoRotateEnabled(character)
-	PerfStats.Measure("BodyPartVisualsApply", startedAt, {
-		detail = string.format("%s:%s", player.Name, if success then "ok" else "failed"),
-	})
-	return success, message
+		return success, message
+	end)
 end
 
 -- Any explicit server action that changes the effective equipped scale, or changes
@@ -2232,108 +2306,113 @@ rebuildCurrentVisualStateNow = function(player: Player, reason: string?, overrid
 end
 
 refreshCurrentAuraNow = function(player: Player, reason: string?): (boolean, string?)
-	local character = getCharacter(player)
-	if not character or not waitForCharacterReady(character) then
-		return true, nil
-	end
-
-	if not shouldRefreshAuraRuntime(player, character) then
-		return true, nil
-	end
-
-	local auraRequest, auraError = buildAuraApplyRequest(DataService:GetEquippedAuraId(player))
-	if auraError then
-		return false, auraError
-	end
-
-	beginRuntimeMutationSuppression(player, character)
-	setCharacterBuildLock(character, true)
-
-	local callSucceeded, refreshSuccessOrTrace, refreshMessage = xpcall(function()
-		return BodyPartVisuals.RefreshAura(character, auraRequest)
-	end, debug.traceback)
-
-	setCharacterBuildLock(character, false)
-	endRuntimeMutationSuppression(player, character)
-	ensureLiveHumanoidAutoRotateEnabled(character)
-
-	local success = refreshSuccessOrTrace
-	local message = refreshMessage
-	if not callSucceeded then
-		success = false
-		message = tostring(refreshSuccessOrTrace)
-	end
-
-	if success == nil then
-		success = false
-	end
-
-	if not success then
-		local detail = tostring(reason or "aura_refresh")
-		return false, message or string.format("Failed to refresh aura runtime after %s.", detail)
-	end
-
-	local status = BodyPartVisuals.GetAuraRuntimeStatus(character, auraRequest)
-	if not status.isComplete then
-		local detail = tostring(reason or "aura_refresh")
-		local statusMessage = status.message or "Aura runtime verification failed."
-		if #status.missingTargetPartNames > 0 then
-			statusMessage = string.format("%s Missing: %s.", statusMessage, table.concat(status.missingTargetPartNames, ", "))
+	return runSerializedVisualMutation(player, "refresh_current_aura", function()
+		local character = getCharacter(player)
+		if not character or not waitForCharacterReady(character) then
+			return true, nil
 		end
-		return false, string.format("Failed to verify aura runtime after %s: %s", detail, statusMessage)
-	end
 
-	return true, nil
+		if not shouldRefreshAuraRuntime(player, character) then
+			return true, nil
+		end
+
+		local auraRequest, auraError = buildAuraApplyRequest(DataService:GetEquippedAuraId(player))
+		if auraError then
+			return false, auraError
+		end
+
+		beginRuntimeMutationSuppression(player, character)
+		setCharacterBuildLock(character, true)
+
+		local callSucceeded, refreshSuccessOrTrace, refreshMessage = xpcall(function()
+			return BodyPartVisuals.RefreshAura(character, auraRequest)
+		end, debug.traceback)
+
+		setCharacterBuildLock(character, false)
+		endRuntimeMutationSuppression(player, character)
+		ensureLiveHumanoidAutoRotateEnabled(character)
+
+		local success = refreshSuccessOrTrace
+		local message = refreshMessage
+		if not callSucceeded then
+			success = false
+			message = tostring(refreshSuccessOrTrace)
+		end
+
+		if success == nil then
+			success = false
+		end
+
+		if not success then
+			local detail = tostring(reason or "aura_refresh")
+			return false, message or string.format("Failed to refresh aura runtime after %s.", detail)
+		end
+
+		local status = BodyPartVisuals.GetAuraRuntimeStatus(character, auraRequest)
+		if not status.isComplete then
+			local detail = tostring(reason or "aura_refresh")
+			local statusMessage = status.message or "Aura runtime verification failed."
+			if #status.missingTargetPartNames > 0 then
+				statusMessage =
+					string.format("%s Missing: %s.", statusMessage, table.concat(status.missingTargetPartNames, ", "))
+			end
+			return false, string.format("Failed to verify aura runtime after %s: %s", detail, statusMessage)
+		end
+
+		return true, nil
+	end)
 end
 
 refreshCurrentAppearanceNow = function(player: Player, reason: string?): (boolean, string?)
-	local character = getCharacter(player)
-	if not character or not waitForCharacterReady(character) then
-		return true, nil
-	end
-
-	if not shouldRefreshCharacterAppearance(player, character) then
-		return true, nil
-	end
-
-	local request, requestError = BodyPartService:BuildCurrentVisualApplyRequest(player)
-	if not request then
-		return false, requestError or "Failed to build the current appearance refresh request."
-	end
-
-	beginRuntimeMutationSuppression(player, character)
-	setCharacterBuildLock(character, true)
-
-	local callSucceeded, refreshSuccessOrTrace, refreshMessage = xpcall(function()
-		local appearanceSuccess, appearanceMessage = BodyPartVisuals.RefreshAppearance(character, request)
-		if not appearanceSuccess then
-			return false, appearanceMessage
+	return runSerializedVisualMutation(player, "refresh_current_appearance", function()
+		local character = getCharacter(player)
+		if not character or not waitForCharacterReady(character) then
+			return true, nil
 		end
 
-		return applyCurrentGearVisual(player, character)
-	end, debug.traceback)
+		if not shouldRefreshCharacterAppearance(player, character) then
+			return true, nil
+		end
 
-	setCharacterBuildLock(character, false)
-	endRuntimeMutationSuppression(player, character)
-	ensureLiveHumanoidAutoRotateEnabled(character)
+		local request, requestError = BodyPartService:BuildCurrentVisualApplyRequest(player)
+		if not request then
+			return false, requestError or "Failed to build the current appearance refresh request."
+		end
 
-	local success = refreshSuccessOrTrace
-	local message = refreshMessage
-	if not callSucceeded then
-		success = false
-		message = tostring(refreshSuccessOrTrace)
-	end
+		beginRuntimeMutationSuppression(player, character)
+		setCharacterBuildLock(character, true)
 
-	if success == nil then
-		success = false
-	end
+		local callSucceeded, refreshSuccessOrTrace, refreshMessage = xpcall(function()
+			local appearanceSuccess, appearanceMessage = BodyPartVisuals.RefreshAppearance(character, request)
+			if not appearanceSuccess then
+				return false, appearanceMessage
+			end
 
-	if success == false and message == nil then
-		local detail = tostring(reason or "appearance_refresh")
-		message = string.format("Failed to refresh character appearance after %s.", detail)
-	end
+			return applyCurrentGearVisual(player, character)
+		end, debug.traceback)
 
-	return success, message
+		setCharacterBuildLock(character, false)
+		endRuntimeMutationSuppression(player, character)
+		ensureLiveHumanoidAutoRotateEnabled(character)
+
+		local success = refreshSuccessOrTrace
+		local message = refreshMessage
+		if not callSucceeded then
+			success = false
+			message = tostring(refreshSuccessOrTrace)
+		end
+
+		if success == nil then
+			success = false
+		end
+
+		if success == false and message == nil then
+			local detail = tostring(reason or "appearance_refresh")
+			message = string.format("Failed to refresh character appearance after %s.", detail)
+		end
+
+		return success, message
+	end)
 end
 
 function BodyPartService:EnsureAuraRuntimeCleared(player: Player, reason: string?): (boolean, string?)
@@ -3444,6 +3523,7 @@ local function handleSetAutoSizeEnabled(player: Player, payload: any)
 		return response(false, message or "Failed to update regular scale.", BodyPartService:GetClientState(player))
 	end
 
+	lastBodyPartScaleOverrideByPlayer[player] = getBodyPartScaleOverride(player)
 	notifyLoadoutChanged(player)
 	return response(true, message or "Regular scale updated.", BodyPartService:GetClientDeltaState(player, message))
 end
@@ -3702,6 +3782,7 @@ end
 function BodyPartService:OnPlayerRemoving(player: Player)
 	lastBodyPartScaleOverrideByPlayer[player] = nil
 	playerDataReadyByPlayer[player] = nil
+	visualMutationLockStates[player] = nil
 	if characterAddedConnections[player] then
 		characterAddedConnections[player]:Disconnect()
 		characterAddedConnections[player] = nil

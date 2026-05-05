@@ -3821,6 +3821,17 @@ function InventoryController:_hasVisibleTutorialBodyPart(): boolean
 	return false
 end
 
+function InventoryController:_hasVisibleTutorialAura(auraId: string): boolean
+	for _, recordView in ipairs(self:_getVisibleRecords()) do
+		local record = recordView.record :: any
+		if recordView.itemType == "aura" and typeof(record) == "table" and record.auraId == auraId then
+			return true
+		end
+	end
+
+	return false
+end
+
 function InventoryController:_refreshTutorialBodyPartStateIfNeeded()
 	if self:_hasVisibleTutorialBodyPart() then
 		return
@@ -3837,8 +3848,34 @@ function InventoryController:_refreshTutorialBodyPartStateIfNeeded()
 	end)
 end
 
+function InventoryController:_refreshTutorialAuraStateIfNeeded(auraId: string)
+	if self:_hasVisibleTutorialAura(auraId) then
+		return
+	end
+
+	local now = os.clock()
+	if now - (tonumber(self._lastTutorialAuraStateRefreshAt) or 0) < 1 then
+		return
+	end
+	self._lastTutorialAuraStateRefreshAt = now
+
+	task.spawn(function()
+		if self:_ensureAuraRemotes() then
+			local ok, result = pcall(function()
+				return self._remotes.auraGetState:InvokeServer()
+			end)
+			if ok and typeof(result) == "table" and result.ok == true and typeof(result.state) == "table" then
+				self:_applyAuraState(result.state)
+				return
+			end
+		end
+
+		self:_refreshAuraStateFromData()
+	end)
+end
+
 function InventoryController:PrepareTutorialTarget(targetId: string)
-	if targetId ~= "luckPotion" and targetId ~= "bodyPart" then
+	if targetId ~= "luckPotion" and targetId ~= "bodyPart" and targetId ~= "manAura" then
 		return
 	end
 
@@ -3874,6 +3911,19 @@ function InventoryController:PrepareTutorialTarget(targetId: string)
 			self:_syncActionButton()
 			self:_syncSecondaryActionButtons()
 		end
+		return
+	end
+
+	if targetId == "manAura" then
+		self._selectedFilterRegion = nil
+		self._selectedSpecialFilter = "aura"
+		self:_refreshTutorialAuraStateIfNeeded("man")
+		self:_markInventoryRecordsDirty()
+		self:_syncFilterButtons()
+		self:_syncList()
+		self:_syncPreview()
+		self:_syncActionButton()
+		self:_syncSecondaryActionButtons()
 		return
 	end
 
@@ -3919,6 +3969,45 @@ function InventoryController:GetTutorialTarget(targetId: string): GuiObject?
 	if targetId == "closeButton" then
 		local closeButton = self._ui.closeButton
 		return if closeButton and closeButton.Visible == true and closeButton.Active == true then closeButton else nil
+	end
+	if targetId == "auraFilter" then
+		if self._selectedSpecialFilter == "aura" then
+			return nil
+		end
+
+		local button = self._ui.auraButtons[1]
+		return if button and button.Visible == true and button.Active == true then button else nil
+	end
+	if targetId == "manAuraRow" then
+		if self._selectedSpecialFilter ~= "aura" then
+			return nil
+		end
+		return self:_getFirstTutorialRowButton(function(recordView)
+			local record = recordView.record :: any
+			return recordView.itemType == "aura" and typeof(record) == "table" and record.auraId == "man"
+		end)
+	end
+	if targetId == "auraAction" then
+		local previewState = self._previewState
+		if not (previewState and previewState.itemType == "aura") then
+			return nil
+		end
+
+		local ownedId = if typeof(previewState.ownedId) == "string" and previewState.ownedId ~= ""
+			then previewState.ownedId
+			else self._selectedOwnedId
+		local ownedRecord = if typeof(ownedId) == "string" then self:_getOwnedAuraLookup()[ownedId] else nil
+		local requestedAction = self:_getAuraPreviewActionRequest()
+		if
+			typeof(ownedRecord) == "table"
+			and ownedRecord.auraId == "man"
+			and requestedAction == "equip"
+			and self._ui.equipButton.Visible == true
+			and self._ui.equipButton.Active == true
+		then
+			return self._ui.equipButton
+		end
+		return nil
 	end
 	if targetId == "headAccessoryFilter" then
 		return self._ui.accessoryButtons[1]

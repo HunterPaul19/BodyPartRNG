@@ -62,6 +62,9 @@ type BossResultsState = {
 	readyCount: number,
 	capacity: number,
 	isReplayReady: boolean,
+	sourceFlow: string?,
+	returnDestination: string?,
+	canReplay: boolean?,
 }
 
 type ResultsRemotes = {
@@ -134,7 +137,14 @@ local function isMaterialReward(reward: BossResultRewardEntry): boolean
 	return reward.kind == "material" or typeof(reward.materialId) == "string"
 end
 
+local function isMoneyReward(reward: BossResultRewardEntry): boolean
+	return reward.kind == "money"
+end
+
 local function getRewardTemplateRarity(reward: BossResultRewardEntry): string
+	if isMoneyReward(reward) then
+		return "Basic"
+	end
 	if isMaterialReward(reward) then
 		return materialTierToTemplateRarity(reward.dropTier)
 	end
@@ -227,6 +237,15 @@ local function parseTemplateRichTextColor(template: Frame): string
 end
 
 local function formatRewardDescription(template: Frame, reward: BossResultRewardEntry): string
+	if isMoneyReward(reward) then
+		local displayName = escapeRichText(reward.displayName or "Money")
+		return string.format(
+			"<font color=\"%s\">%s</font> %s",
+			toRichTextColor(Color3.fromRGB(255, 200, 0)),
+			displayName,
+			formatMoney(reward.amount)
+		)
+	end
 	if isMaterialReward(reward) then
 		local materialConfig = if typeof(reward.materialId) == "string" then CraftingMaterialConfig.Get(reward.materialId) else nil
 		local displayName = escapeRichText(reward.displayName or (materialConfig and materialConfig.label) or "Material")
@@ -347,7 +366,14 @@ local function normalizeResultsState(state: any): BossResultsState?
 		readyCount = math.max(0, math.floor(tonumber(state.readyCount) or 0)),
 		capacity = math.max(1, math.floor(tonumber(state.capacity) or BossQueueConstants.QueueCapacity)),
 		isReplayReady = state.isReplayReady == true,
+		sourceFlow = if typeof(state.sourceFlow) == "string" and state.sourceFlow ~= "" then state.sourceFlow else nil,
+		returnDestination = if state.returnDestination == "main" then "main" else "boss_lobby",
+		canReplay = state.canReplay ~= false,
 	}
+end
+
+local function shouldAutoReturnAfterChest(state: BossResultsState): boolean
+	return state.outcome == "victory" and state.returnDestination == "main"
 end
 
 function BossArenaResultsController:_getPlayerGui(): PlayerGui
@@ -489,7 +515,13 @@ function BossArenaResultsController:_renderRewards(rewards: { BossResultRewardEn
 
 		local leftLabel = row:FindFirstChild("Left")
 		if leftLabel and leftLabel:IsA("TextLabel") then
-			leftLabel.Text = if isMaterialReward(reward) then "Crafting Material Acquired" else getBodyPartRewardOutcomeLabel(reward)
+			if isMoneyReward(reward) then
+				leftLabel.Text = "Money Acquired"
+			elseif isMaterialReward(reward) then
+				leftLabel.Text = "Crafting Material Acquired"
+			else
+				leftLabel.Text = getBodyPartRewardOutcomeLabel(reward)
+			end
 		end
 
 		local description = row:FindFirstChild("Description")
@@ -508,6 +540,9 @@ function BossArenaResultsController:_resetRenderedState(ui: ResultsUi)
 	restoreTextLabelState(ui.outcomeLabel, ui.defaultOutcomeLabelState)
 	restoreTextLabelState(ui.damageLabel, ui.defaultDamageLabelState)
 	ui.votesLabel.Text = BossQueueConstants.FormatOccupancyText(0)
+	ui.playAgainButton.Visible = true
+	ui.playAgainButton.Active = true
+	ui.playAgainButton.AutoButtonColor = true
 	self._activeResultsKey = nil
 	self._chestOpenedResultsKey = nil
 	self._chestOpeningResultsKey = nil
@@ -534,8 +569,9 @@ function BossArenaResultsController:_renderResultsFrame(normalizedState: BossRes
 		math.clamp(normalizedState.readyCount, 0, normalizedState.capacity),
 		normalizedState.capacity
 	)
-	ui.playAgainButton.Active = normalizedState.isReplayReady ~= true
-	ui.playAgainButton.AutoButtonColor = normalizedState.isReplayReady ~= true
+	ui.playAgainButton.Visible = normalizedState.canReplay == true
+	ui.playAgainButton.Active = normalizedState.canReplay == true and normalizedState.isReplayReady ~= true
+	ui.playAgainButton.AutoButtonColor = normalizedState.canReplay == true and normalizedState.isReplayReady ~= true
 	ui.root.Visible = true
 end
 
@@ -587,6 +623,12 @@ function BossArenaResultsController:_renderState(state: BossResultsState?)
 
 				self._chestOpenedResultsKey = resultsKey
 				self._chestOpeningResultsKey = nil
+				if opened == true and shouldAutoReturnAfterChest(normalizedState) then
+					self:_requestReturnToLobby()
+					if self._activeResultsKey ~= resultsKey then
+						return
+					end
+				end
 				self:_renderState(self._pendingResultsState or normalizedState)
 			end)
 		end
@@ -614,6 +656,9 @@ end
 
 function BossArenaResultsController:_requestReplayReady()
 	if self._requestInFlight then
+		return
+	end
+	if self._pendingResultsState and self._pendingResultsState.canReplay ~= true then
 		return
 	end
 

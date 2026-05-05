@@ -17,13 +17,14 @@ local GLOBAL_FETCH_JITTER_SECONDS = 120
 local GLOBAL_FETCH_ENTRY_LIMIT = 100
 local GLOBAL_FETCH_BOARD_SPACING_SECONDS = 5
 local ORDERED_LIST_BUDGET_FLOOR = 3
+local STARTUP_FETCH_RETRY_SECONDS = 30
+local TIMER_UPDATE_INTERVAL_SECONDS = 1
 local ROLLS_FLUSH_TIME = 60
 local LEGACY_SYNC_REFRESH_TIME = 120
 local MONEY_MIN_FLUSH_DELTA = 100
 local ENTRY_NAME_PREFIX = "Entry_"
 local SCOPE = Globals.SCOPE
 local USE_GLOBAL_LEADERBOARDS_IN_STUDIO = true
-local THUMBNAIL_PLACEHOLDER_IMAGE = "rbxasset://textures/ui/GuiImagePlaceholder.png"
 -- Studio leaderboard validation stays isolated in a tester-seeded namespace.
 -- Only players who join Studio sessions after this is enabled will populate these stores.
 local STUDIO_ORDERED_STORE_SUFFIX = "_Studio"
@@ -38,9 +39,8 @@ local BOARD_CONFIGS = {
 		format = "Rolls",
 		useDirtySync = true,
 		minFlushIntervalSeconds = ROLLS_FLUSH_TIME,
-		modelPaths = { "Map.RollsLeaderboard" },
-		infoTitle = "Rolls",
-		headerValueLabelNames = { "Rolls", "Value" },
+		modelPaths = { "RollsLeaderboard" },
+		deprecatedModelPaths = { "Map.RollsLeaderboard" },
 		rowValueLabelNames = { "Rolls", "Value", "Money" },
 	},
 	MoneyLeaderboard = {
@@ -48,30 +48,27 @@ local BOARD_CONFIGS = {
 		format = "Money",
 		minFlushIntervalSeconds = LEGACY_SYNC_REFRESH_TIME,
 		minFlushDelta = MONEY_MIN_FLUSH_DELTA,
-		modelPaths = { "Map.MoneyLeaderboard" },
-		infoTitle = "Money",
-		headerValueLabelNames = { "Money", "Value", "Rolls" },
+		modelPaths = { "MoneyLeaderboard" },
+		deprecatedModelPaths = { "Map.MoneyLeaderboard" },
 		rowValueLabelNames = { "Rolls", "Money", "Value" },
 	},
 	PlaytimeLeaderboard = {
 		key = TIME_PLAYED_KEY,
 		format = "Playtime",
 		minFlushIntervalSeconds = LEGACY_SYNC_REFRESH_TIME,
-		modelPaths = { "Map.PlaytimeLeaderboard" },
-		infoTitle = "Playtime",
-		headerValueLabelNames = { "Playtime", "TimePlayed", "Time", "Rolls", "Value" },
+		modelPaths = { "PlaytimeLeaderboard" },
+		deprecatedModelPaths = { "Map.PlaytimeLeaderboard" },
 		rowValueLabelNames = { "Playtime", "TimePlayed", "Time", "Rolls", "Value", "Money" },
 	},
 }
 
 local usernameCache = {}
-local thumbnailCache = {}
 local usernameRequests = {}
-local thumbnailRequests = {}
 local orderedStores = {}
 local orderedStoreNames = {}
 local orderedEntryCaches = {}
 local boardRenderStates = setmetatable({}, { __mode = "k" })
+local boardTimerLabels = setmetatable({}, { __mode = "k" })
 local lastSyncedValues = {}
 local lastSyncedAt = {}
 local rollsLiveValues = {}
@@ -213,51 +210,6 @@ local function getUsernameForUserId(userId)
 	return result
 end
 
-local function resolveEntryName(entry)
-	if typeof(entry) ~= "table" then
-		return ""
-	end
-
-	if typeof(entry.name) == "string" and entry.name ~= "" then
-		return entry.name
-	end
-
-	local userId = tonumber(entry.userId)
-	if not userId then
-		entry.name = ""
-		return entry.name
-	end
-
-	entry.name = getUsernameForUserId(userId)
-	return entry.name
-end
-
-local function getThumbnailForUserId(userId)
-	if thumbnailCache[userId] then
-		return thumbnailCache[userId]
-	end
-
-	local success, content = pcall(function()
-		local image, isReady = Players:GetUserThumbnailAsync(
-			userId,
-			Enum.ThumbnailType.HeadShot,
-			Enum.ThumbnailSize.Size420x420
-		)
-
-		if isReady == false or typeof(image) ~= "string" or image == "" then
-			return nil
-		end
-
-		return image
-	end)
-	if not success then
-		return nil
-	end
-
-	thumbnailCache[userId] = content
-	return content
-end
-
 local function getEntryDisplayName(entry)
 	if typeof(entry) ~= "table" then
 		return ""
@@ -275,22 +227,38 @@ local function getEntryDisplayName(entry)
 	return if userId then "Player " .. tostring(userId) else ""
 end
 
-local function getEntryThumbnail(entry)
-	if typeof(entry) ~= "table" then
-		return nil
-	end
-
-	local userId = tonumber(entry.userId)
-	if not userId then
-		return nil
-	end
-
-	return thumbnailCache[userId]
-end
-
 local function getSurfaceGui(boardModel)
+	local fallbackSurfaceGui = nil
+
 	for _, descendant in ipairs(boardModel:GetDescendants()) do
 		if descendant:IsA("SurfaceGui") then
+			fallbackSurfaceGui = fallbackSurfaceGui or descendant
+			if descendant:FindFirstChild("Leaderboard") then
+				return descendant
+			end
+		end
+	end
+
+	return fallbackSurfaceGui
+end
+
+local function getBoardTimerLabel(boardModel)
+	local cachedLabel = boardTimerLabels[boardModel]
+	if cachedLabel and cachedLabel.Parent and cachedLabel:IsA("TextLabel") then
+		return cachedLabel
+	end
+
+	local timerPart = boardModel:FindFirstChild("UpdateBoardTimer")
+	local timerGui = timerPart and timerPart:FindFirstChild("Timer")
+	local label = timerGui and timerGui:FindFirstChild("TextLabel")
+	if label and label:IsA("TextLabel") then
+		boardTimerLabels[boardModel] = label
+		return label
+	end
+
+	for _, descendant in ipairs(boardModel:GetDescendants()) do
+		if descendant:IsA("TextLabel") and descendant.Parent and descendant.Parent.Name == "Timer" then
+			boardTimerLabels[boardModel] = descendant
 			return descendant
 		end
 	end
@@ -312,14 +280,14 @@ local function getBoardWidgets(boardModel, config)
 	local inner = leaderboardFrame and leaderboardFrame:FindFirstChild("Inner")
 	local scrollingFrame = inner and inner:FindFirstChild("ScrollingFrame")
 	local template = scrollingFrame and scrollingFrame:FindFirstChild("Template")
-	local topFrame = inner and inner:FindFirstChild("TopFrame")
 	local playerInfo = inner and inner:FindFirstChild("PlayerInfo")
-	if not (leaderboardFrame and inner and scrollingFrame and template and topFrame and playerInfo) then
+	if not (leaderboardFrame and inner and scrollingFrame and template) then
+		return nil
+	end
+	if not (scrollingFrame:IsA("ScrollingFrame") and template:IsA("GuiObject")) then
 		return nil
 	end
 
-	local rollInfo = playerInfo:FindFirstChild("RollInfo")
-	local playerIcon = playerInfo:FindFirstChild("PlayerIcon")
 	local templateSize = template.Size
 	if templateSize.Y.Scale > 0 or templateSize.Y.Offset > 0 then
 		storeTemplateSize(template, templateSize)
@@ -338,35 +306,32 @@ local function getBoardWidgets(boardModel, config)
 		template = template,
 		templateSize = templateSize,
 		listLayout = scrollingFrame:FindFirstChildWhichIsA("UIListLayout"),
-		headerPlayerName = topFrame:FindFirstChild("PlayerName"),
-		headerValue = findFirstChildByNames(topFrame, config.headerValueLabelNames or { "Value" }),
-		playerInfo = playerInfo,
-		playerInfoDisplayName = playerInfo:FindFirstChild("DisplayName"),
-		playerInfoUsername = playerInfo:FindFirstChild("Username"),
-		playerInfoRollInfo = rollInfo,
-		playerInfoRollInfoTitle = rollInfo and rollInfo:FindFirstChild("Title") or nil,
-		playerInfoRollInfoContext = rollInfo and rollInfo:FindFirstChild("Context") or nil,
-		playerInfoIcon = playerIcon and playerIcon:FindFirstChild("Image") or nil,
-		playerInfoButtons = {
-			playerInfo:FindFirstChild("AddFriendButton"),
-			playerInfo:FindFirstChild("BlockButton"),
-			playerInfo:FindFirstChild("CloseButton"),
-		},
-		rowRankLabelNames = { "LeaderboardPlace", "Number" },
-		rowPlayerNameLabelNames = { "PlayerName", "Username" },
+		playerInfo = if playerInfo and playerInfo:IsA("GuiObject") then playerInfo else nil,
+		rowRankLabelNames = { "LeaderboardPlace" },
+		rowPlayerNameLabelNames = { "PlayerName" },
 		rowValueLabelNames = config.rowValueLabelNames or { "Value" },
 	}
 end
 
 local function disableBoardScripts(boardModel)
-	local surfaceGui = getSurfaceGui(boardModel)
-	if not surfaceGui then
-		return
+	for _, descendant in ipairs(boardModel:GetDescendants()) do
+		if descendant:IsA("SurfaceGui") then
+			for _, guiDescendant in ipairs(descendant:GetDescendants()) do
+				if guiDescendant:IsA("Script") or guiDescendant:IsA("LocalScript") then
+					guiDescendant.Disabled = true
+				end
+			end
+		end
 	end
+end
 
-	for _, descendant in ipairs(surfaceGui:GetDescendants()) do
-		if descendant:IsA("Script") or descendant:IsA("LocalScript") then
-			descendant.Disabled = true
+local function disableDeprecatedBoardScripts()
+	for _, config in pairs(BOARD_CONFIGS) do
+		for _, path in ipairs(config.deprecatedModelPaths or {}) do
+			local boardModel = resolveWorkspacePath(path)
+			if boardModel then
+				disableBoardScripts(boardModel)
+			end
 		end
 	end
 end
@@ -419,7 +384,6 @@ local function getBoardRenderState(boardModel)
 			userIdsByRank = {},
 			lastSignature = nil,
 			renderedEntryCount = 0,
-			topUserId = nil,
 		}
 		boardRenderStates[boardModel] = state
 	end
@@ -446,22 +410,7 @@ local function updateRenderedEntryNames(userId, resolvedName)
 	for _, state in pairs(boardRenderStates) do
 		for rank, row in pairs(state.rowsByRank) do
 			if state.userIdsByRank[rank] == userId and row and row.Parent then
-				setGuiText(findFirstChildByNames(row, state.rowPlayerNameLabelNames or { "PlayerName", "Username" }), resolvedName)
-			end
-		end
-
-		if state.topUserId == userId then
-			setGuiText(state.playerInfoDisplayName, resolvedName)
-			setGuiText(state.playerInfoUsername, "@" .. resolvedName)
-		end
-	end
-end
-
-local function updateRenderedThumbnails(userId, thumbnail)
-	for _, state in pairs(boardRenderStates) do
-		if state.topUserId == userId and state.playerInfoIcon and state.playerInfoIcon:IsA("ImageLabel") then
-			if state.playerInfoIcon.Image ~= thumbnail then
-				state.playerInfoIcon.Image = thumbnail
+				setGuiText(findFirstChildByNames(row, state.rowPlayerNameLabelNames or { "PlayerName" }), resolvedName)
 			end
 		end
 	end
@@ -492,24 +441,6 @@ local function requestUsernameHydration(userId)
 		end
 
 		updateRenderedEntryNames(userId, resolvedName)
-	end)
-end
-
-local function requestThumbnailHydration(userId)
-	userId = tonumber(userId)
-	if not userId or thumbnailCache[userId] or thumbnailRequests[userId] then
-		return
-	end
-
-	thumbnailRequests[userId] = true
-	task.spawn(function()
-		getThumbnailForUserId(userId)
-		thumbnailRequests[userId] = nil
-
-		local thumbnail = thumbnailCache[userId]
-		if thumbnail then
-			updateRenderedThumbnails(userId, thumbnail)
-		end
 	end)
 end
 
@@ -554,49 +485,6 @@ local function updateBoardEntry(widgets, state, rank, entryData, formatName)
 	setGuiText(findFirstChildByNames(row, widgets.rowValueLabelNames), formatValue(formatName, entryData.value))
 end
 
-local function renderPlayerInfo(widgets, config, topEntry, state)
-	local playerInfo = widgets.playerInfo
-	if not playerInfo then
-		return
-	end
-
-	for _, button in ipairs(widgets.playerInfoButtons) do
-		setGuiVisible(button, false)
-	end
-
-	if not topEntry then
-		state.topUserId = nil
-		setGuiVisible(playerInfo, false)
-		return
-	end
-
-	setGuiVisible(playerInfo, true)
-	local topUserId = tonumber(topEntry.userId)
-	state.topUserId = topUserId
-	state.playerInfoDisplayName = widgets.playerInfoDisplayName
-	state.playerInfoUsername = widgets.playerInfoUsername
-	state.playerInfoIcon = widgets.playerInfoIcon
-	if topUserId then
-		requestUsernameHydration(topUserId)
-	end
-
-	local topName = getEntryDisplayName(topEntry)
-	setGuiText(widgets.playerInfoDisplayName, topName)
-	setGuiText(widgets.playerInfoUsername, "@" .. topName)
-	setGuiText(widgets.playerInfoRollInfoTitle, config.infoTitle or config.format)
-	setGuiText(widgets.playerInfoRollInfoContext, formatValue(config.format, topEntry.value))
-
-	if widgets.playerInfoIcon and widgets.playerInfoIcon:IsA("ImageLabel") then
-		local thumbnail = getEntryThumbnail(topEntry)
-		if thumbnail then
-			widgets.playerInfoIcon.Image = thumbnail
-		elseif topUserId then
-			widgets.playerInfoIcon.Image = THUMBNAIL_PLACEHOLDER_IMAGE
-			requestThumbnailHydration(topUserId)
-		end
-	end
-end
-
 local function renderBoard(boardModel, config, entries, signature, forceRender)
 	local widgets = getBoardWidgets(boardModel, config)
 	if not widgets then
@@ -619,12 +507,10 @@ local function renderBoard(boardModel, config, entries, signature, forceRender)
 	if widgets.template.LayoutOrder ~= GLOBAL_FETCH_ENTRY_LIMIT + 2 then
 		widgets.template.LayoutOrder = GLOBAL_FETCH_ENTRY_LIMIT + 2
 	end
-	setGuiText(widgets.headerPlayerName, "Player")
-	setGuiText(widgets.headerValue, config.infoTitle or config.format)
+	setGuiVisible(widgets.playerInfo, false)
 
 	local entryCount = math.min(#entries, GLOBAL_FETCH_ENTRY_LIMIT)
 	state.rowPlayerNameLabelNames = widgets.rowPlayerNameLabelNames
-	renderPlayerInfo(widgets, config, entries[1], state)
 
 	for rank = 1, entryCount do
 		local entryData = entries[rank]
@@ -760,8 +646,37 @@ local function scheduleNextFetch(cache, baseDelaySeconds)
 	cache.nextAllowedFetchAt = os.clock() + math.max(1, baseDelaySeconds) + getFetchJitterSeconds()
 end
 
+local function scheduleRetryFetch(cache, delaySeconds)
+	cache.nextAllowedFetchAt = os.clock() + math.max(1, tonumber(delaySeconds) or STARTUP_FETCH_RETRY_SECONDS)
+end
+
 local function scheduleInitialFetch(cache)
 	cache.nextAllowedFetchAt = os.clock()
+end
+
+local function getBoardRefreshCountdownSeconds(boardName)
+	if not shouldUseOrderedStores() then
+		return 0
+	end
+
+	local cache = orderedEntryCaches[boardName]
+	if not cache then
+		return 0
+	end
+
+	return math.max(0, math.ceil((tonumber(cache.nextAllowedFetchAt) or 0) - os.clock()))
+end
+
+local function updateBoardTimers()
+	for boardName, config in pairs(BOARD_CONFIGS) do
+		local text = string.format(
+			"Updating the board in %d seconds!",
+			getBoardRefreshCountdownSeconds(boardName)
+		)
+		for _, boardModel in ipairs(getBoardModels(config)) do
+			setGuiText(getBoardTimerLabel(boardModel), text)
+		end
+	end
 end
 
 local function getOrderedListBudget()
@@ -967,17 +882,33 @@ local function renderBoardEntries(config, entries, signature, forceRender)
 	end
 end
 
-local function updateOrderedEntriesCache(boardName, config, storeName, store)
+local function updateOrderedEntriesCache(boardName, config, storeName, store, options)
 	local cache = getOrderedEntryCache(boardName)
+	local isStartupFetch = typeof(options) == "table" and options.startup == true
+	local retryDelaySeconds = if typeof(options) == "table" then options.retryDelaySeconds else nil
 	if cache.inFlight then
 		RateLimitTelemetry.Increment("leaderboard", "ordered_list_fetch_in_flight_skip", 1)
-		return
+		if isStartupFetch then
+			Logger.Warn(string.format("[Leaderboards] Startup fetch skipped for board=%s because a fetch is already in flight.", boardName))
+			scheduleRetryFetch(cache, retryDelaySeconds)
+		end
+		return false, 0
 	end
 
-	if getOrderedListBudget() < ORDERED_LIST_BUDGET_FLOOR then
+	local orderedListBudget = getOrderedListBudget()
+	if orderedListBudget < ORDERED_LIST_BUDGET_FLOOR then
 		RateLimitTelemetry.Increment("leaderboard", "ordered_list_fetch_budget_skip", 1)
-		scheduleNextFetch(cache, GLOBAL_FETCH_INTERVAL_SECONDS)
-		return
+		if isStartupFetch then
+			Logger.Warn(string.format(
+				"[Leaderboards] Startup fetch skipped for board=%s because ordered read budget is %d.",
+				boardName,
+				orderedListBudget
+			))
+			scheduleRetryFetch(cache, retryDelaySeconds)
+		else
+			scheduleNextFetch(cache, GLOBAL_FETCH_INTERVAL_SECONDS)
+		end
+		return false, 0
 	end
 
 	cache.inFlight = true
@@ -1000,11 +931,63 @@ local function updateOrderedEntriesCache(boardName, config, storeName, store)
 		if shouldRender then
 			renderBoardEntries(config, cache.entries, signature)
 		end
+		scheduleNextFetch(cache, GLOBAL_FETCH_INTERVAL_SECONDS)
+		return true, #cache.entries
 	else
 		cache.lastError = tostring(errorMessage)
+		if isStartupFetch then
+			scheduleRetryFetch(cache, retryDelaySeconds)
+		else
+			scheduleNextFetch(cache, GLOBAL_FETCH_INTERVAL_SECONDS)
+		end
+		return false, 0
+	end
+end
+
+local function renderStartupFallback(dataService, boardName, config)
+	local cache = getOrderedEntryCache(boardName)
+	if cache.hasRenderedStartupFallback then
+		return
 	end
 
-	scheduleNextFetch(cache, GLOBAL_FETCH_INTERVAL_SECONDS)
+	local fallbackEntries = getCurrentPlayerEntries(dataService, config.key)
+	if #fallbackEntries == 0 then
+		return
+	end
+
+	cache.hasRenderedStartupFallback = true
+	renderBoardEntries(
+		config,
+		fallbackEntries,
+		"startup-fallback:" .. boardName .. ":" .. buildEntriesSignature(fallbackEntries),
+		true
+	)
+end
+
+local function fetchStartupOrderedEntries(dataService)
+	if not shouldUseOrderedStores() then
+		return
+	end
+
+	for boardName, config in pairs(BOARD_CONFIGS) do
+		local boardModels = getBoardModels(config)
+		if #boardModels > 0 then
+			local store = orderedStores[boardName]
+			local storeName = orderedStoreNames[boardName]
+			if store and storeName then
+				local fetched, entryCount = updateOrderedEntriesCache(boardName, config, storeName, store, {
+					retryDelaySeconds = STARTUP_FETCH_RETRY_SECONDS,
+					startup = true,
+				})
+				if not fetched or entryCount <= 0 then
+					renderStartupFallback(dataService, boardName, config)
+				end
+				task.wait(GLOBAL_FETCH_BOARD_SPACING_SECONDS)
+			else
+				renderStartupFallback(dataService, boardName, config)
+			end
+		end
+	end
 end
 
 local function refreshOrderedEntryCaches()
@@ -1099,6 +1082,8 @@ function Leaderboards.refresh(dataService, options)
 				if cache.lastSuccessfulFetchAt > 0 then
 					if forceRender then
 						renderBoardEntries(config, cloneEntries(cache.entries), cache.lastFetchedSignature, true)
+					elseif #cache.entries == 0 then
+						renderStartupFallback(dataService, boardName, config)
 					end
 				elseif not cache.hasRenderedStartupFallback then
 					local fallbackEntries = getCurrentPlayerEntries(dataService, config.key)
@@ -1121,6 +1106,8 @@ function Leaderboards.refresh(dataService, options)
 end
 
 function Leaderboards.start(dataService)
+	disableDeprecatedBoardScripts()
+
 	local foundAnyBoard = false
 	for _, config in pairs(BOARD_CONFIGS) do
 		if #getBoardModels(config) > 0 then
@@ -1130,7 +1117,7 @@ function Leaderboards.start(dataService)
 	end
 
 	if not foundAnyBoard then
-		Logger.Warn("[Leaderboards] Missing global leaderboard models in Workspace.Map")
+		Logger.Warn("[Leaderboards] Missing global leaderboard models in Workspace")
 		return
 	end
 
@@ -1138,6 +1125,7 @@ function Leaderboards.start(dataService)
 		Leaderboards.refresh(dataService, {
 			force = true,
 		})
+		updateBoardTimers()
 		return
 	end
 	started = true
@@ -1150,6 +1138,7 @@ function Leaderboards.start(dataService)
 			scheduleInitialFetch(getOrderedEntryCache(boardName))
 		end
 	end
+	updateBoardTimers()
 
 	syncLegacyBoards(dataService, {
 		force = true,
@@ -1164,11 +1153,23 @@ function Leaderboards.start(dataService)
 		end
 	end
 
-	Leaderboards.refresh(dataService)
+	if shouldUseOrderedStores() then
+		fetchStartupOrderedEntries(dataService)
+	else
+		Leaderboards.refresh(dataService)
+	end
+	updateBoardTimers()
+
 	task.spawn(function()
 		while true do
 			refreshOrderedEntryCaches()
 			task.wait(GLOBAL_FETCH_POLL_INTERVAL_SECONDS)
+		end
+	end)
+	task.spawn(function()
+		while true do
+			updateBoardTimers()
+			task.wait(TIMER_UPDATE_INTERVAL_SECONDS)
 		end
 	end)
 	task.spawn(function()

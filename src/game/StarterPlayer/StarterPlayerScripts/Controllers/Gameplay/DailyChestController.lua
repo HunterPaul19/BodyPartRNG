@@ -8,6 +8,7 @@ local DailyChestConfig = require(ReplicatedStorage.Shared.Config.DailyChestConfi
 local DataController = require(script.Parent.DataController)
 local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile)
 local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
+local TutorialOverlayGate = require(ReplicatedStorage.Shared.UI.TutorialOverlayGate)
 local TutorialTextGui = require(ReplicatedStorage.Shared.UI.TutorialTextGui)
 local TutorialState = require(ReplicatedStorage.Shared.Character.TutorialState)
 
@@ -89,7 +90,13 @@ end
 
 function DailyChestController.OpenChestPackages(chests: { any })
 	TutorialTextGui.Init(LOCAL_PLAYER:WaitForChild("PlayerGui"))
-	openChestPackagesSequentially(chests)
+	local releaseOverlayBlock = TutorialOverlayGate.BeginBlock("daily_chest_packages")
+	local ok, errorMessage = pcall(openChestPackagesSequentially, chests)
+	releaseOverlayBlock()
+
+	if not ok then
+		error(errorMessage, 0)
+	end
 end
 
 function DailyChestController:_claimEligibleChests(): boolean
@@ -103,10 +110,12 @@ function DailyChestController:_claimEligibleChests(): boolean
 	end
 
 	self._claimStarted = true
+	local releaseOverlayBlock = TutorialOverlayGate.BeginBlock("daily_chest_claim")
 	TutorialTextGui.Init(LOCAL_PLAYER:WaitForChild("PlayerGui"))
 
 	local claimRemote = resolveClaimRemote()
 	if not claimRemote then
+		releaseOverlayBlock()
 		self._claimStarted = false
 		Logger.Warn("[DailyChestController] ReplicatedStorage.Remotes.Chests.ClaimDailyChests is missing.")
 		return false
@@ -118,15 +127,21 @@ function DailyChestController:_claimEligibleChests(): boolean
 	if not ok then
 		local reason = if timedOut then "timed out" else "failed"
 		Logger.Warn("[DailyChestController] Daily chest claim " .. reason .. ": " .. tostring(result))
+		releaseOverlayBlock()
 		self._claimStarted = false
 		return true
 	end
 	if typeof(result) ~= "table" or result.ok ~= true then
+		releaseOverlayBlock()
 		return true
 	end
 
 	local chests = if typeof(result.chests) == "table" then result.chests else {}
-	DailyChestController.OpenChestPackages(chests)
+	local opened, errorMessage = pcall(DailyChestController.OpenChestPackages, chests)
+	releaseOverlayBlock()
+	if not opened then
+		error(errorMessage, 0)
+	end
 	return true
 end
 

@@ -7,6 +7,7 @@ local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catal
 local BossRewards = require(ReplicatedStorage.Shared.BossArena.BossRewards)
 local CraftingMaterialConfig = require(ReplicatedStorage.Shared.Config.CraftingMaterialConfig)
 local MutationConfig = require(ReplicatedStorage.Shared.Config.MutationConfig)
+local NumberFormatter = require(ReplicatedStorage.Shared.Formatting.NumberFormatter)
 local RollMath = require(ReplicatedStorage.Shared.Rolling.RollMath)
 local SizeConfig = require(ReplicatedStorage.Shared.Config.SizeConfig)
 local Notify = require(ReplicatedStorage.Shared.UI.Notify)
@@ -42,7 +43,15 @@ type MaterialRewardGrantEntry = {
 	sourceBossId: string?,
 }
 
-type RewardGrantEntry = BodyPartRewardGrantEntry | MaterialRewardGrantEntry
+type MoneyRewardGrantEntry = {
+	kind: "money",
+	displayName: string,
+	amount: number,
+	displayColor: Color3?,
+	sourceBossId: string?,
+}
+
+type RewardGrantEntry = BodyPartRewardGrantEntry | MaterialRewardGrantEntry | MoneyRewardGrantEntry
 
 export type RewardSummary = {
 	player: Player?,
@@ -70,7 +79,14 @@ type PreparedMaterialReward = {
 	released: boolean?,
 }
 
-type PreparedReward = PreparedBodyPartReward | PreparedMaterialReward
+type PreparedMoneyReward = {
+	kind: "money",
+	grant: MoneyRewardGrantEntry,
+	committed: boolean?,
+	released: boolean?,
+}
+
+type PreparedReward = PreparedBodyPartReward | PreparedMaterialReward | PreparedMoneyReward
 
 type PreparedPlayerRewards = {
 	userId: number,
@@ -78,6 +94,7 @@ type PreparedPlayerRewards = {
 	skippedCount: number,
 	status: string,
 	error: string?,
+	disableAutoBodyPartActions: boolean?,
 	committed: boolean?,
 	released: boolean?,
 }
@@ -96,6 +113,16 @@ local DEFAULT_MUTATION = MutationConfig.GetDefault()
 local DEFAULT_SIZE = SizeConfig.GetDefault()
 local DEFAULT_SIZE_SCALE = SizeConfig.GetRepresentativeScale(DEFAULT_SIZE.id)
 local INSUFFICIENT_DAMAGE_REWARD_MESSAGE = "Boss rewards require at least 15% damage contribution."
+local TUTORIAL_SOURCE_FLOW = "boss_world_tutorial"
+local TUTORIAL_BOSS_ID = "Flame Guard General"
+local TUTORIAL_FIRST_GEAR_MONEY_AMOUNT = 75000
+local TUTORIAL_FIRST_GEAR_REWARD_BODY_PARTS = table.freeze({
+	{ setId = "billy", pieceId = "billy_head" },
+	{ setId = "billy", pieceId = "billy_torso" },
+	{ setId = "pirate_swashbuckler", pieceId = "pirate_swashbuckler_head" },
+	{ setId = "pirate_swashbuckler", pieceId = "pirate_swashbuckler_torso" },
+	{ setId = "skeleton", pieceId = "skeleton_head" },
+})
 local warnedMissingPools = {}
 
 local function warnWithPrefix(message: string)
@@ -110,6 +137,14 @@ local function getPlayerByUserId(userId: number): Player?
 	end
 
 	return nil
+end
+
+local function isTutorialBossEncounter(encounter: any): boolean
+	local payload = if typeof(encounter) == "table" then encounter.payload else nil
+	return typeof(encounter) == "table"
+		and encounter.bossId == TUTORIAL_BOSS_ID
+		and typeof(payload) == "table"
+		and payload.sourceFlow == TUTORIAL_SOURCE_FLOW
 end
 
 local function buildAllowedRaritySet(profile: BossRewards.BossRewardProfile): { [string]: boolean }
@@ -250,6 +285,12 @@ local function buildCommittedMaterialEntry(entry: MaterialRewardGrantEntry, boss
 	return committedEntry
 end
 
+local function buildCommittedMoneyEntry(entry: MoneyRewardGrantEntry, bossId: string): MoneyRewardGrantEntry
+	local committedEntry = table.clone(entry)
+	committedEntry.sourceBossId = bossId
+	return committedEntry
+end
+
 local function buildBossBodyPartGrantOptions(reservation: any?): { [string]: any }
 	local options = {
 		ignoreInventoryLimit = true,
@@ -290,6 +331,9 @@ local function formatRewardNames(grants: { RewardGrantEntry }): string
 	for _, grant in ipairs(grants) do
 		if grant.kind == "material" then
 			table.insert(names, string.format("%s x%d", grant.displayName, grant.amount))
+		elseif grant.kind == "money" then
+			local amount = math.max(0, math.floor(tonumber(grant.amount) or 0))
+			table.insert(names, string.format("$%s", NumberFormatter.Format(amount)))
 		elseif grant.autoSold == true and tonumber(grant.payout) ~= nil then
 			table.insert(names, string.format("%s (auto-sold for $%s)", grant.displayName, tostring(grant.payout)))
 		elseif grant.autoCrafted == true then
@@ -348,6 +392,18 @@ local function buildRewardEntryFromSetPiece(piece: any, setId: string, isBossPar
 		displayOddsDenominator = math.max(1, math.floor(tonumber(setConfig.rollDisplay.chance) or 1)),
 		isBossPart = isBossPart,
 	}
+end
+
+local function buildTutorialBodyPartRewardEntry(entry: any): (BodyPartRewardGrantEntry?, string?)
+	local setId = tostring(entry and entry.setId or "")
+	local pieceId = tostring(entry and entry.pieceId or "")
+	local piece = BodyPartsCatalog.GetPiece(pieceId)
+	local rewardEntry = buildRewardEntryFromSetPiece(piece, setId, false)
+	if rewardEntry == nil then
+		return nil, string.format("Tutorial boss reward body part '%s' from set '%s' is not configured.", pieceId, setId)
+	end
+
+	return rewardEntry, nil
 end
 
 local function rollRewardEntry(
@@ -569,6 +625,55 @@ local function prepareBodyPartReward(
 	}, nil
 end
 
+local function prepareMoneyReward(entry: MoneyRewardGrantEntry): PreparedMoneyReward
+	return {
+		kind = "money",
+		grant = entry,
+		committed = false,
+		released = false,
+	}
+end
+
+local function prepareTutorialRewardsForPlayer(userId: number): (PreparedPlayerRewards?, string?)
+	local preparedPlayerRewards: PreparedPlayerRewards = {
+		userId = userId,
+		rewards = {},
+		skippedCount = 0,
+		status = "ready",
+		error = nil,
+		disableAutoBodyPartActions = true,
+		committed = false,
+		released = false,
+	}
+
+	for _, bodyPartReward in ipairs(TUTORIAL_FIRST_GEAR_REWARD_BODY_PARTS) do
+		local rewardEntry, rewardError = buildTutorialBodyPartRewardEntry(bodyPartReward)
+		if rewardEntry == nil then
+			preparedPlayerRewards.status = "failed"
+			preparedPlayerRewards.error = rewardError
+			return preparedPlayerRewards, rewardError
+		end
+
+		local preparedReward, prepareError = prepareBodyPartReward(rewardEntry)
+		if preparedReward == nil then
+			preparedPlayerRewards.status = "failed"
+			preparedPlayerRewards.error = prepareError
+			return preparedPlayerRewards, prepareError
+		end
+
+		table.insert(preparedPlayerRewards.rewards, preparedReward)
+	end
+
+	table.insert(preparedPlayerRewards.rewards, prepareMoneyReward({
+		kind = "money",
+		displayName = "Money",
+		amount = TUTORIAL_FIRST_GEAR_MONEY_AMOUNT,
+		displayColor = Color3.fromRGB(255, 200, 0),
+	}))
+
+	return preparedPlayerRewards, nil
+end
+
 local function prepareRewardsForPlayer(
 	state: PreparedEncounterRewards,
 	userId: number,
@@ -656,6 +761,7 @@ local function commitPreparedPlayerRewards(
 			continue
 		end
 
+		local disableAutoBodyPartActions = preparedPlayerRewards.disableAutoBodyPartActions == true
 		local acquisitionResult = BodyPartAcquisitionService:Acquire(player, preparedReward.payload, {
 			source = "boss_reward",
 			presentation = "immediate_reward",
@@ -663,6 +769,9 @@ local function commitPreparedPlayerRewards(
 			ignoreInventoryLimit = true,
 			isBossPart = preparedReward.grant.isBossPart,
 			sourceBossId = bossId,
+			allowAutoEquip = if disableAutoBodyPartActions then false else nil,
+			allowAutoCraft = if disableAutoBodyPartActions then false else nil,
+			allowAutoSell = if disableAutoBodyPartActions then false else nil,
 		})
 		if acquisitionResult.status == "failed" then
 			summary.skippedCount += 1
@@ -710,6 +819,21 @@ local function commitPreparedPlayerRewards(
 		preparedReward.committed = true
 		summary.grantedCount += 1
 		table.insert(summary.grants, buildCommittedMaterialEntry(materialEntry, bossId))
+	end
+
+	for _, preparedReward in ipairs(preparedPlayerRewards.rewards) do
+		if preparedReward.kind ~= "money" then
+			continue
+		end
+		if preparedReward.released == true then
+			continue
+		end
+
+		local moneyEntry = preparedReward.grant
+		DataService:AddMoney(player, moneyEntry.amount, "boss_reward")
+		preparedReward.committed = true
+		summary.grantedCount += 1
+		table.insert(summary.grants, buildCommittedMoneyEntry(moneyEntry, bossId))
 	end
 
 	if #releaseSerials > 0 then
@@ -838,6 +962,28 @@ function BossArenaRewardService:PrepareEncounterRewards(encounter: any): (boolea
 		error = nil,
 	}
 	encounter.preparedBossRewards = state
+
+	if isTutorialBossEncounter(encounter) then
+		local seenUserIds = {}
+		for _, rawUserId in ipairs(encounter.rosterOrder or {}) do
+			local userId = math.floor(tonumber(rawUserId) or 0)
+			if userId <= 0 or seenUserIds[userId] == true then
+				continue
+			end
+			seenUserIds[userId] = true
+
+			local preparedPlayerRewards, prepareError = prepareTutorialRewardsForPlayer(userId)
+			if preparedPlayerRewards ~= nil then
+				state.byUserId[userId] = preparedPlayerRewards
+			end
+			if prepareError ~= nil then
+				return failPreparedEncounter(state, prepareError)
+			end
+		end
+
+		state.status = "ready"
+		return true, nil
+	end
 
 	local profile = BossRewards.GetBossRewardProfile(bossId)
 	if profile == nil then
@@ -1011,6 +1157,11 @@ function BossArenaRewardService:GrantVictoryRewards(encounter: any): { [number]:
 
 	local bossId = encounter.bossId
 	if typeof(bossId) ~= "string" or bossId == "" then
+		return results
+	end
+
+	if isTutorialBossEncounter(encounter) then
+		warnWithPrefix("Tutorial boss rewards were not prepared; skipping normal reward fallback.")
 		return results
 	end
 

@@ -295,6 +295,59 @@ local DEFINITIONS: { QuestDefinition } = {
 		},
 	},
 	{
+		id = "stan_man_aura_intro",
+		displayName = "Man Aura Lesson",
+		description = "Complete the Man set and equip its aura.",
+		kind = "main",
+		providerIds = { "quest_board" },
+		boardVisible = true,
+		abandonable = false,
+		parts = {
+			{
+				id = "complete_man_set",
+				description = "Roll more times to complete the Man set.",
+				objectives = {
+					{
+						id = "complete_man_set",
+						kind = "state",
+						stateType = "set_discovered_piece_count",
+						description = "Complete the Man set.",
+						targetValue = 6,
+						filters = {
+							setId = "man",
+						},
+						retroactive = true,
+					},
+				},
+			},
+			{
+				id = "equip_man_aura",
+				description = "You completed the Man set and unlocked the Man aura. Equip it from your inventory.",
+				objectives = {
+					{
+						id = "equip_man_aura",
+						kind = "state",
+						stateType = "equipped_aura_id",
+						description = "Equip the Man aura.",
+						targetValue = 1,
+						filters = {
+							auraId = "man",
+						},
+						retroactive = true,
+					},
+				},
+			},
+		},
+		rewards = {
+			dailyChests = {
+				{
+					chestId = "DailyFree",
+					amount = 1,
+				},
+			},
+		},
+	},
+	{
 		id = "stan_appraisal_intro",
 		displayName = "Appraisal Tour",
 		description = "Learn how appraisal can make a good body part even better.",
@@ -426,6 +479,11 @@ local DEFINITIONS: { QuestDefinition } = {
 						eventType = "boss_world_entered",
 						description = "Go to the boss world.",
 						targetValue = 1,
+						filters = {
+							bossId = "Flame Guard General",
+							portalId = "boss_world_tutorial",
+							sourceFlow = "boss_world_tutorial",
+						},
 					},
 				},
 			},
@@ -439,6 +497,27 @@ local DEFINITIONS: { QuestDefinition } = {
 						eventType = "boss_victory",
 						description = "Defeat your first boss.",
 						targetValue = 1,
+						filters = {
+							bossId = "Flame Guard General",
+							portalId = "boss_world_tutorial",
+							sourceFlow = "boss_world_tutorial",
+						},
+					},
+				},
+			},
+			{
+				id = "craft_first_gear",
+				description = "Craft Bombo's Survival Knife.",
+				objectives = {
+					{
+						id = "craft_first_gear",
+						kind = "event",
+						eventType = "crafting_completed",
+						description = "Craft Bombo's Survival Knife.",
+						targetValue = 1,
+						filters = {
+							recipeId = "bombos_survival_knife",
+						},
 					},
 				},
 			},

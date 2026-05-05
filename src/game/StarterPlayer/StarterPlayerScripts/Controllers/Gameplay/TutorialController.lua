@@ -11,6 +11,7 @@ local PlaceProfile = require(ReplicatedStorage.Shared.PlaceProfiles.PlaceProfile
 local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 local ScreenDarkener = require(ReplicatedStorage.Shared.UI.ScreenDarkener)
 local TutorialConfig = require(ReplicatedStorage.Shared.Config.TutorialConfig)
+local TutorialOverlayGate = require(ReplicatedStorage.Shared.UI.TutorialOverlayGate)
 local TutorialState = require(ReplicatedStorage.Shared.Character.TutorialState)
 local TutorialTextGui = require(ReplicatedStorage.Shared.UI.TutorialTextGui)
 
@@ -431,6 +432,14 @@ function TutorialController:_resolveSpotlight(state: any): (GuiObject?, string, 
 end
 
 function TutorialController:_syncSpotlight()
+	if TutorialOverlayGate.IsBlocked() then
+		if self._lastText ~= nil and self._lastText ~= "" then
+			self:_setTutorialText("")
+		end
+		self:_clearSpotlight()
+		return
+	end
+
 	if typeof(self._pendingPostRollState) == "table" then
 		if self:_releasePendingPostRollStateIfReady() then
 			return

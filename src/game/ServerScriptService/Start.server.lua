@@ -26,6 +26,7 @@ local SERVER_STARTUP_PHASE_DEFINITIONS = {
 			"PurchaseReceiptService",
 			"QuestService",
 			"ChatNotificationService",
+			"TeleportTransitionService",
 		},
 	},
 	{

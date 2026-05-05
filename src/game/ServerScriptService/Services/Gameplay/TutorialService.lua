@@ -140,7 +140,16 @@ local function completeTutorial(player: Player, state: TutorialState.TutorialSta
 	state.completed = true
 	state.stepId = TutorialConfig.Steps.Completed
 	state.adminReplay = false
-	return setState(player, state)
+	local completedState = setState(player, state)
+
+	task.defer(function()
+		if isActive(player) then
+			local QuestService = require(script.Parent.QuestService)
+			QuestService:BeginTutorialQuestline(player)
+		end
+	end)
+
+	return completedState
 end
 
 local function advanceTo(player: Player, nextStepId: string): TutorialState.TutorialStateValue
