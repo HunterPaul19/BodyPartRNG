@@ -41,6 +41,7 @@ type NotificationPayload = {
 	duration: number,
 	channel: string,
 	tone: NotificationTone,
+	textColor3: Color3?,
 }
 
 type QueuedNotification = {
@@ -143,6 +144,14 @@ local function resolveTone(opts): NotificationTone
 	return DEFAULT_TONE
 end
 
+local function resolveTextColor(opts): Color3?
+	if typeof(opts) == "table" and typeof(opts.textColor3) == "Color3" then
+		return opts.textColor3
+	end
+
+	return nil
+end
+
 local function normalizePayload(text: any, opts): NotificationPayload
 	opts = opts or {}
 
@@ -157,6 +166,7 @@ local function normalizePayload(text: any, opts): NotificationPayload
 		duration = duration,
 		channel = resolveChannel(opts),
 		tone = resolveTone(opts),
+		textColor3 = resolveTextColor(opts),
 	}
 end
 
@@ -215,7 +225,7 @@ end
 
 local function applyMessageLabelStyling(messageLabel: TextLabel | TextButton | TextBox, payload: NotificationPayload)
 	local channelColor = CHANNEL_COLORS[payload.channel] or CHANNEL_COLORS[DEFAULT_CHANNEL]
-	local textColor = brightenColor(channelColor, 0.32)
+	local textColor = payload.textColor3 or brightenColor(channelColor, 0.32)
 	messageLabel.TextColor3 = textColor
 
 	local textStroke = messageLabel:FindFirstChildOfClass("UIStroke")

@@ -30,7 +30,6 @@ GUIControls.RollPresentationPending = false
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
-local GroupService = game:GetService("GroupService")
 
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local SoundUtil = require(ReplicatedStorage.Shared.Audio.SoundUtil)
@@ -48,6 +47,7 @@ local RollCutscene = require(ReplicatedStorage.Shared.UI.RollCutscene)
 local RollCutsceneConfig = require(ReplicatedStorage.Shared.UI.RollCutsceneConfig)
 local RemoteFunctionTimeout = require(ReplicatedStorage.Shared.Remotes.RemoteFunctionTimeout)
 local ScreenEffects = require(ReplicatedStorage.Shared.UI.ScreenEffects)
+local TutorialTextGui = require(ReplicatedStorage.Shared.UI.TutorialTextGui)
 local ViewportModelRenderer = require(ReplicatedStorage.Shared.UI.ViewportModelRenderer)
 
 local LocalPlayer = Players.LocalPlayer
@@ -68,6 +68,10 @@ local FINALIZE_AUTO_SELL_ROLL_REMOTE_NAME = "FinalizeAutoSellRoll"
 local UPDATED_REMOTE_NAME = "RollingUpdated"
 local BODY_PARTS_FOLDER_NAME = "BodyParts"
 local EQUIP_REMOTE_NAME = "EquipOwnedBodyPart"
+local INVENTORY_FULL_WARNING_ATTEMPT_THRESHOLD = 5
+local INVENTORY_FULL_NOTIFICATION_TEXT_COLOR = Color3.fromRGB(255, 96, 96)
+local INVENTORY_FULL_TUTORIAL_TEXT = "Inventory full. Sell some body parts before rolling again."
+local INVENTORY_FULL_TUTORIAL_TEXT_DURATION_SECONDS = 4
 
 local Remotes: Folder? = nil
 local RollingRemotes: Folder? = nil
@@ -82,6 +86,7 @@ local FinalizeAutoSellRollRemote: RemoteFunction? = nil
 local RollingUpdatedRemote: RemoteEvent? = nil
 local rollingUpdatedConnection: RBXScriptConnection? = nil
 local lastRemoteWarningAt = 0
+local consecutiveManualInventoryFullAttempts = 0
 
 local Main = script.Parent
 local Black2 = Main.Parent.Black2
@@ -146,7 +151,6 @@ Blur.Parent = game.Lighting
 Blur.Name = "RollBlur"
 Blur.Size = 0
 
-local GROUP_ID = 384839595
 local BASE_ROLL_COOLDOWN = 1
 local BASE_SEQUENCE_DURATION = 2.5
 local BASE_AUTO_RESULT_HOLD = 0.8
@@ -493,13 +497,6 @@ local function shouldPredictSkippedRollPresentation(triggerSource)
 	return triggerSource == "auto" and getQuickRollState(GUIControls.RollingState).enabled == true
 end
 
-local function isPlayerInAutoRollGroup()
-	local ok, inGroup = pcall(function()
-		return LocalPlayer:IsInGroup(GROUP_ID)
-	end)
-	return ok and inGroup == true
-end
-
 local function findChildOfClass(parent: Instance?, childName: string, className: string, shouldWait: boolean?): Instance?
 	if not parent then
 		return nil
@@ -680,6 +677,26 @@ end
 local function isInventoryFullMessage(message)
 	return typeof(message) == "string"
 		and string.find(string.lower(message), "inventory is full", 1, true) ~= nil
+end
+
+local function resetInventoryFullAttemptCount()
+	consecutiveManualInventoryFullAttempts = 0
+end
+
+local function recordInventoryFullAttempt(triggerSource)
+	if triggerSource ~= "auto" then
+		consecutiveManualInventoryFullAttempts += 1
+	end
+
+	if consecutiveManualInventoryFullAttempts < INVENTORY_FULL_WARNING_ATTEMPT_THRESHOLD then
+		return
+	end
+
+	consecutiveManualInventoryFullAttempts = 0
+	TutorialTextGui.ShowTemporaryText(
+		INVENTORY_FULL_TUTORIAL_TEXT,
+		INVENTORY_FULL_TUTORIAL_TEXT_DURATION_SECONDS
+	)
 end
 
 local controllerCache = {}
@@ -1060,14 +1077,8 @@ function GUIControls:RefreshQuickRollButton()
 end
 
 function GUIControls:RefreshAutoRollButton()
-	local isEligible = isPlayerInAutoRollGroup()
-	if not isEligible and GUIControls.AutoRoll then
-		GUIControls.AutoRoll = false
-		GUIControls.AutoRollLoopId += 1
-	end
-
-	AutoRollButton.Desc.Text = isEligible and (GUIControls.AutoRoll and "On" or "Off") or "Group Join Required"
-	GUIControls:SetButtonVisualState(AutoRollButton, GUIControls.AutoRoll == true, isEligible)
+	AutoRollButton.Desc.Text = if GUIControls.AutoRoll then "On" else "Off"
+	GUIControls:SetButtonVisualState(AutoRollButton, GUIControls.AutoRoll == true, true)
 end
 
 function GUIControls:RefreshAutoEquipBestButton()
@@ -1095,7 +1106,7 @@ function GUIControls:RefreshAutoEquipBestButton()
 end
 
 function GUIControls:SetAutoRollEnabled(enabled)
-	local shouldEnable = enabled == true and isPlayerInAutoRollGroup()
+	local shouldEnable = enabled == true
 	if GUIControls.AutoRoll == shouldEnable then
 		GUIControls:InvalidateTemporaryStatus()
 		GUIControls:RefreshRollControls()
@@ -1171,28 +1182,6 @@ function GUIControls:ScheduleNextAutoRoll(delayTime)
 		if GUIControls.AutoRoll and loopId == GUIControls.AutoRollLoopId and scheduleId == GUIControls.AutoRollScheduleId then
 			GUIControls:Roll("auto")
 		end
-	end)
-end
-
-function GUIControls:PromptAutoRollGroupJoin()
-	local promptOpened, promptError = pcall(function()
-		GroupService:PromptJoinAsync(GROUP_ID)
-	end)
-	if not promptOpened then
-		GUIControls:SetTemporaryStatus(promptError or "Failed to open the group join prompt.")
-		return
-	end
-
-	task.spawn(function()
-		for _ = 1, 10 do
-			task.wait(1)
-			if isPlayerInAutoRollGroup() then
-				GUIControls:SetAutoRollEnabled(true)
-				return
-			end
-		end
-		GUIControls:InvalidateTemporaryStatus()
-		GUIControls:RefreshRollControls()
 	end)
 end
 
@@ -1631,11 +1620,6 @@ function GUIControls:ToggleAutoEquipBest()
 end
 
 function GUIControls:ToggleAutoRoll()
-	if not isPlayerInAutoRollGroup() then
-		GUIControls:PromptAutoRollGroupJoin()
-		return
-	end
-
 	local previousAutoRoll = GUIControls.AutoRoll == true
 	GUIControls:SetAutoRollEnabled(not GUIControls.AutoRoll)
 	if GUIControls.AutoRoll ~= previousAutoRoll then
@@ -2000,6 +1984,7 @@ function GUIControls:Roll(triggerSource)
 			GUIControls.RollPresentationPending = false
 			GUIControls.CurrentRollTriggeredByAuto = false
 			endRollNotificationHold()
+			resetInventoryFullAttemptCount()
 			GUIControls:SetTemporaryStatus("Failed to reach the server.")
 			return
 		end
@@ -2016,22 +2001,27 @@ function GUIControls:Roll(triggerSource)
 				if GUIControls.AutoRoll then
 					GUIControls:SetAutoRollEnabled(false)
 				end
+				resetInventoryFullAttemptCount()
 				RollWarningNotifier.ShowInsufficientFundsWarning()
 			elseif isInventoryFullMessage(failureMessage) then
 				if GUIControls.AutoRoll then
 					GUIControls:SetAutoRollEnabled(false)
 				end
+				recordInventoryFullAttempt(resolvedTriggerSource)
 				Notify.Show(failureMessage, {
 					channel = "inventory",
 					duration = 4,
+					textColor3 = INVENTORY_FULL_NOTIFICATION_TEXT_COLOR,
 				})
 				GUIControls:SetTemporaryStatus(failureMessage)
 			else
+				resetInventoryFullAttemptCount()
 				GUIControls:SetTemporaryStatus(failureMessage)
 			end
 			return
 		end
 
+		resetInventoryFullAttemptCount()
 		GUIControls:ApplyRollingState(rollResponse.state)
 		local rollResult = rollResponse.rollResult
 		showAutoCraftNotification(rollResult)

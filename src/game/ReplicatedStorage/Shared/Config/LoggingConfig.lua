@@ -1,5 +1,5 @@
 local LoggingConfig = {
-	Enabled = true,
+	Enabled = false,
 }
 
 return table.freeze(LoggingConfig)
