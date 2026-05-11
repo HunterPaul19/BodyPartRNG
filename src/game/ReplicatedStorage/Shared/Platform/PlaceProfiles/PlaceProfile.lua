@@ -75,6 +75,7 @@ local ALL_CONTROLLER_NAMES = {
 	"IndexController",
 	"InventoryController",
 	"LeaderboardController",
+	"MailboxFeedbackController",
 	"MarketplaceController",
 	"MerchantPresentationController",
 	"MerchantShopController",

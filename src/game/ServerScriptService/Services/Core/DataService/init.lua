@@ -85,6 +85,9 @@ local AUTO_SIZE_ENABLED_KEY = Schema.AutoSizeEnabled and Schema.AutoSizeEnabled.
 local MUSIC_ENABLED_KEY = Schema.MusicEnabled and Schema.MusicEnabled.key or nil
 local AUTO_SELL_RARITIES_KEY = Schema.AutoSellRarities and Schema.AutoSellRarities.key or nil
 local CUTSCENE_RARITIES_KEY = Schema.CutsceneRarities and Schema.CutsceneRarities.key or nil
+local RAREST_OWNED_BODY_PART_PIECE_ID_ATTRIBUTE = "RarestOwnedBodyPartPieceId"
+local RAREST_OWNED_BODY_PART_DISPLAY_RARITY_ATTRIBUTE = "RarestOwnedBodyPartDisplayRarity"
+local RAREST_OWNED_BODY_PART_ODDS_DENOMINATOR_ATTRIBUTE = "RarestOwnedBodyPartOddsDenominator"
 
 local ATTR_BY_KEY: { [string]: string } = {}
 if MONEY_KEY then
@@ -334,6 +337,7 @@ local function buildPathArray(key: string, path: { any }?): { any }
 end
 
 local cloneOwnedBodyPartsState
+local refreshRarestOwnedBodyPartAttributes
 
 local function setReplicaPathValue(player: Player, key: string, path: { any }?, value: any): boolean
 	local replica = getActiveReplica(player)
@@ -342,6 +346,9 @@ local function setReplicaPathValue(player: Player, key: string, path: { any }?, 
 	end
 
 	replica:SetValue(buildPathArray(key, path), value)
+	if BODY_PARTS_KEY and key == BODY_PARTS_KEY and refreshRarestOwnedBodyPartAttributes then
+		refreshRarestOwnedBodyPartAttributes(player)
+	end
 	return true
 end
 
@@ -352,6 +359,9 @@ local function setReplicaPathValues(player: Player, key: string, path: { any }?,
 	end
 
 	replica:SetValues(buildPathArray(key, path), values)
+	if BODY_PARTS_KEY and key == BODY_PARTS_KEY and refreshRarestOwnedBodyPartAttributes then
+		refreshRarestOwnedBodyPartAttributes(player)
+	end
 	return true
 end
 
@@ -628,6 +638,87 @@ cloneOwnedBodyPartsState = function(state: OwnedBodyParts.OwnedBodyPartsState?):
 		seenCutsceneSetIds = seenCutsceneSetIds,
 		nextOwnedId = nextOwnedId,
 	}
+end
+
+local function clearRarestOwnedBodyPartAttributes(player: Player)
+	player:SetAttribute(RAREST_OWNED_BODY_PART_PIECE_ID_ATTRIBUTE, nil)
+	player:SetAttribute(RAREST_OWNED_BODY_PART_DISPLAY_RARITY_ATTRIBUTE, nil)
+	player:SetAttribute(RAREST_OWNED_BODY_PART_ODDS_DENOMINATOR_ATTRIBUTE, nil)
+end
+
+local function getOwnedBodyPartOddsDenominator(record: OwnedBodyParts.OwnedBodyPartRecord): number
+	local piece = BodyPartsCatalog.GetPiece(record.pieceId)
+	local setConfig = BodyPartsCatalog.GetSetForPiece(record.pieceId)
+	return math.max(
+		1,
+		clampWholeNumber(
+			record.displayOddsDenominator
+				or record.rarityDenominator
+				or (setConfig and setConfig.rollDisplay.chance)
+				or (piece and piece.rarity)
+				or 1,
+			1
+		)
+	)
+end
+
+local function compareRarestOwnedBodyPartRecords(
+	leftRecord: OwnedBodyParts.OwnedBodyPartRecord,
+	rightRecord: OwnedBodyParts.OwnedBodyPartRecord?
+): boolean
+	if not rightRecord then
+		return true
+	end
+
+	local leftDenominator = getOwnedBodyPartOddsDenominator(leftRecord)
+	local rightDenominator = getOwnedBodyPartOddsDenominator(rightRecord)
+	if leftDenominator ~= rightDenominator then
+		return leftDenominator > rightDenominator
+	end
+
+	local leftSerial = tonumber(leftRecord.serialNumber) or math.huge
+	local rightSerial = tonumber(rightRecord.serialNumber) or math.huge
+	if leftSerial ~= rightSerial then
+		return leftSerial < rightSerial
+	end
+
+	return tostring(leftRecord.ownedId) < tostring(rightRecord.ownedId)
+end
+
+local function resolveRarestOwnedBodyPartRecord(
+	bodyPartsState: OwnedBodyParts.OwnedBodyPartsState?
+): OwnedBodyParts.OwnedBodyPartRecord?
+	if typeof(bodyPartsState) ~= "table" or typeof(bodyPartsState.ownedById) ~= "table" then
+		return nil
+	end
+
+	local bestRecord = nil
+	for ownedId, record in pairs(bodyPartsState.ownedById) do
+		local normalizedRecord = normalizeOwnedBodyPartRecord(record, ownedId)
+		if normalizedRecord and compareRarestOwnedBodyPartRecords(normalizedRecord, bestRecord) then
+			bestRecord = normalizedRecord
+		end
+	end
+
+	return bestRecord
+end
+
+refreshRarestOwnedBodyPartAttributes = function(player: Player, bodyPartsState: OwnedBodyParts.OwnedBodyPartsState?)
+	if not BODY_PARTS_KEY then
+		clearRarestOwnedBodyPartAttributes(player)
+		return
+	end
+
+	local normalizedState = cloneOwnedBodyPartsState(bodyPartsState or getReplicaValue(player, BODY_PARTS_KEY))
+	local rarestRecord = resolveRarestOwnedBodyPartRecord(normalizedState)
+	if not rarestRecord then
+		clearRarestOwnedBodyPartAttributes(player)
+		return
+	end
+
+	player:SetAttribute(RAREST_OWNED_BODY_PART_PIECE_ID_ATTRIBUTE, rarestRecord.pieceId)
+	player:SetAttribute(RAREST_OWNED_BODY_PART_DISPLAY_RARITY_ATTRIBUTE, rarestRecord.displayRarity)
+	player:SetAttribute(RAREST_OWNED_BODY_PART_ODDS_DENOMINATOR_ATTRIBUTE, getOwnedBodyPartOddsDenominator(rarestRecord))
 end
 
 local function cloneOwnedAccessoriesState(state: OwnedAccessories.OwnedAccessoriesState?): OwnedAccessories.OwnedAccessoriesState
@@ -997,6 +1088,8 @@ local function syncProfileAttributes(player: Player, profile: any)
 	for key in pairs(ATTR_BY_KEY) do
 		syncPlayerStateForKey(player, key, profile.Data[key])
 	end
+
+	refreshRarestOwnedBodyPartAttributes(player, if BODY_PARTS_KEY then profile.Data[BODY_PARTS_KEY] else nil)
 end
 
 local function startTimePlayedLoop()

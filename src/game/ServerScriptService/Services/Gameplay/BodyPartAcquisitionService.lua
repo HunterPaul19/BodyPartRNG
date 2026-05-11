@@ -1,5 +1,6 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local Signal = require(ReplicatedStorage.Common.Signal)
 local BodyPartEconomy = require(ReplicatedStorage.Shared.Character.BodyPartEconomy)
 local BodyPartsCatalog = require(ReplicatedStorage.Shared.Config.BodyParts.Catalog)
 local RollingConfig = require(ReplicatedStorage.Shared.Config.RollingConfig)
@@ -36,6 +37,7 @@ export type AcquisitionResult = {
 }
 
 local BodyPartAcquisitionService = {}
+BodyPartAcquisitionService.Acquired = Signal.new()
 
 local function cloneTable(value: any): any
 	if typeof(value) ~= "table" then
@@ -163,6 +165,25 @@ local function normalizeAutoCraftMessage(message: any, options: AcquisitionOptio
 	return text
 end
 
+local function publishAcquired(player: Player, grantPayload: any, result: AcquisitionResult, options: AcquisitionOptions?): AcquisitionResult
+	local rewardEntry = result.rewardEntry
+	local displayRarity = if typeof(rewardEntry) == "table"
+		then rewardEntry.displayRarity
+		elseif typeof(grantPayload) == "table" then grantPayload.displayRarity
+		else nil
+
+	BodyPartAcquisitionService.Acquired:Fire({
+		player = player,
+		status = result.status,
+		record = result.record,
+		rewardEntry = rewardEntry,
+		displayRarity = displayRarity,
+		source = if typeof(options) == "table" then options.source else nil,
+	})
+
+	return result
+end
+
 function BodyPartAcquisitionService:SellTransientBodyPart(player: Player, record: any, options: AcquisitionOptions?): AcquisitionResult
 	if typeof(record) ~= "table" then
 		return buildFailedResult("No body part was available to sell.")
@@ -177,7 +198,7 @@ function BodyPartAcquisitionService:SellTransientBodyPart(player: Player, record
 
 	local message = string.format("Sold %s for $%s.", pieceName, tostring(payout))
 	local autoSellRarity = RollingConfig.NormalizeDisplayRarity(record.displayRarity)
-	return {
+	return publishAcquired(player, record, {
 		status = "autoSold",
 		record = record,
 		rewardEntry = buildRewardEntry(record, record, options, "autoSold", message, payout, autoSellRarity),
@@ -189,7 +210,7 @@ function BodyPartAcquisitionService:SellTransientBodyPart(player: Player, record
 		autoCrafted = false,
 		autoEquipped = false,
 		pendingAutoSell = false,
-	}
+	}, options)
 end
 
 function BodyPartAcquisitionService:Acquire(
@@ -226,7 +247,7 @@ function BodyPartAcquisitionService:Acquire(
 		local status = if equipped then "equipped" else "kept"
 		local message = equipMessage or (if equipped then "Equipped body part." else "Kept body part.")
 
-		return {
+		return publishAcquired(player, grantPayload, {
 			status = status,
 			record = ownedRecord,
 			rewardEntry = buildRewardEntry(grantPayload, ownedRecord, acquisitionOptions, status, message, nil, autoSellRarity),
@@ -237,7 +258,7 @@ function BodyPartAcquisitionService:Acquire(
 			autoCrafted = false,
 			autoEquipped = equipped == true,
 			pendingAutoSell = false,
-		}
+		}, acquisitionOptions)
 	end
 
 	if allowAutoCraft then
@@ -245,7 +266,7 @@ function BodyPartAcquisitionService:Acquire(
 		if typeof(autoCraftResult) == "table" and autoCraftResult.committed == true then
 			local record = buildTransientRecord(grantPayload, nil)
 			local message = normalizeAutoCraftMessage(autoCraftResult.message, acquisitionOptions)
-			return {
+			return publishAcquired(player, grantPayload, {
 				status = "autoCrafted",
 				record = record,
 				rewardEntry = buildRewardEntry(grantPayload, record, acquisitionOptions, "autoCrafted", message, nil, autoSellRarity),
@@ -256,7 +277,7 @@ function BodyPartAcquisitionService:Acquire(
 				autoCrafted = autoCraftResult.crafted == true,
 				autoEquipped = false,
 				pendingAutoSell = false,
-			}
+			}, acquisitionOptions)
 		end
 	end
 
@@ -277,7 +298,7 @@ function BodyPartAcquisitionService:Acquire(
 
 		if presentation == "roll_pending" then
 			local message = string.format("%s roll result is pending auto-sell.", autoSellRarity)
-			return {
+			return publishAcquired(player, grantPayload, {
 				status = "pendingAutoSell",
 				record = record,
 				rewardEntry = buildRewardEntry(grantPayload, record, acquisitionOptions, "pendingAutoSell", message, nil, autoSellRarity),
@@ -288,7 +309,7 @@ function BodyPartAcquisitionService:Acquire(
 				autoCrafted = false,
 				autoEquipped = false,
 				pendingAutoSell = true,
-			}
+			}, acquisitionOptions)
 		end
 
 		local sellResult = self:SellTransientBodyPart(player, record, acquisitionOptions)
@@ -307,7 +328,7 @@ function BodyPartAcquisitionService:Acquire(
 	end
 
 	local message = string.format("Kept %s.", getPayloadDisplayName(grantPayload, getPayloadPiece(grantPayload)))
-	return {
+	return publishAcquired(player, grantPayload, {
 		status = "kept",
 		record = ownedRecord,
 		rewardEntry = buildRewardEntry(grantPayload, ownedRecord, acquisitionOptions, "kept", message, nil, autoSellRarity),
@@ -318,7 +339,7 @@ function BodyPartAcquisitionService:Acquire(
 		autoCrafted = false,
 		autoEquipped = false,
 		pendingAutoSell = false,
-	}
+	}, acquisitionOptions)
 end
 
 return BodyPartAcquisitionService

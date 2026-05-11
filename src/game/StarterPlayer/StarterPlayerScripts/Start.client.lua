@@ -83,6 +83,7 @@ local CLIENT_STARTUP_PHASE_DEFINITIONS = {
 			"CraftingController",
 			"PlayerInspectController",
 			"ProximityPromptReachController",
+			"MailboxFeedbackController",
 			"AppraisalController",
 		},
 	},

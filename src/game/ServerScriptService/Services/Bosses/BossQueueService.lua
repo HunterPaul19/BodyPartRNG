@@ -40,6 +40,7 @@ type PortalState = {
 
 local ACTIVE_PROFILE_ID = "boss_lobby"
 local EXIT_RECHECK_DELAY_SECONDS = 0.25
+local QUEUE_BILLBOARD_NAME = "QueueBillboard"
 
 local BossQueueService = {
 	_started = false,
@@ -107,6 +108,39 @@ end
 
 local function formatRecommendedPowerText(score: number): string
 	return string.format("Recommended Power: %s", formatNumberWithCommas(score))
+end
+
+local function hasQueueLabels(billboardGui: BillboardGui): boolean
+	local occupancyLabel = billboardGui:FindFirstChild("x/5", true)
+	local countdownLabel = billboardGui:FindFirstChild("Countdown", true)
+	return occupancyLabel ~= nil
+		and occupancyLabel:IsA("TextLabel")
+		and countdownLabel ~= nil
+		and countdownLabel:IsA("TextLabel")
+end
+
+local function findQueueBillboardGui(instance: Instance): BillboardGui?
+	local namedBillboardGui = instance:FindFirstChild(QUEUE_BILLBOARD_NAME, true)
+	if namedBillboardGui and namedBillboardGui:IsA("BillboardGui") then
+		return namedBillboardGui
+	end
+
+	local partyBox = instance:FindFirstChild("PartyBox")
+	if partyBox then
+		local partyBoxPart = partyBox:FindFirstChild("Part")
+		local partyBoxBillboardGui = partyBoxPart and partyBoxPart:FindFirstChildWhichIsA("BillboardGui")
+		if partyBoxBillboardGui then
+			return partyBoxBillboardGui
+		end
+	end
+
+	for _, descendant in ipairs(instance:GetDescendants()) do
+		if descendant:IsA("BillboardGui") and hasQueueLabels(descendant) then
+			return descendant
+		end
+	end
+
+	return nil
 end
 
 local function setCountdownInactive(state: PortalState)
@@ -444,9 +478,9 @@ function BossQueueService:_buildPortalState(instance: Instance): (PortalState?, 
 		return nil, "Missing PartyBox.Hitbox BasePart."
 	end
 
-	local billboardGui = instance:FindFirstChildWhichIsA("BillboardGui", true)
+	local billboardGui = findQueueBillboardGui(instance)
 	if not billboardGui then
-		return nil, "Missing BillboardGui."
+		return nil, string.format("Missing %s BillboardGui.", QUEUE_BILLBOARD_NAME)
 	end
 
 	local occupancyLabel = billboardGui:FindFirstChild("x/5", true)

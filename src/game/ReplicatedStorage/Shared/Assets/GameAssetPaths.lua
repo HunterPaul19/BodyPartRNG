@@ -38,6 +38,7 @@ GameAssetPaths.Audio = {
 GameAssetPaths.UI = {
 	Index = { "UI", "Index" },
 	Icons = { "UI", "Icons" },
+	PlayerOverhead = { "UI", "PlayerOverhead" },
 	RollCutscene = { "UI", "RollCutscene" },
 	ScreenDarkener = { "UI", "ScreenDarkener" },
 }

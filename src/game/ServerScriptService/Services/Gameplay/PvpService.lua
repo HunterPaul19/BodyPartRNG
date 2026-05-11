@@ -25,6 +25,7 @@ local PLAYER_HIT_CONFIRMED_REMOTE_NAME = "PlayerHitConfirmed"
 local SET_ENABLED_RATE_LIMIT_KEY = "remote.pvp.set_enabled"
 local REQUEST_M1_RATE_LIMIT_KEY = "remote.pvp.player_m1"
 local IMPACT_MARKER_NAME = "Impact"
+local PVP_ENABLED_ATTRIBUTE = "PvpEnabled"
 
 type PlayerHealthEntry = {
 	userId: number,
@@ -92,6 +93,10 @@ end
 local function clearSwingState(player: Player)
 	activeSwingByPlayer[player] = nil
 	cooldownEndsAtByPlayer[player] = nil
+end
+
+local function setPlayerPvpEnabledAttribute(player: Player, enabled: boolean)
+	player:SetAttribute(PVP_ENABLED_ATTRIBUTE, if enabled == true then true else nil)
 end
 
 local function resolveHumanoid(model: Model?): Humanoid?
@@ -440,10 +445,12 @@ end
 function PvpService:_setPvpEnabled(player: Player, enabled: boolean)
 	local nextEnabled = enabled == true
 	if pvpEnabledByPlayer[player] == nextEnabled then
+		setPlayerPvpEnabledAttribute(player, nextEnabled)
 		return
 	end
 
 	pvpEnabledByPlayer[player] = if nextEnabled then true else nil
+	setPlayerPvpEnabledAttribute(player, nextEnabled)
 	clearSwingState(player)
 	self:_schedulePvpStateBroadcast()
 end
@@ -724,6 +731,7 @@ end
 
 function PvpService:OnPlayerAdded(player: Player)
 	if not isEnabledForPlace() then
+		setPlayerPvpEnabledAttribute(player, false)
 		return
 	end
 
@@ -734,6 +742,7 @@ function PvpService:OnPlayerAdded(player: Player)
 	end
 
 	pvpEnabledByPlayer[player] = nil
+	setPlayerPvpEnabledAttribute(player, false)
 	clearSwingState(player)
 
 	disconnectConnection(connections.characterAdded)
@@ -772,6 +781,7 @@ function PvpService:OnPlayerRemoving(player: Player)
 	end
 
 	pvpEnabledByPlayer[player] = nil
+	setPlayerPvpEnabledAttribute(player, false)
 	clearSwingState(player)
 	self:_schedulePvpStateBroadcast()
 end

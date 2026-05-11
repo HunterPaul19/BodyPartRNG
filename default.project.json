@@ -119,6 +119,9 @@
         "AchievementService": {
           "$path": "src/game/ServerScriptService/Services/Gameplay/AchievementService.lua"
         },
+        "BadgeAwardService": {
+          "$path": "src/game/ServerScriptService/Services/Gameplay/BadgeAwardService.lua"
+        },
         "AccessoryService": {
           "$path": "src/game/ServerScriptService/Services/Gameplay/AccessoryService.lua"
         },
@@ -427,6 +430,9 @@
           },
           "MainInterfaceController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Core/MainInterfaceController.lua"
+          },
+          "MailboxFeedbackController": {
+            "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/MailboxFeedbackController.lua"
           },
           "MarketplaceController": {
             "$path": "src/game/StarterPlayer/StarterPlayerScripts/Controllers/Gameplay/MarketplaceController.lua"
